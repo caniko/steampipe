@@ -1,0 +1,29 @@
+[package]
+name = "steampipe"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "cluster-ctl"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+chrono = "0.4"
+clap = { version = "4", features = ["derive"] }
+dirs = "6.0"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "signal", "io-std", "time"] }
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+clone_on_copy = "warn"
+collapsible_str_replace = "warn"
+collapsible_if = "warn"
+type_complexity = "allow"
+manual_find = "warn"
+too_many_arguments = "allow"
+new_without_default = "warn"
+unnecessary_get_then_check = "warn"
+if_same_then_else = "warn"
