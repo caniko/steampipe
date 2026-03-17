@@ -16,9 +16,9 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub ssh_key: Option<PathBuf>,
 
-    /// Total number of VMs in the cluster
+    /// Total number of VMs in the cluster (required)
     #[arg(long, global = true)]
-    pub vm_count: u8,
+    pub vm_count: Option<u8>,
 }
 
 #[derive(Subcommand)]

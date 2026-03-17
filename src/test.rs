@@ -22,13 +22,99 @@ pub struct TestConfig {
     pub output_file: Option<PathBuf>,
 }
 
+// ── Heartbeat trait: static dispatch for local vs. VM heartbeat sources ──
+
+/// Reads the minimum `timestamp_ms` from a heartbeat source.
+/// Monomorphized at each call site for zero-cost dispatch.
+trait HeartbeatSource {
+    fn min_timestamp(&self) -> Option<u128>;
+}
+
+struct LocalHeartbeat<'a> {
+    dir: &'a Path,
+}
+
+struct VmHeartbeat<'a> {
+    rt: &'a tokio::runtime::Handle,
+    ssh: &'a SshClient,
+    vms: &'a [(String, String)],
+}
+
+impl HeartbeatSource for LocalHeartbeat<'_> {
+    fn min_timestamp(&self) -> Option<u128> {
+        let entries = std::fs::read_dir(self.dir).ok()?;
+        let mut min_ts: Option<u128> = None;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("game_progress_") && name.ends_with(".json") {
+                let content = std::fs::read_to_string(entry.path()).ok();
+                if let Some(ts) = content.and_then(|c| parse_min_timestamp_ms(&c)) {
+                    min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
+                }
+            }
+        }
+        min_ts
+    }
+}
+
+impl HeartbeatSource for VmHeartbeat<'_> {
+    fn min_timestamp(&self) -> Option<u128> {
+        let cmd = "cat /home/chessbender/chessbender/game_progress_*.json 2>/dev/null || true";
+        let mut min_ts: Option<u128> = None;
+        for (_, ip) in self.vms {
+            let result = self.rt.block_on(self.ssh.run(ip, cmd));
+            if let Some(ts) = parse_min_timestamp_ms(&result.stdout) {
+                min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
+            }
+        }
+        min_ts
+    }
+}
+
+/// Parse all `"timestamp_ms": <number>` values from a string, returning the minimum.
+fn parse_min_timestamp_ms(content: &str) -> Option<u128> {
+    const MARKER: &str = "\"timestamp_ms\":";
+    let mut min_ts: Option<u128> = None;
+    let mut search_from = 0;
+    while let Some(idx) = content[search_from..].find(MARKER) {
+        let abs_idx = search_from + idx + MARKER.len();
+        let rest = content[abs_idx..].trim_start();
+        if let Some(end) = rest.find(|c: char| !c.is_ascii_digit())
+            && let Ok(ts) = rest[..end].parse::<u128>()
+        {
+            min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
+        }
+        search_from = abs_idx;
+    }
+    min_ts
+}
+
+/// Check if a heartbeat source has stalled beyond `stall_secs`.
+/// Returns `true` if stalled (caller should kill).
+fn check_stall(source: &impl HeartbeatSource, last_ts: &mut Option<u128>, stall_secs: u64) -> bool {
+    if let Some(ts) = source.min_timestamp() {
+        if let Some(prev) = *last_ts
+            && ts <= prev
+        {
+            let stale = now_ms().saturating_sub(ts) / 1000;
+            if stale > stall_secs as u128 {
+                return true;
+            }
+        }
+        *last_ts = Some(ts);
+    }
+    false
+}
+
+// ── Main test orchestration ──
+
 /// Run the end-to-end test orchestration loop.
 pub async fn run(
     config: &ClusterConfig,
     project_root: &Path,
     test_config: TestConfig,
 ) -> anyhow::Result<()> {
-    // Validate inputs
     if test_config.mode != "tournament" && test_config.mode != "1v1" {
         anyhow::bail!("mode must be 'tournament' or '1v1'");
     }
@@ -42,7 +128,7 @@ pub async fn run(
     let vm_count = if test_config.mode == "tournament" {
         (test_config.players as usize).saturating_sub(1).min(config.vms.len())
     } else {
-        1 // 1v1 uses only vm-1
+        1
     };
     let target_vms = &config.vms[..vm_count];
 
@@ -60,64 +146,17 @@ pub async fn run(
         test_config.mode, test_config.network, test_config.players, test_config.max_runs,
     ));
 
-    // Step 1: Deploy
+    // Step 1: Deploy (reuse deploy module)
     if test_config.deploy {
         print_and_push(&mut output, "=== DEPLOYING ===");
-
         if test_config.build {
-            print_and_push(&mut output, "Building release binary...");
-            let status = tokio::process::Command::new("cargo")
-                .args(["build", "--release", "-p", "chessbender"])
-                .current_dir(project_root)
-                .status()
-                .await?;
-            if !status.success() {
-                anyhow::bail!("cargo build failed");
-            }
+            crate::deploy::build_release(project_root).await?;
             print_and_push(&mut output, "Build OK");
         }
 
-        let binary = project_root.join("target/release/chessbender");
-        let assets = project_root.join("assets");
-        if !binary.exists() {
-            anyhow::bail!("Binary not found: {}", binary.display());
-        }
-        if !assets.exists() {
-            anyhow::bail!("Assets dir not found: {}", assets.display());
-        }
-
-        // rsync to all target VMs in parallel
-        let mut tasks = tokio::task::JoinSet::new();
-        for vm in target_vms {
-            let ssh = ssh.clone();
-            let name = vm.name.clone();
-            let ip = vm.ip.clone();
-            let remote_dir = config.remote_dir.clone();
-            let binary = binary.clone();
-            let steam_lib = config.steam_api_lib.clone();
-            let appid_file = project_root.join(&config.steam_appid_file);
-            let assets = assets.clone();
-
-            tasks.spawn(async move {
-                ssh.run(&ip, &format!("mkdir -p {remote_dir}")).await;
-                let sources: Vec<&Path> = vec![
-                    binary.as_path(),
-                    steam_lib.as_path(),
-                    appid_file.as_path(),
-                    assets.as_path(),
-                ];
-                ssh.rsync(&sources, &ip, &format!("{remote_dir}/")).await?;
-                ssh.run(&ip, &format!("chmod +x {remote_dir}/chessbender"))
-                    .await;
-                anyhow::Ok(name)
-            });
-        }
-
-        while let Some(result) = tasks.join_next().await {
-            match result? {
-                Ok(name) => print_and_push(&mut output, &format!("  {name}: deployed")),
-                Err(e) => print_and_push(&mut output, &format!("  DEPLOY FAILED: {e}")),
-            }
+        let failed = crate::deploy::deploy_to_vms(&ssh, target_vms, config, project_root).await?;
+        if !failed.is_empty() {
+            anyhow::bail!("Deploy failed for {} VMs", failed.len());
         }
         output.push('\n');
     }
@@ -126,15 +165,10 @@ pub async fn run(
     if test_config.network == "steam" {
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===");
         for vm in target_vms {
-            match ensure_steam(&ssh, &vm.ip).await {
-                Ok(_) => {
-                    print_and_push(&mut output, &format!("  {}: Steam ready", vm.name));
-                }
+            match crate::steam::ensure_steam(&ssh, &vm.ip).await {
+                Ok(()) => print_and_push(&mut output, &format!("  {}: Steam ready", vm.name)),
                 Err(e) => {
-                    print_and_push(
-                        &mut output,
-                        &format!("  {}: FAILED — {e}", vm.name),
-                    );
+                    print_and_push(&mut output, &format!("  {}: FAILED — {e}", vm.name));
                     anyhow::bail!("Steam setup failed on {}", vm.name);
                 }
             }
@@ -160,32 +194,17 @@ pub async fn run(
     for run_num in 1..=test_config.max_runs {
         print_and_push(&mut output, &format!("=== RUN {run_num}/{} ===", test_config.max_runs));
 
-        // 3a: Kill existing games on VMs
-        kill_games(&ssh, target_vms).await;
+        // Kill existing games
+        crate::run::kill_games(&ssh, target_vms).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // 3b: Launch chessbender on VMs
-        let vm_args = match (test_config.mode.as_str(), test_config.network.as_str()) {
-            ("tournament", "lan") => {
-                format!("--headless --auto-join-tournament --udp-addr {host_addr} --auto-play")
-            }
-            ("tournament", "steam") => {
-                "--headless --auto-join-steam-tournament --auto-play".to_string()
-            }
-            ("1v1", "lan") => {
-                format!("--headless --auto-join-udp --udp-addr {host_addr} --auto-play")
-            }
-            ("1v1", "steam") => "--headless --auto-join-steam --auto-play".to_string(),
-            _ => unreachable!(),
-        };
+        // Launch chessbender on VMs
+        let vm_args = vm_launch_args(&test_config.mode, &test_config.network, &host_addr);
 
         let mut vm_launch_ok = true;
         for vm in target_vms {
             if let Err(e) = launch_game(&ssh, &vm.ip, &config.remote_dir, &vm_args).await {
-                print_and_push(
-                    &mut output,
-                    &format!("  {}: launch FAILED: {e}", vm.name),
-                );
+                print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name));
                 vm_launch_ok = false;
             }
         }
@@ -193,7 +212,7 @@ pub async fn run(
         if !vm_launch_ok {
             failed += 1;
             print_and_push(&mut output, "--- FAIL (VM launch failed) ---");
-            kill_games(&ssh, target_vms).await;
+            crate::run::kill_games(&ssh, target_vms).await;
             if test_config.stop_on_failure {
                 break;
             }
@@ -201,33 +220,14 @@ pub async fn run(
             continue;
         }
 
-        // Give VMs a moment to start
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        // 3c: Launch local process
+        // Launch local process
         let mut local_cmd = std::process::Command::new(&binary_path);
-        match (test_config.mode.as_str(), test_config.network.as_str()) {
-            ("tournament", "lan") => {
-                local_cmd.arg("--auto-host-tournament").arg("--auto-play");
-            }
-            ("tournament", "steam") => {
-                local_cmd
-                    .arg("--auto-host-steam-tournament")
-                    .arg("--auto-play");
-            }
-            ("1v1", "lan") => {
-                local_cmd.arg("--auto-host-udp").arg("--auto-play");
-            }
-            ("1v1", "steam") => {
-                local_cmd.arg("--auto-host-steam").arg("--auto-play");
-            }
-            _ => unreachable!(),
-        }
-
+        apply_local_args(&mut local_cmd, &test_config.mode, &test_config.network);
         if test_config.headless {
             local_cmd.arg("--headless");
         }
-
         local_cmd.current_dir(project_root);
         local_cmd.stdout(std::process::Stdio::piped());
         local_cmd.stderr(std::process::Stdio::piped());
@@ -240,7 +240,7 @@ pub async fn run(
 
         let mut child = local_cmd.spawn()?;
 
-        // 3d: Monitor with heartbeat detection
+        // Monitor with heartbeat detection
         cleanup_heartbeat_files(project_root);
 
         let timeout = test_config.timeout;
@@ -252,7 +252,6 @@ pub async fn run(
             .collect();
         let ssh_for_monitor = ssh.clone();
 
-        // Run monitoring in a blocking thread since child.try_wait() is sync
         let (combined, exit_code, was_timeout) = tokio::task::spawn_blocking(move || {
             monitor_local_process(
                 &mut child,
@@ -266,16 +265,10 @@ pub async fn run(
         .await??;
 
         cleanup_heartbeat_files(project_root);
+        crate::run::kill_games(&ssh, target_vms).await;
 
-        // 3e: Kill games on VMs
-        kill_games(&ssh, target_vms).await;
-
-        // 3f: Filter and report
-        let filtered: Vec<&str> = combined
-            .lines()
-            .filter(|line| filter_re.is_match(line))
-            .collect();
-        for line in &filtered {
+        // Filter and report
+        for line in combined.lines().filter(|l| filter_re.is_match(l)) {
             output.push_str(line);
             output.push('\n');
         }
@@ -286,10 +279,7 @@ pub async fn run(
             timed_out_count += 1;
             failed += 1;
             failure_code = Some(-1);
-            print_and_push(
-                &mut output,
-                &format!("--- TIMEOUT ({}s limit) ---", timeout.as_secs()),
-            );
+            print_and_push(&mut output, &format!("--- TIMEOUT ({}s limit) ---", timeout.as_secs()));
         } else if exit_code == Some(0) {
             passed += 1;
             failure_code = None;
@@ -304,8 +294,7 @@ pub async fn run(
         }
 
         // Collect VM logs on failure
-        let is_failure = was_timeout || exit_code != Some(0);
-        if is_failure {
+        if was_timeout || exit_code != Some(0) {
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
             for vm in target_vms {
                 output.push_str(&format!("  [{}]:\n", vm.name));
@@ -315,7 +304,6 @@ pub async fn run(
                 }
             }
 
-            // Unfiltered local tail
             output.push_str("\n--- Local unfiltered tail (last 60 lines) ---\n");
             let tail_lines: Vec<&str> = combined.lines().rev().take(60).collect();
             for line in tail_lines.into_iter().rev() {
@@ -367,14 +355,10 @@ pub async fn run(
     };
     let summary = format!(
         "\n=== SUMMARY ===\n{passed}/{total} passed, {failed} failed{timeout_info}\nConfig: mode={}, network={}, players={}, vms={vm_count}, timeout={}s",
-        test_config.mode,
-        test_config.network,
-        test_config.players,
-        test_config.timeout.as_secs(),
+        test_config.mode, test_config.network, test_config.players, test_config.timeout.as_secs(),
     );
     print_and_push(&mut output, &summary);
 
-    // Write output file
     if let Some(path) = &test_config.output_file {
         std::fs::write(path, &output)?;
         println!("Output written to {}", path.display());
@@ -386,65 +370,38 @@ pub async fn run(
     Ok(())
 }
 
-/// Print to stdout and append to output buffer.
+// ── Helpers ──
+
 fn print_and_push(output: &mut String, msg: &str) {
     println!("{msg}");
     output.push_str(msg);
     output.push('\n');
 }
 
-/// Kill chessbender on all target VMs.
-async fn kill_games(ssh: &SshClient, vms: &[crate::config::VmDef]) {
-    let mut tasks = tokio::task::JoinSet::new();
-    for vm in vms {
-        let ssh = ssh.clone();
-        let ip = vm.ip.clone();
-        tasks.spawn(async move {
-            ssh.run(&ip, "pkill -x chessbender 2>/dev/null || true").await;
-        });
-    }
-    while let Some(result) = tasks.join_next().await {
-        let _ = result;
+/// Build VM-side launch args based on mode + network.
+fn vm_launch_args(mode: &str, network: &str, host_addr: &str) -> String {
+    match (mode, network) {
+        ("tournament", "lan") => format!("--headless --auto-join-tournament --udp-addr {host_addr} --auto-play"),
+        ("tournament", "steam") => "--headless --auto-join-steam-tournament --auto-play".into(),
+        ("1v1", "lan") => format!("--headless --auto-join-udp --udp-addr {host_addr} --auto-play"),
+        ("1v1", "steam") => "--headless --auto-join-steam --auto-play".into(),
+        _ => unreachable!(),
     }
 }
 
-/// Ensure weston + Steam are running on a VM.
-async fn ensure_steam(ssh: &SshClient, ip: &str) -> anyhow::Result<()> {
-    let log = "/home/chessbender/.local/share/Steam/logs/connection_log.txt";
-    let cmd = format!(
-        "export XDG_RUNTIME_DIR=/tmp/runtime-chessbender; \
-         mkdir -p $XDG_RUNTIME_DIR; \
-         if ! pgrep -x weston >/dev/null; then \
-         weston --backend=headless --xwayland --no-config >/dev/null 2>&1 & \
-         sleep 2; \
-         fi; \
-         export WAYLAND_DISPLAY=wayland-1; \
-         export DISPLAY=:0; \
-         if pgrep -x steam >/dev/null; then \
-         echo STEAM_READY; exit 0; \
-         fi; \
-         : > {log} 2>/dev/null; \
-         nohup steam -silent >/dev/null 2>&1 & \
-         for i in $(seq 1 60); do \
-         if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then \
-         echo STEAM_READY; exit 0; \
-         fi; sleep 1; done; \
-         echo STEAM_TIMEOUT"
-    );
-    let result = ssh.run(ip, &cmd).await;
-    if !result.success || !result.stdout.contains("STEAM_READY") {
-        anyhow::bail!("Steam failed: {}", result.stderr);
+/// Apply host-side args to the local command based on mode + network.
+fn apply_local_args(cmd: &mut std::process::Command, mode: &str, network: &str) {
+    match (mode, network) {
+        ("tournament", "lan") => { cmd.arg("--auto-host-tournament").arg("--auto-play"); }
+        ("tournament", "steam") => { cmd.arg("--auto-host-steam-tournament").arg("--auto-play"); }
+        ("1v1", "lan") => { cmd.arg("--auto-host-udp").arg("--auto-play"); }
+        ("1v1", "steam") => { cmd.arg("--auto-host-steam").arg("--auto-play"); }
+        _ => unreachable!(),
     }
-    Ok(())
 }
 
 /// Launch chessbender on a VM (detached via nohup).
-async fn launch_game(
-    ssh: &SshClient,
-    ip: &str,
-    remote_dir: &str,
-    args: &str,
-) -> anyhow::Result<()> {
+async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, args: &str) -> anyhow::Result<()> {
     let cmd = format!(
         "cd {remote_dir} && \
          export LD_LIBRARY_PATH=\"{remote_dir}:$LD_LIBRARY_PATH\" \
@@ -460,12 +417,31 @@ async fn launch_game(
     Ok(())
 }
 
-/// Collect tail of game.log from a VM.
 async fn collect_vm_log(ssh: &SshClient, ip: &str, remote_dir: &str, max_lines: usize) -> String {
     let cmd = format!("tail -n {max_lines} {remote_dir}/game.log 2>/dev/null || echo '(no log)'");
-    let result = ssh.run(ip, &cmd).await;
-    result.stdout
+    ssh.run(ip, &cmd).await.stdout
 }
+
+fn cleanup_heartbeat_files(dir: &Path) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("game_progress_") && name.ends_with(".json") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+}
+
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
+
+// ── Process monitoring ──
 
 /// Monitor the local process with timeout and heartbeat detection.
 /// Runs synchronously (called from spawn_blocking).
@@ -507,8 +483,9 @@ fn monitor_local_process(
 
     const HEARTBEAT_STALL_SECS: u64 = 30;
 
-    // Build a tokio runtime for SSH calls within this blocking context
     let rt = tokio::runtime::Handle::current();
+    let local_hb = LocalHeartbeat { dir: project_root };
+    let vm_hb = VmHeartbeat { rt: &rt, ssh, vms: vm_ips };
 
     loop {
         match child.try_wait() {
@@ -524,49 +501,25 @@ fn monitor_local_process(
                 break;
             }
             Ok(None) => {
-                // Local heartbeat check (every ~2s)
                 if last_heartbeat_check.elapsed() > Duration::from_secs(2) {
                     last_heartbeat_check = Instant::now();
-                    if let Some(ts) = read_min_heartbeat_timestamp(project_root) {
-                        if let Some(prev_ts) = last_local_ts
-                            && ts <= prev_ts
-                        {
-                            let stale_secs = now_ms().saturating_sub(ts) / 1000;
-                            if stale_secs > HEARTBEAT_STALL_SECS as u128 {
-                                eprintln!(
-                                    "Local heartbeat stall: no update for {stale_secs}s — killing"
-                                );
-                                kill_process_group(child, shutdown_timeout);
-                                exit_code =
-                                    child.try_wait().ok().flatten().and_then(|s| s.code());
-                                timed_out = true;
-                                break;
-                            }
-                        }
-                        last_local_ts = Some(ts);
+                    if check_stall(&local_hb, &mut last_local_ts, HEARTBEAT_STALL_SECS) {
+                        eprintln!("Local heartbeat stall — killing");
+                        kill_process_group(child, shutdown_timeout);
+                        exit_code = child.try_wait().ok().flatten().and_then(|s| s.code());
+                        timed_out = true;
+                        break;
                     }
                 }
 
-                // VM heartbeat check (every ~10s to limit SSH overhead)
                 if last_vm_check.elapsed() > Duration::from_secs(10) {
                     last_vm_check = Instant::now();
-                    if let Some(ts) = read_all_vm_heartbeats(&rt, ssh, vm_ips) {
-                        if let Some(prev_ts) = last_vm_ts
-                            && ts <= prev_ts
-                        {
-                            let stale_secs = now_ms().saturating_sub(ts) / 1000;
-                            if stale_secs > HEARTBEAT_STALL_SECS as u128 {
-                                eprintln!(
-                                    "VM heartbeat stall: no update for {stale_secs}s — killing"
-                                );
-                                kill_process_group(child, shutdown_timeout);
-                                exit_code =
-                                    child.try_wait().ok().flatten().and_then(|s| s.code());
-                                timed_out = true;
-                                break;
-                            }
-                        }
-                        last_vm_ts = Some(ts);
+                    if check_stall(&vm_hb, &mut last_vm_ts, HEARTBEAT_STALL_SECS) {
+                        eprintln!("VM heartbeat stall — killing");
+                        kill_process_group(child, shutdown_timeout);
+                        exit_code = child.try_wait().ok().flatten().and_then(|s| s.code());
+                        timed_out = true;
+                        break;
                     }
                 }
 
@@ -581,7 +534,6 @@ fn monitor_local_process(
     Ok((format!("{stdout}{stderr}"), exit_code, timed_out))
 }
 
-/// Send SIGTERM to process group, wait, then SIGKILL.
 fn kill_process_group(child: &mut std::process::Child, shutdown_timeout: Duration) {
     let pid = child.id();
 
@@ -611,89 +563,6 @@ fn kill_process_group(child: &mut std::process::Child, shutdown_timeout: Duratio
             _ => std::thread::sleep(Duration::from_millis(100)),
         }
     }
-}
-
-fn now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0)
-}
-
-/// Read the minimum heartbeat timestamp from local heartbeat files.
-fn read_min_heartbeat_timestamp(dir: &Path) -> Option<u128> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut min_ts: Option<u128> = None;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with("game_progress_") && name.ends_with(".json")
-            && let Some(ts) = read_heartbeat_from_file(&entry.path())
-        {
-            min_ts = Some(min_ts.map_or(ts, |prev: u128| prev.min(ts)));
-        }
-    }
-    min_ts
-}
-
-fn read_heartbeat_from_file(path: &Path) -> Option<u128> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let marker = "\"timestamp_ms\":";
-    let idx = content.find(marker)?;
-    let rest = &content[idx + marker.len()..];
-    let rest = rest.trim_start();
-    let end = rest.find(|c: char| !c.is_ascii_digit())?;
-    rest[..end].parse().ok()
-}
-
-/// Remove all heartbeat files from a directory.
-fn cleanup_heartbeat_files(dir: &Path) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let name = entry.file_name();
-            let name = name.to_string_lossy();
-            if name.starts_with("game_progress_") && name.ends_with(".json") {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
-    }
-}
-
-/// Read minimum heartbeat across all VMs via SSH.
-fn read_all_vm_heartbeats(
-    rt: &tokio::runtime::Handle,
-    ssh: &SshClient,
-    vms: &[(String, String)],
-) -> Option<u128> {
-    let mut min_ts: Option<u128> = None;
-    for (_, ip) in vms {
-        if let Some(ts) = read_vm_heartbeat(rt, ssh, ip) {
-            min_ts = Some(min_ts.map_or(ts, |prev: u128| prev.min(ts)));
-        }
-    }
-    min_ts
-}
-
-/// Read heartbeat from a single VM.
-fn read_vm_heartbeat(rt: &tokio::runtime::Handle, ssh: &SshClient, ip: &str) -> Option<u128> {
-    let cmd = "cat /home/chessbender/chessbender/game_progress_*.json 2>/dev/null || true";
-    let result = rt.block_on(ssh.run(ip, cmd));
-    let stdout = result.stdout;
-
-    let marker = "\"timestamp_ms\":";
-    let mut min_ts: Option<u128> = None;
-    let mut search_from = 0;
-    while let Some(idx) = stdout[search_from..].find(marker) {
-        let abs_idx = search_from + idx + marker.len();
-        let rest = stdout[abs_idx..].trim_start();
-        if let Some(end) = rest.find(|c: char| !c.is_ascii_digit())
-            && let Ok(ts) = rest[..end].parse::<u128>()
-        {
-            min_ts = Some(min_ts.map_or(ts, |prev: u128| prev.min(ts)));
-        }
-        search_from = abs_idx;
-    }
-    min_ts
 }
 
 fn exit_code_label(code: i32) -> &'static str {

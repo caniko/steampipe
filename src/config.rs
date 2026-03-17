@@ -9,6 +9,25 @@ pub struct VmDef {
     pub index: u8,
 }
 
+/// Run an async operation on each VM in parallel, collecting results.
+/// Monomorphized at each call site via static dispatch on `F`.
+pub async fn par_each_vm<F, Fut, T>(vms: &[VmDef], op: F) -> anyhow::Result<Vec<T>>
+where
+    F: Fn(VmDef) -> Fut,
+    Fut: std::future::Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let mut tasks = tokio::task::JoinSet::new();
+    for vm in vms {
+        tasks.spawn(op(vm.clone()));
+    }
+    let mut results = Vec::with_capacity(vms.len());
+    while let Some(result) = tasks.join_next().await {
+        results.push(result?);
+    }
+    Ok(results)
+}
+
 /// Cluster-wide configuration. Defaults match `nix/test-cluster/default.nix`.
 #[derive(Debug, Clone)]
 pub struct ClusterConfig {
@@ -67,6 +86,23 @@ impl ClusterConfig {
         }
     }
 
+    /// Check that the network bridge exists. Fails with actionable message if missing.
+    pub fn validate_bridge(&self) -> anyhow::Result<()> {
+        if !std::process::Command::new("ip")
+            .args(["link", "show", &self.bridge])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()?
+            .success()
+        {
+            anyhow::bail!(
+                "Bridge {} not found. Run 'just cluster-net-up' first.",
+                self.bridge
+            );
+        }
+        Ok(())
+    }
+
     /// Look up a VM by name ("vm-3") or index ("3"). Returns None if not found.
     pub fn find_vm(&self, target: &str) -> Option<&VmDef> {
         // Try as plain number first
@@ -78,9 +114,9 @@ impl ClusterConfig {
 
     /// Parse a target string into a list of VMs.
     /// Accepts: "all", "3", "vm-3", or with continue_from: "3" means vm-3 through vm-7.
-    pub fn resolve_targets(&self, target: Option<&str>, continue_from: bool) -> anyhow::Result<Vec<&VmDef>> {
+    pub fn resolve_targets(&self, target: Option<&str>, continue_from: bool) -> anyhow::Result<Vec<VmDef>> {
         match target {
-            None | Some("all") => Ok(self.vms.iter().collect()),
+            None | Some("all") => Ok(self.vms.clone()),
             Some(t) => {
                 let vm = self
                     .find_vm(t)
@@ -89,9 +125,9 @@ impl ClusterConfig {
                         anyhow::anyhow!("Unknown VM: {t} (expected vm-1..vm-{max} or 1..{max})")
                     })?;
                 if continue_from {
-                    Ok(self.vms.iter().filter(|v| v.index >= vm.index).collect())
+                    Ok(self.vms.iter().filter(|v| v.index >= vm.index).cloned().collect())
                 } else {
-                    Ok(vec![vm])
+                    Ok(vec![vm.clone()])
                 }
             }
         }

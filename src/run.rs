@@ -1,30 +1,24 @@
-use crate::config::ClusterConfig;
+use crate::config::{ClusterConfig, VmDef, par_each_vm};
 use crate::ssh::SshClient;
+
+/// Kill chessbender on a set of VMs in parallel.
+pub async fn kill_games(ssh: &SshClient, vms: &[VmDef]) {
+    let results = par_each_vm(vms, |vm| {
+        let ssh = ssh.clone();
+        async move {
+            ssh.run(&vm.ip, "pkill -x chessbender 2>/dev/null || true")
+                .await;
+        }
+    })
+    .await;
+    let _ = results; // JoinErrors are non-fatal here
+}
 
 /// Run the `stop-game` subcommand: kill chessbender on all VMs.
 pub async fn stop_game(config: &ClusterConfig) -> anyhow::Result<()> {
     let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
-
     println!("==> Stopping chessbender on all VMs...");
-    let mut tasks = tokio::task::JoinSet::new();
-    for vm in &config.vms {
-        let ssh = ssh.clone();
-        let name = vm.name.clone();
-        let ip = vm.ip.clone();
-        tasks.spawn(async move {
-            let result = ssh.run(&ip, "pkill -x chessbender 2>/dev/null; echo ok").await;
-            (name, result.success)
-        });
-    }
-
-    while let Some(result) = tasks.join_next().await {
-        let (name, ok) = result?;
-        if ok {
-            println!("  {name}: stopped");
-        } else {
-            eprintln!("  {name}: unreachable");
-        }
-    }
+    kill_games(&ssh, &config.vms).await;
     println!("==> Done");
     Ok(())
 }

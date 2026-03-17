@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::config::{ClusterConfig, VmDef};
+use crate::config::{ClusterConfig, VmDef, par_each_vm};
 use crate::ssh::SshClient;
 use crate::state;
 
@@ -43,12 +43,10 @@ pub fn stop_vm(config: &ClusterConfig, vm: &VmDef) {
         }
     state::remove_pid(&config.state_dir, &vm.name);
 
-    // Kill orphan microvm processes
     let _ = std::process::Command::new("pkill")
         .args(["-f", &format!("microvm@{}", vm.name)])
         .status();
 
-    // Clean up socket files
     let vm_dir = config.state_dir.join(&vm.name);
     if vm_dir.exists()
         && let Ok(entries) = std::fs::read_dir(&vm_dir) {
@@ -65,33 +63,17 @@ pub fn stop_vm(config: &ClusterConfig, vm: &VmDef) {
 /// Run the `up` subcommand: start all VMs in config and wait for SSH.
 pub async fn up(config: &ClusterConfig, runners_dir: &Path) -> anyhow::Result<()> {
     state::ensure_state_dir(&config.state_dir)?;
+    config.validate_bridge()?;
 
-    if !std::process::Command::new("ip")
-        .args(["link", "show", &config.bridge])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?
-        .success()
-    {
-        anyhow::bail!(
-            "Bridge {} not found. Run 'just cluster-net-up' first.",
-            config.bridge
-        );
-    }
+    println!("==> Starting {} VM(s)...", config.vms.len());
 
-    let target_vms = &config.vms[..];
-
-    println!("==> Starting {} VM(s)...", target_vms.len());
-
-    for vm in target_vms {
-        // Stop any existing instance first
+    for vm in &config.vms {
         stop_vm(config, vm);
     }
 
-    // Brief pause for cleanup
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    for vm in target_vms {
+    for vm in &config.vms {
         match start_vm(config, vm, runners_dir) {
             Ok(pid) => println!("  {} started (PID {pid})", vm.name),
             Err(e) => eprintln!("  {} FAILED: {e}", vm.name),
@@ -100,25 +82,22 @@ pub async fn up(config: &ClusterConfig, runners_dir: &Path) -> anyhow::Result<()
 
     println!("==> Waiting for SSH...");
     let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
-    let mut tasks = tokio::task::JoinSet::new();
-    for vm in target_vms {
-        let ssh = ssh.clone();
-        let name = vm.name.clone();
-        let ip = vm.ip.clone();
-        tasks.spawn(async move {
-            let ok = ssh.wait_ready(&ip, 30).await;
-            (name, ok)
-        });
-    }
 
-    let mut all_ok = true;
-    while let Some(result) = tasks.join_next().await {
-        let (name, ok) = result?;
-        if ok {
+    let results = par_each_vm(&config.vms, |vm| {
+        let ssh = ssh.clone();
+        async move {
+            let ok = ssh.wait_ready(&vm.ip, 30).await;
+            (vm.name, ok)
+        }
+    })
+    .await?;
+
+    let all_ok = results.iter().all(|(_, ok)| *ok);
+    for (name, ok) in &results {
+        if *ok {
             println!("  {name}: ready");
         } else {
             eprintln!("  {name}: SSH timeout");
-            all_ok = false;
         }
     }
 

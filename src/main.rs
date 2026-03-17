@@ -13,7 +13,7 @@ mod vm;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use config::{ClusterConfig, detect_project_root};
+use config::{ClusterConfig, detect_project_root, par_each_vm};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,7 +24,9 @@ async fn main() -> anyhow::Result<()> {
         None => detect_project_root()?,
     };
 
-    let mut config = ClusterConfig::new(&project_root, cli.vm_count);
+    let vm_count = cli.vm_count
+        .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
+    let mut config = ClusterConfig::new(&project_root, vm_count);
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
@@ -97,52 +99,42 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run_game(config: &ClusterConfig, extra_args: &[String]) -> anyhow::Result<()> {
     let ssh = ssh::SshClient::new(&config.ssh_key, &config.vm_user);
+    let remote_dir = config.remote_dir.clone();
+    let host_ip = config.host_ip.clone();
+    let udp_port = config.udp_port;
+    let extra = extra_args.join(" ");
 
     println!("==> Starting chessbender on {} VMs...", config.vms.len());
 
-    let mut tasks = tokio::task::JoinSet::new();
-    for vm in &config.vms {
+    let results = par_each_vm(&config.vms, |vm| {
         let ssh = ssh.clone();
-        let name = vm.name.clone();
-        let ip = vm.ip.clone();
-        let remote_dir = config.remote_dir.clone();
-        let host_ip = config.host_ip.clone();
-        let udp_port = config.udp_port;
-        let extra = extra_args.join(" ");
-
-        tasks.spawn(async move {
-            // Start weston + Steam + chessbender
+        let remote_dir = remote_dir.clone();
+        let host_ip = host_ip.clone();
+        let extra = extra.clone();
+        async move {
             let cmd = format!(
-                r#"
-                export XDG_RUNTIME_DIR=/tmp/runtime-chessbender
-                mkdir -p $XDG_RUNTIME_DIR
-                if ! pgrep -x weston >/dev/null; then
-                    weston --backend=headless --xwayland --no-config >/dev/null 2>&1 &
-                    sleep 2
-                fi
-                export WAYLAND_DISPLAY=wayland-1
-                export DISPLAY=:0
-                if ! pgrep -x steam >/dev/null; then
-                    steam -silent -cef-disable-gpu >/dev/null 2>&1 &
-                    sleep 5
-                fi
-                cd {remote_dir}
-                if pgrep -x chessbender >/dev/null; then
-                    echo "already-running"
-                else
-                    nohup ./chessbender --headless --auto-join-tournament --udp-addr {host_ip}:{udp_port} --auto-play {extra} > game.log 2>&1 &
-                    echo "started"
-                fi
-                "#,
+                "{weston}\
+                 if ! pgrep -x steam >/dev/null; then\n\
+                     steam -silent -cef-disable-gpu >/dev/null 2>&1 &\n\
+                     sleep 5\n\
+                 fi\n\
+                 cd {remote_dir}\n\
+                 if pgrep -x chessbender >/dev/null; then\n\
+                     echo \"already-running\"\n\
+                 else\n\
+                     nohup ./chessbender --headless --auto-join-tournament --udp-addr {host_ip}:{udp_port} --auto-play {extra} > game.log 2>&1 &\n\
+                     echo \"started\"\n\
+                 fi",
+                weston = steam::WESTON_SETUP,
             );
-            let result = ssh.run(&ip, &cmd).await;
-            let status = result.stdout.trim().to_string();
-            println!("  {name}: {status}");
-        });
-    }
+            let result = ssh.run(&vm.ip, &cmd).await;
+            (vm.name, result.stdout.trim().to_string())
+        }
+    })
+    .await?;
 
-    while let Some(result) = tasks.join_next().await {
-        result?;
+    for (name, status) in results {
+        println!("  {name}: {status}");
     }
     println!("==> Done");
     Ok(())

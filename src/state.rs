@@ -1,9 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Ensure the state directory exists and return it.
-pub fn ensure_state_dir(state_dir: &Path) -> anyhow::Result<PathBuf> {
+/// Ensure the state directory exists.
+pub fn ensure_state_dir(state_dir: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(state_dir)?;
-    Ok(state_dir.to_owned())
+    Ok(())
 }
 
 /// Read a PID from a PID file. Returns None if the file doesn't exist or is invalid.
