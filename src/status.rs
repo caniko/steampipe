@@ -1,24 +1,31 @@
-use crate::config::{ClusterConfig, par_each_vm};
+use crate::config::{ClusterConfig, VmDef, par_each_vm};
 use crate::ssh::SshClient;
 use crate::state;
 
-struct VmStatus {
-    name: String,
-    ip: String,
-    vm_running: bool,
-    ssh_ok: bool,
-    steam_running: bool,
-    game_running: bool,
+/// Status of a single VM: process, SSH, Steam, game.
+pub struct VmStatus {
+    pub name: String,
+    pub ip: String,
+    pub vm_running: bool,
+    pub ssh_ok: bool,
+    pub steam_running: bool,
+    pub game_running: bool,
 }
 
-/// Run the `status` subcommand: tabular status of all VMs.
-pub async fn run(config: &ClusterConfig) -> anyhow::Result<()> {
-    let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
-    let state_dir = config.state_dir.clone();
+/// Poll status of all VMs in parallel. Shared by `status` and `watch`.
+pub async fn poll_vm_statuses(
+    vms: &[VmDef],
+    ssh: &SshClient,
+    state_dir: &std::path::Path,
+    binary_name: &str,
+) -> Vec<VmStatus> {
+    let state_dir = state_dir.to_owned();
+    let binary_name = binary_name.to_owned();
 
-    let mut results = par_each_vm(&config.vms, |vm| {
+    let mut results = par_each_vm(vms, |vm| {
         let ssh = ssh.clone();
         let state_dir = state_dir.clone();
+        let binary_name = binary_name.clone();
         async move {
             let vm_running = state::read_pid(&state_dir, &vm.name)
                 .is_some_and(state::is_pid_alive);
@@ -27,18 +34,33 @@ pub async fn run(config: &ClusterConfig) -> anyhow::Result<()> {
 
             let (steam_running, game_running) = if ssh_ok {
                 let steam = ssh.run(&vm.ip, "pgrep -x steam >/dev/null 2>&1 && echo yes || echo no").await;
-                let game = ssh.run(&vm.ip, "pgrep -x chessbender >/dev/null 2>&1 && echo yes || echo no").await;
+                let game = ssh.run(&vm.ip, &format!("pgrep -x {binary_name} >/dev/null 2>&1 && echo yes || echo no")).await;
                 (steam.stdout.trim() == "yes", game.stdout.trim() == "yes")
             } else {
                 (false, false)
             };
 
-            VmStatus { name: vm.name, ip: vm.ip, vm_running, ssh_ok, steam_running, game_running }
+            VmStatus {
+                name: vm.name.to_string(),
+                ip: vm.ip.to_string(),
+                vm_running,
+                ssh_ok,
+                steam_running,
+                game_running,
+            }
         }
     })
-    .await?;
+    .await
+    .unwrap_or_default();
 
     results.sort_by(|a, b| a.name.cmp(&b.name));
+    results
+}
+
+/// Run the `status` subcommand: tabular status of all VMs.
+pub async fn run<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
+    let ssh = config.ssh_client();
+    let results = poll_vm_statuses(&config.vms, &ssh, &config.state_dir, &config.binary_name).await;
 
     println!("{:<8} {:<14} {:<6} {:<6} {:<8} {:<8}", "VM", "IP", "VM", "SSH", "Steam", "Game");
     println!("{}", "─".repeat(56));

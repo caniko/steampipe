@@ -1,9 +1,27 @@
+use std::fmt;
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::Shell;
+
+/// Network transport layer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum NetworkMode {
+    Lan,
+    Steam,
+}
+
+impl fmt::Display for NetworkMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lan => f.write_str("lan"),
+            Self::Steam => f.write_str("steam"),
+        }
+    }
+}
 
 #[derive(Parser)]
-#[command(name = "cluster-ctl", about = "Chessbender VM cluster orchestration")]
+#[command(name = "cluster-ctl", about = "VM cluster orchestration for multiplayer game testing")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
@@ -19,6 +37,14 @@ pub struct Cli {
     /// Total number of VMs in the cluster (required)
     #[arg(long, global = true)]
     pub vm_count: Option<u8>,
+
+    /// Path to TOML file with per-VM Steam credentials and game keys
+    #[arg(long, global = true)]
+    pub credentials: Option<PathBuf>,
+
+    /// Cluster name (for running multiple independent clusters)
+    #[arg(long, global = true)]
+    pub cluster: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -35,6 +61,15 @@ pub enum Commands {
 
     /// Stop all VMs
     Down,
+
+    /// Restart VMs (stop then start)
+    Restart {
+        /// Target VM: "all", "3", "vm-3" (default: all)
+        target: Option<String>,
+        /// Path to directory containing vm-N/bin/microvm-run runners
+        #[arg(long)]
+        runners_dir: PathBuf,
+    },
 
     /// Set up cluster networking (bridge, TAP devices, NAT rules). Requires sudo.
     NetUp {
@@ -55,6 +90,9 @@ pub enum Commands {
         /// Skip cargo build
         #[arg(long)]
         no_build: bool,
+        /// Verify deployed files with checksums
+        #[arg(long)]
+        verify: bool,
     },
 
     /// Interactive Steam login wizard (one VM at a time with VNC)
@@ -84,36 +122,46 @@ pub enum Commands {
         target: Option<String>,
     },
 
-    /// Start weston + Steam + chessbender on all VMs (tournament mode)
+    /// Start weston + Steam + game on all VMs
     Run {
-        /// Extra args passed to chessbender on VMs
+        /// Args passed to the game binary on VMs
         #[arg(trailing_var_arg = true)]
         extra_args: Vec<String>,
     },
 
-    /// Kill chessbender on all VMs
+    /// Kill game process on all VMs
     StopGame,
 
-    /// Collect game.log from all VMs
+    /// Collect game.log from all VMs (or stream live with --follow)
     Logs {
         /// Output directory (default: logs/cluster-<timestamp>)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Stream logs in real-time from all VMs (tail -f)
+        #[arg(short, long)]
+        follow: bool,
+        /// Number of tail lines to show initially when following
+        #[arg(short = 'n', long, default_value_t = 20)]
+        tail: u32,
     },
 
-    /// Run end-to-end tests: deploy → launch → monitor → collect logs → report
+    /// Run end-to-end tests: deploy -> launch -> monitor -> collect logs -> report
     Test {
-        /// Game mode: "tournament" or "1v1"
-        #[arg(long)]
-        mode: String,
-
-        /// Network transport: "lan" or "steam"
+        /// Network transport: lan or steam
         #[arg(long, default_value = "lan")]
-        network: String,
+        network: NetworkMode,
 
-        /// Number of players (2-8, tournament only; host + N-1 VMs)
+        /// Number of players (2-8; host + N-1 VMs)
         #[arg(long, default_value_t = 8)]
         players: u8,
+
+        /// Args passed to the game binary on each VM
+        #[arg(long)]
+        vm_args: Option<String>,
+
+        /// Args passed to the local (host) game binary
+        #[arg(long)]
+        host_args: Option<String>,
 
         /// Number of test runs
         #[arg(long, default_value_t = 1)]
@@ -139,10 +187,6 @@ pub enum Commands {
         #[arg(long, default_value_t = true)]
         build: bool,
 
-        /// Run local process headless
-        #[arg(long, default_value_t = true)]
-        headless: bool,
-
         /// Regex filter for output lines
         #[arg(long)]
         filter_pattern: Option<String>,
@@ -150,5 +194,106 @@ pub enum Commands {
         /// Write full output to this file
         #[arg(long)]
         output_file: Option<PathBuf>,
+
+        /// Capture screenshots on test failure
+        #[arg(long)]
+        capture_on_failure: bool,
     },
+
+    /// Diagnose and repair cluster health issues
+    Doctor {
+        /// Auto-fix problems where possible
+        #[arg(long)]
+        fix: bool,
+    },
+
+    /// Apply network emulation (latency, packet loss, jitter, bandwidth). Requires sudo.
+    Netem {
+        /// Target VM: "all", "3", "vm-3"
+        target: String,
+        /// Latency in milliseconds
+        #[arg(long)]
+        latency: Option<u32>,
+        /// Jitter in milliseconds (used with --latency)
+        #[arg(long)]
+        jitter: Option<u32>,
+        /// Packet loss percentage (0-100)
+        #[arg(long)]
+        loss: Option<f32>,
+        /// Bandwidth limit in kbit/s
+        #[arg(long)]
+        rate: Option<u32>,
+    },
+
+    /// Show current network emulation status
+    NetemShow,
+
+    /// Reset (remove) all network emulation rules
+    NetemReset {
+        /// Target VM: "all", "3", "vm-3" (default: all)
+        target: Option<String>,
+    },
+
+    /// Show test result history
+    History {
+        /// Show only the last N sessions
+        #[arg(short = 'n', long)]
+        last: Option<usize>,
+        /// Clear all test history
+        #[arg(long)]
+        clear: bool,
+    },
+
+    /// Save a snapshot of VM state
+    SnapshotSave {
+        /// Snapshot name
+        name: String,
+    },
+
+    /// Restore a VM state snapshot
+    SnapshotRestore {
+        /// Snapshot name
+        name: String,
+    },
+
+    /// List available snapshots
+    SnapshotList,
+
+    /// Delete a snapshot
+    SnapshotDelete {
+        /// Snapshot name
+        name: String,
+    },
+
+    /// Capture screenshots from all VMs
+    Screenshot {
+        /// Output directory (default: screenshots/<timestamp>)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Show Steam account status across all VMs
+    Accounts,
+
+    /// Live TUI dashboard showing VM status
+    Watch {
+        /// Refresh interval in seconds
+        #[arg(short, long, default_value_t = 5)]
+        interval: u64,
+    },
+
+    /// Generate a steampipe.toml config template
+    Init,
+
+    /// Generate shell completions
+    Completions {
+        /// Shell to generate completions for
+        shell: Shell,
+    },
+}
+
+/// Print shell completions to stdout.
+pub fn print_completions(shell: Shell) {
+    let mut cmd = Cli::command();
+    clap_complete::generate(shell, &mut cmd, "cluster-ctl", &mut std::io::stdout());
 }

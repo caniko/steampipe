@@ -1,141 +1,187 @@
+mod accounts;
+mod capture;
 mod cli;
 mod config;
+mod credentials;
 mod deploy;
+mod doctor;
+mod history;
 mod logs;
+mod netem;
 mod net;
 mod run;
+mod snapshot;
 mod ssh;
 mod state;
 mod status;
 mod steam;
 mod test;
 mod vm;
+mod watch;
 
 use clap::Parser;
 use cli::{Cli, Commands};
-use config::{ClusterConfig, detect_project_root, par_each_vm};
+use config::{ClusterConfig, detect_project_root};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    // Commands that don't need project root or config
+    match &cli.command {
+        Commands::Completions { shell } => {
+            cli::print_completions(*shell);
+            return Ok(());
+        }
+        _ => {}
+    }
 
     let project_root = match &cli.project_root {
         Some(p) => p.clone(),
         None => detect_project_root()?,
     };
 
+    // Init doesn't need vm_count
+    if matches!(&cli.command, Commands::Init) {
+        let path = project_root.join("steampipe.toml");
+        if path.exists() {
+            anyhow::bail!("steampipe.toml already exists");
+        }
+        std::fs::write(&path, config::generate_config_template())?;
+        println!("Created {}", path.display());
+        return Ok(());
+    }
+
     let vm_count = cli.vm_count
         .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
-    let mut config = ClusterConfig::new(&project_root, vm_count);
+    let mut config = ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref());
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
 
+    let creds = cli
+        .credentials
+        .as_deref()
+        .map(|path| credentials::load(path, None))
+        .transpose()?;
+
     state::ensure_state_dir(&config.state_dir)?;
 
     match cli.command {
-        Commands::Status => status::run(&config).await?,
-        Commands::Up { runners_dir } => vm::up(&config, &runners_dir).await?,
-        Commands::Down => vm::down(&config),
-        Commands::NetUp { nft } => net::up(&config, &nft)?,
-        Commands::NetDown { nft } => net::down(&config, &nft)?,
-        Commands::Deploy { no_build } => deploy::run(&config, &project_root, no_build).await?,
-        Commands::StopGame => run::stop_game(&config).await?,
-        Commands::Logs { output } => logs::run(&config, &project_root, output).await?,
-        Commands::SteamStart { target } => {
-            steam::start(&config, target.as_deref()).await?;
+        // Commands that require a validated bridge
+        Commands::Up { runners_dir } => {
+            let validated = config.validate_bridge()?;
+            vm::up(&validated, &runners_dir).await?;
+        }
+        Commands::Restart { target, runners_dir } => {
+            let validated = config.validate_bridge()?;
+            vm::restart(&validated, target.as_deref(), &runners_dir).await?;
         }
         Commands::SteamCheck { target, runners_dir } => {
-            steam::check(&config, target.as_deref(), &runners_dir).await?;
+            let validated = config.validate_bridge()?;
+            steam::check(&validated, target.as_deref(), &runners_dir).await?;
         }
         Commands::SteamLogin {
             target,
             continue_from,
             login_runners_dir,
         } => {
-            steam::login(&config, target.as_deref(), continue_from, &login_runners_dir).await?;
+            let validated = config.validate_bridge()?;
+            steam::login(&validated, target.as_deref(), continue_from, &login_runners_dir, creds.as_ref()).await?;
+        }
+
+        // Commands that work on any config state
+        Commands::Status => status::run(&config).await?,
+        Commands::Down => vm::down(&config),
+        Commands::NetUp { nft } => net::up(&config, &nft)?,
+        Commands::NetDown { nft } => net::down(&config, &nft)?,
+        Commands::Deploy { no_build, verify } => deploy::run(&config, &project_root, no_build, verify).await?,
+        Commands::StopGame => run::stop_game(&config).await?,
+        Commands::Logs { output, follow, tail } => {
+            if follow {
+                logs::follow(&config, tail).await?;
+            } else {
+                logs::run(&config, &project_root, output).await?;
+            }
+        }
+        Commands::SteamStart { target } => {
+            steam::start(&config, target.as_deref()).await?;
         }
         Commands::Run { extra_args } => {
-            run_game(&config, &extra_args).await?;
+            run::start_game(&config, &extra_args).await?;
         }
         Commands::Test {
-            mode,
             network,
             players,
+            vm_args,
+            host_args,
             max_runs,
             timeout,
             shutdown_timeout,
             stop_on_failure,
             deploy,
             build,
-            headless,
             filter_pattern,
             output_file,
+            capture_on_failure,
         } => {
             test::run(
                 &config,
                 &project_root,
                 test::TestConfig {
-                    mode,
                     network,
                     players,
+                    vm_args,
+                    host_args,
                     max_runs,
                     timeout: std::time::Duration::from_secs(timeout),
                     shutdown_timeout: std::time::Duration::from_secs(shutdown_timeout),
                     stop_on_failure,
                     deploy,
                     build,
-                    headless,
                     filter_pattern,
                     output_file,
+                    capture_on_failure,
                 },
             )
             .await?;
         }
-    }
 
-    Ok(())
-}
-
-async fn run_game(config: &ClusterConfig, extra_args: &[String]) -> anyhow::Result<()> {
-    let ssh = ssh::SshClient::new(&config.ssh_key, &config.vm_user);
-    let remote_dir = config.remote_dir.clone();
-    let host_ip = config.host_ip.clone();
-    let udp_port = config.udp_port;
-    let extra = extra_args.join(" ");
-
-    println!("==> Starting chessbender on {} VMs...", config.vms.len());
-
-    let results = par_each_vm(&config.vms, |vm| {
-        let ssh = ssh.clone();
-        let remote_dir = remote_dir.clone();
-        let host_ip = host_ip.clone();
-        let extra = extra.clone();
-        async move {
-            let cmd = format!(
-                "{weston}\
-                 if ! pgrep -x steam >/dev/null; then\n\
-                     steam -silent -cef-disable-gpu >/dev/null 2>&1 &\n\
-                     sleep 5\n\
-                 fi\n\
-                 cd {remote_dir}\n\
-                 if pgrep -x chessbender >/dev/null; then\n\
-                     echo \"already-running\"\n\
-                 else\n\
-                     nohup ./chessbender --headless --auto-join-tournament --udp-addr {host_ip}:{udp_port} --auto-play {extra} > game.log 2>&1 &\n\
-                     echo \"started\"\n\
-                 fi",
-                weston = steam::WESTON_SETUP,
-            );
-            let result = ssh.run(&vm.ip, &cmd).await;
-            (vm.name, result.stdout.trim().to_string())
+        // New commands
+        Commands::Doctor { fix } => doctor::run(&config, fix)?,
+        Commands::Netem { target, latency, jitter, loss, rate } => {
+            println!("==> Applying network emulation...");
+            netem::apply(&config, &target, latency, jitter, loss, rate)?;
+            println!("==> Done");
         }
-    })
-    .await?;
-
-    for (name, status) in results {
-        println!("  {name}: {status}");
+        Commands::NetemShow => netem::show(&config)?,
+        Commands::NetemReset { target } => {
+            println!("==> Resetting network emulation...");
+            netem::reset(&config, target.as_deref())?;
+            println!("==> Done");
+        }
+        Commands::History { last, clear } => {
+            if clear {
+                history::clear(&config.state_dir)?;
+            } else {
+                history::show(&config.state_dir, last)?;
+            }
+        }
+        Commands::SnapshotSave { name } => snapshot::save(&config, &name)?,
+        Commands::SnapshotRestore { name } => snapshot::restore(&config, &name)?,
+        Commands::SnapshotList => snapshot::list(&config)?,
+        Commands::SnapshotDelete { name } => snapshot::delete(&config, &name)?,
+        Commands::Screenshot { output } => {
+            let output_dir = output.unwrap_or_else(|| {
+                let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+                project_root.join(format!("screenshots/{ts}"))
+            });
+            capture::screenshot_all(&config, &output_dir).await?;
+        }
+        Commands::Accounts => accounts::show(&config).await?,
+        Commands::Watch { interval } => watch::run(&config, interval).await?,
+        Commands::Init | Commands::Completions { .. } => unreachable!(),
     }
-    println!("==> Done");
+
     Ok(())
 }

@@ -1,6 +1,7 @@
 use std::path::Path;
 
-use crate::config::{ClusterConfig, VmDef, par_each_vm};
+use crate::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
+use crate::credentials::{CredentialsMap, VmCredentials};
 use crate::ssh::SshClient;
 use crate::vm;
 
@@ -51,9 +52,9 @@ pub async fn ensure_steam(ssh: &SshClient, ip: &str) -> anyhow::Result<()> {
 }
 
 /// Start weston + Steam on target VMs (uses already-running cluster VMs).
-pub async fn start(config: &ClusterConfig, target: Option<&str>) -> anyhow::Result<()> {
+pub async fn start<S>(config: &ClusterConfig<S>, target: Option<&str>) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, false)?;
-    let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
+    let ssh = config.ssh_client();
 
     println!("==> Starting Steam on {} VM(s)...", targets.len());
     let script = format!("{WESTON_SETUP}{STEAM_START_SILENT}");
@@ -77,14 +78,14 @@ pub async fn start(config: &ClusterConfig, target: Option<&str>) -> anyhow::Resu
 }
 
 /// Run the `steam-check` subcommand: boot each VM, verify Steam login + health.
+/// Requires `BridgeReady` — starts and stops VMs, which needs the bridge.
 pub async fn check(
-    config: &ClusterConfig,
+    config: &ClusterConfig<BridgeReady>,
     target: Option<&str>,
     runners_dir: &Path,
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, false)?;
-    let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
-    config.validate_bridge()?;
+    let ssh = config.ssh_client();
 
     println!("==> Checking Steam setup on VMs (boot -> check -> shutdown)...");
 
@@ -184,18 +185,20 @@ pub async fn check(
 }
 
 /// Run the `steam-login` subcommand: interactive per-VM Steam login wizard.
+/// Requires `BridgeReady` — boots VMs to perform login.
 pub async fn login(
-    config: &ClusterConfig,
+    config: &ClusterConfig<BridgeReady>,
     target: Option<&str>,
     continue_from: bool,
     login_runners_dir: &Path,
+    creds: Option<&CredentialsMap>,
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, continue_from)?;
-    let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
-    config.validate_bridge()?;
+    let ssh = config.ssh_client();
 
     for vm in &targets {
-        if let Err(e) = login_single_vm(config, vm, &ssh, login_runners_dir).await {
+        let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
+        if let Err(e) = login_single_vm(config, vm, &ssh, login_runners_dir, vm_creds).await {
             eprintln!("Error with {}: {e}", vm.name);
         }
     }
@@ -203,24 +206,31 @@ pub async fn login(
 }
 
 async fn login_single_vm(
-    config: &ClusterConfig,
+    config: &ClusterConfig<BridgeReady>,
     vm: &VmDef,
     ssh: &SshClient,
     login_runners_dir: &Path,
+    creds: Option<&VmCredentials>,
 ) -> anyhow::Result<()> {
+    let automated = creds.is_some();
+
     println!();
     println!("══════════════════════════════════════════════════");
     println!("  Steam login for {} ({})", vm.name, vm.ip);
-    println!("  Press Ctrl+C at any time to cancel and shut down the VM");
+    if automated {
+        println!("  Mode: automated (credentials from TOML)");
+    } else {
+        println!("  Mode: interactive (VNC)");
+        println!("  Press Ctrl+C at any time to cancel and shut down the VM");
+    }
     println!("══════════════════════════════════════════════════");
 
     vm::stop_vm(config, vm);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    println!("  Booting VM (4 GB RAM for Sway + Steam GUI)...");
+    println!("  Booting VM...");
     vm::start_vm(config, vm, login_runners_dir)?;
 
-    let vm_name = vm.name.clone();
     let config_for_cleanup = config.clone();
     let vm_for_cleanup = vm.clone();
     let cleanup = move || {
@@ -235,6 +245,85 @@ async fn login_single_vm(
     }
     println!("ready");
 
+    if let Some(creds) = creds {
+        // Automated login via `steam -login`
+        automated_login(ssh, vm, creds).await?;
+    } else {
+        // Interactive VNC-based login (original flow)
+        interactive_login(ssh, vm).await?;
+    }
+
+    println!("  Shutting down Steam and VM...");
+    ssh.run(
+        &vm.ip,
+        "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
+    )
+    .await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    vm::stop_vm(config, vm);
+    println!("  {} done.", vm.name);
+
+    Ok(())
+}
+
+/// Automated login: starts weston, runs `steam -login`, waits for login confirmation,
+/// and optionally activates a game key.
+async fn automated_login(
+    ssh: &SshClient,
+    vm: &VmDef,
+    creds: &VmCredentials,
+) -> anyhow::Result<()> {
+    let user = shell_escape(&creds.steam_user);
+    let pass = shell_escape(&creds.steam_pass);
+
+    println!("  Logging in as {}...", creds.steam_user);
+
+    let log = "/home/chessbender/.local/share/Steam/logs/connection_log.txt";
+    let cmd = format!(
+        r#"{WESTON_SETUP}
+: > {log} 2>/dev/null
+steam -login '{user}' '{pass}' -silent -cef-disable-gpu >/dev/null 2>&1 &
+for i in $(seq 1 90); do
+    if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then
+        echo STEAM_LOGIN_OK
+        exit 0
+    fi
+    sleep 1
+done
+echo STEAM_LOGIN_TIMEOUT"#,
+    );
+
+    let result = ssh.run(&vm.ip, &cmd).await;
+    let output = result.stdout.trim();
+
+    if !output.contains("STEAM_LOGIN_OK") {
+        anyhow::bail!(
+            "{}: Steam login failed ({}). stderr: {}",
+            vm.name,
+            output,
+            result.stderr.trim()
+        );
+    }
+    println!("  Login successful");
+
+    // Activate game key if provided
+    if let Some(key) = &creds.game_key {
+        println!("  Activating game key...");
+        let escaped_key = shell_escape(key);
+        let activate_cmd = format!(
+            r#"steam steam://registerkey/{escaped_key} &
+sleep 10
+echo KEY_SUBMITTED"#,
+        );
+        let key_result = ssh.run(&vm.ip, &activate_cmd).await;
+        println!("  Game key activation submitted ({})", key_result.stdout.trim());
+    }
+
+    Ok(())
+}
+
+/// Interactive VNC-based login (original flow).
+async fn interactive_login(ssh: &SshClient, vm: &VmDef) -> anyhow::Result<()> {
     println!("  Starting sway + wayvnc + Steam...");
     ssh.run(
         &vm.ip,
@@ -292,15 +381,10 @@ async fn login_single_vm(
         }
     }
 
-    println!("  Shutting down Steam and VM...");
-    ssh.run(
-        &vm.ip,
-        "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
-    )
-    .await;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    vm::stop_vm(config, vm);
-    println!("  {} done.", vm_name);
-
     Ok(())
+}
+
+/// Escape single quotes for safe shell interpolation inside single-quoted strings.
+fn shell_escape(s: &str) -> String {
+    s.replace('\'', "'\\''")
 }

@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::process::Stdio;
+use std::time::Duration;
 
 /// Output from an SSH command.
 #[derive(Debug)]
@@ -25,7 +26,12 @@ impl SshClient {
     }
 
     fn ssh_args(&self, ip: &str) -> Vec<String> {
-        vec![
+        self.ssh_args_extra(ip, &[])
+    }
+
+    /// Build SSH args with additional options inserted before the destination.
+    fn ssh_args_extra(&self, ip: &str, extra_opts: &[&str]) -> Vec<String> {
+        let mut args = vec![
             "-i".into(),
             self.key.to_string_lossy().into_owned(),
             "-o".into(), "IdentitiesOnly=yes".into(),
@@ -33,8 +39,28 @@ impl SshClient {
             "-o".into(), "StrictHostKeyChecking=no".into(),
             "-o".into(), "UserKnownHostsFile=/dev/null".into(),
             "-o".into(), "LogLevel=ERROR".into(),
-            format!("{}@{}", self.user, ip),
-        ]
+        ];
+        for opt in extra_opts {
+            args.push((*opt).into());
+        }
+        args.push(format!("{}@{}", self.user, ip));
+        args
+    }
+
+    /// Spawn a long-running SSH command with stdout piped for streaming.
+    pub fn spawn_streaming(
+        &self,
+        ip: &str,
+        cmd: &str,
+        extra_opts: &[&str],
+    ) -> std::io::Result<tokio::process::Child> {
+        let mut args = self.ssh_args_extra(ip, extra_opts);
+        args.push(cmd.into());
+        tokio::process::Command::new("ssh")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
     }
 
     /// Run a command on a remote host (async).
@@ -68,15 +94,23 @@ impl SshClient {
         self.run(ip, "true").await.success
     }
 
-    /// Wait for SSH to become reachable, retrying up to `timeout_secs`.
+    /// Wait for SSH to become reachable, retrying with exponential backoff.
+    /// Starts with 500ms delay, doubles up to 4s, total up to `timeout_secs`.
     pub async fn wait_ready(&self, ip: &str, timeout_secs: u32) -> bool {
-        for _ in 0..timeout_secs {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs as u64);
+        let mut delay = Duration::from_millis(500);
+
+        loop {
             if self.is_reachable(ip).await {
                 return true;
             }
-            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+            let remaining = deadline - tokio::time::Instant::now();
+            tokio::time::sleep(delay.min(remaining)).await;
+            delay = (delay * 2).min(Duration::from_secs(4));
         }
-        false
     }
 
     /// rsync files to a remote destination.

@@ -33,3 +33,8 @@ pub fn remove_pid(state_dir: &Path, vm_name: &str) {
 pub fn is_pid_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
 }
+
+/// Check if a filename looks like a leftover socket file.
+pub fn is_socket_file(name: &str) -> bool {
+    name.ends_with(".sock") || name.contains(".vsock")
+}

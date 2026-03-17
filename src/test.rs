@@ -1,25 +1,28 @@
+use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
 
-use crate::config::ClusterConfig;
+use crate::cli::NetworkMode;
+use crate::config::{ClusterConfig, IpAddr, VmName};
 use crate::ssh::SshClient;
 
 /// Configuration for a test run.
 pub struct TestConfig {
-    pub mode: String,
-    pub network: String,
+    pub network: NetworkMode,
     pub players: u8,
+    pub vm_args: Option<String>,
+    pub host_args: Option<String>,
     pub max_runs: u32,
     pub timeout: Duration,
     pub shutdown_timeout: Duration,
     pub stop_on_failure: bool,
     pub deploy: bool,
     pub build: bool,
-    pub headless: bool,
     pub filter_pattern: Option<String>,
     pub output_file: Option<PathBuf>,
+    pub capture_on_failure: bool,
 }
 
 // ── Heartbeat trait: static dispatch for local vs. VM heartbeat sources ──
@@ -37,7 +40,8 @@ struct LocalHeartbeat<'a> {
 struct VmHeartbeat<'a> {
     rt: &'a tokio::runtime::Handle,
     ssh: &'a SshClient,
-    vms: &'a [(String, String)],
+    vms: &'a [(VmName, IpAddr)],
+    remote_dir: &'a str,
 }
 
 impl HeartbeatSource for LocalHeartbeat<'_> {
@@ -60,10 +64,10 @@ impl HeartbeatSource for LocalHeartbeat<'_> {
 
 impl HeartbeatSource for VmHeartbeat<'_> {
     fn min_timestamp(&self) -> Option<u128> {
-        let cmd = "cat /home/chessbender/chessbender/game_progress_*.json 2>/dev/null || true";
+        let cmd = format!("cat {}/game_progress_*.json 2>/dev/null || true", self.remote_dir);
         let mut min_ts: Option<u128> = None;
         for (_, ip) in self.vms {
-            let result = self.rt.block_on(self.ssh.run(ip, cmd));
+            let result = self.rt.block_on(self.ssh.run(ip, &cmd));
             if let Some(ts) = parse_min_timestamp_ms(&result.stdout) {
                 min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
             }
@@ -110,47 +114,37 @@ fn check_stall(source: &impl HeartbeatSource, last_ts: &mut Option<u128>, stall_
 // ── Main test orchestration ──
 
 /// Run the end-to-end test orchestration loop.
-pub async fn run(
-    config: &ClusterConfig,
+pub async fn run<S>(
+    config: &ClusterConfig<S>,
     project_root: &Path,
     test_config: TestConfig,
 ) -> anyhow::Result<()> {
-    if test_config.mode != "tournament" && test_config.mode != "1v1" {
-        anyhow::bail!("mode must be 'tournament' or '1v1'");
-    }
-    if test_config.network != "lan" && test_config.network != "steam" {
-        anyhow::bail!("network must be 'lan' or 'steam'");
-    }
     if test_config.players < 2 || test_config.players > 8 {
         anyhow::bail!("players must be 2-8");
     }
 
-    let vm_count = if test_config.mode == "tournament" {
-        (test_config.players as usize).saturating_sub(1).min(config.vms.len())
-    } else {
-        1
-    };
+    let vm_count = (test_config.players as usize).saturating_sub(1).min(config.vms.len());
     let target_vms = &config.vms[..vm_count];
 
     let filter_re = Regex::new(
         test_config.filter_pattern.as_deref().unwrap_or(
-            r"FAIL|PASS|panic|error|bug_report|violation|completed|timeout|killed|Tournament|summary|Player|disconnected",
+            r"FAIL|PASS|panic|error|bug_report|violation|completed|timeout|killed|summary|Player|disconnected",
         ),
     )?;
 
-    let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
+    let ssh = config.ssh_client();
     let mut output = String::new();
 
     output.push_str(&format!(
-        "Cluster test: mode={}, network={}, players={}, vms={vm_count}, max_runs={}\n\n",
-        test_config.mode, test_config.network, test_config.players, test_config.max_runs,
+        "Cluster test: network={}, players={}, vms={vm_count}, max_runs={}\n\n",
+        test_config.network, test_config.players, test_config.max_runs,
     ));
 
     // Step 1: Deploy (reuse deploy module)
     if test_config.deploy {
         print_and_push(&mut output, "=== DEPLOYING ===");
         if test_config.build {
-            crate::deploy::build_release(project_root).await?;
+            crate::deploy::build_release(project_root, &config.cargo_package).await?;
             print_and_push(&mut output, "Build OK");
         }
 
@@ -162,7 +156,7 @@ pub async fn run(
     }
 
     // Step 2: Ensure Steam on VMs if steam network
-    if test_config.network == "steam" {
+    if test_config.network == NetworkMode::Steam {
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===");
         for vm in target_vms {
             match crate::steam::ensure_steam(&ssh, &vm.ip).await {
@@ -177,16 +171,19 @@ pub async fn run(
     }
 
     // Step 3: Run loop
-    let binary_path = project_root.join("target/release/chessbender");
+    let binary_name = &config.binary_name;
+    let binary_path = project_root.join(format!("target/release/{binary_name}"));
     if !binary_path.exists() {
-        anyhow::bail!("target/release/chessbender not found");
+        anyhow::bail!("target/release/{binary_name} not found");
     }
 
-    let host_addr = format!("{}:{}", config.host_ip, config.udp_port);
+    let vm_args = test_config.vm_args.as_deref().unwrap_or("");
+    let host_args = test_config.host_args.as_deref().unwrap_or("");
 
     let mut passed = 0u32;
     let mut failed = 0u32;
     let mut timed_out_count = 0u32;
+    let mut exit_codes: Vec<Option<i32>> = Vec::new();
     let mut consecutive_fail_code: Option<i32> = None;
     let mut consecutive_fail_count = 0u32;
     const REPEAT_FAILURE_LIMIT: u32 = 3;
@@ -195,15 +192,13 @@ pub async fn run(
         print_and_push(&mut output, &format!("=== RUN {run_num}/{} ===", test_config.max_runs));
 
         // Kill existing games
-        crate::run::kill_games(&ssh, target_vms).await;
+        crate::run::kill_games(&ssh, target_vms, binary_name).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Launch chessbender on VMs
-        let vm_args = vm_launch_args(&test_config.mode, &test_config.network, &host_addr);
-
+        // Launch game on VMs
         let mut vm_launch_ok = true;
         for vm in target_vms {
-            if let Err(e) = launch_game(&ssh, &vm.ip, &config.remote_dir, &vm_args).await {
+            if let Err(e) = launch_game(&ssh, &vm.ip, &config.remote_dir, binary_name, &config.vm_user, &config.log_file, vm_args).await {
                 print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name));
                 vm_launch_ok = false;
             }
@@ -212,7 +207,7 @@ pub async fn run(
         if !vm_launch_ok {
             failed += 1;
             print_and_push(&mut output, "--- FAIL (VM launch failed) ---");
-            crate::run::kill_games(&ssh, target_vms).await;
+            crate::run::kill_games(&ssh, target_vms, binary_name).await;
             if test_config.stop_on_failure {
                 break;
             }
@@ -224,9 +219,8 @@ pub async fn run(
 
         // Launch local process
         let mut local_cmd = std::process::Command::new(&binary_path);
-        apply_local_args(&mut local_cmd, &test_config.mode, &test_config.network);
-        if test_config.headless {
-            local_cmd.arg("--headless");
+        for arg in host_args.split_whitespace() {
+            local_cmd.arg(arg);
         }
         local_cmd.current_dir(project_root);
         local_cmd.stdout(std::process::Stdio::piped());
@@ -246,11 +240,12 @@ pub async fn run(
         let timeout = test_config.timeout;
         let shutdown_timeout = test_config.shutdown_timeout;
         let project_root_owned = project_root.to_owned();
-        let vm_ips: Vec<(String, String)> = target_vms
+        let vm_ips: Vec<(VmName, IpAddr)> = target_vms
             .iter()
             .map(|vm| (vm.name.clone(), vm.ip.clone()))
             .collect();
         let ssh_for_monitor = ssh.clone();
+        let remote_dir_owned = config.remote_dir.clone();
 
         let (combined, exit_code, was_timeout) = tokio::task::spawn_blocking(move || {
             monitor_local_process(
@@ -260,12 +255,13 @@ pub async fn run(
                 &project_root_owned,
                 &vm_ips,
                 &ssh_for_monitor,
+                &remote_dir_owned,
             )
         })
         .await??;
 
         cleanup_heartbeat_files(project_root);
-        crate::run::kill_games(&ssh, target_vms).await;
+        crate::run::kill_games(&ssh, target_vms, binary_name).await;
 
         // Filter and report
         for line in combined.lines().filter(|l| filter_re.is_match(l)) {
@@ -287,9 +283,9 @@ pub async fn run(
         } else {
             failed += 1;
             failure_code = exit_code;
-            let code_str = exit_code
-                .map(|c| format!("{c} ({})", exit_code_label(c)))
-                .unwrap_or_else(|| "signal".into());
+            let code_str: Cow<'static, str> = exit_code
+                .map(|c| Cow::Owned(format!("{c} ({})", exit_code_label(c))))
+                .unwrap_or(Cow::Borrowed("signal"));
             print_and_push(&mut output, &format!("--- FAIL (exit {code_str}) ---"));
         }
 
@@ -298,7 +294,7 @@ pub async fn run(
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
             for vm in target_vms {
                 output.push_str(&format!("  [{}]:\n", vm.name));
-                let log = collect_vm_log(&ssh, &vm.ip, &config.remote_dir, 30).await;
+                let log = collect_vm_log(&ssh, &vm.ip, &config.remote_dir, &config.log_file, 30).await;
                 for line in log.lines() {
                     output.push_str(&format!("    {line}\n"));
                 }
@@ -311,10 +307,19 @@ pub async fn run(
                 output.push('\n');
             }
 
+            // Capture screenshots on failure
+            if test_config.capture_on_failure {
+                let screenshot_dir = project_root.join("logs");
+                crate::capture::capture_on_failure(config, &screenshot_dir, run_num).await;
+            }
+
             if test_config.stop_on_failure {
                 break;
             }
         }
+
+        // Track exit codes for history
+        exit_codes.push(exit_code);
 
         // Track consecutive identical failures
         if let Some(code) = failure_code {
@@ -325,10 +330,10 @@ pub async fn run(
                 consecutive_fail_count = 1;
             }
             if !test_config.stop_on_failure && consecutive_fail_count >= REPEAT_FAILURE_LIMIT {
-                let label = if code == -1 {
-                    "TIMEOUT".to_string()
+                let label: Cow<'static, str> = if code == -1 {
+                    Cow::Borrowed("TIMEOUT")
                 } else {
-                    format!("{code} ({})", exit_code_label(code))
+                    Cow::Owned(format!("{code} ({})", exit_code_label(code)))
                 };
                 print_and_push(
                     &mut output,
@@ -348,20 +353,37 @@ pub async fn run(
 
     // Summary
     let total = passed + failed;
-    let timeout_info = if timed_out_count > 0 {
-        format!(", {timed_out_count} timed out")
+    let timeout_info: Cow<'static, str> = if timed_out_count > 0 {
+        Cow::Owned(format!(", {timed_out_count} timed out"))
     } else {
-        String::new()
+        Cow::Borrowed("")
     };
     let summary = format!(
-        "\n=== SUMMARY ===\n{passed}/{total} passed, {failed} failed{timeout_info}\nConfig: mode={}, network={}, players={}, vms={vm_count}, timeout={}s",
-        test_config.mode, test_config.network, test_config.players, test_config.timeout.as_secs(),
+        "\n=== SUMMARY ===\n{passed}/{total} passed, {failed} failed{timeout_info}\nConfig: network={}, players={}, vms={vm_count}, timeout={}s",
+        test_config.network, test_config.players, test_config.timeout.as_secs(),
     );
     print_and_push(&mut output, &summary);
 
     if let Some(path) = &test_config.output_file {
         std::fs::write(path, &output)?;
         println!("Output written to {}", path.display());
+    }
+
+    // Save to test history
+    let result = crate::history::make_result(
+        &test_config.network.to_string(),
+        test_config.players,
+        vm_count,
+        test_config.max_runs,
+        test_config.max_runs,
+        passed,
+        failed,
+        timed_out_count,
+        test_config.timeout.as_secs(),
+        exit_codes,
+    );
+    if let Err(e) = crate::history::save_result(&config.state_dir, result) {
+        eprintln!("Warning: failed to save test history: {e}");
     }
 
     if failed > 0 {
@@ -378,37 +400,15 @@ fn print_and_push(output: &mut String, msg: &str) {
     output.push('\n');
 }
 
-/// Build VM-side launch args based on mode + network.
-fn vm_launch_args(mode: &str, network: &str, host_addr: &str) -> String {
-    match (mode, network) {
-        ("tournament", "lan") => format!("--headless --auto-join-tournament --udp-addr {host_addr} --auto-play"),
-        ("tournament", "steam") => "--headless --auto-join-steam-tournament --auto-play".into(),
-        ("1v1", "lan") => format!("--headless --auto-join-udp --udp-addr {host_addr} --auto-play"),
-        ("1v1", "steam") => "--headless --auto-join-steam --auto-play".into(),
-        _ => unreachable!(),
-    }
-}
-
-/// Apply host-side args to the local command based on mode + network.
-fn apply_local_args(cmd: &mut std::process::Command, mode: &str, network: &str) {
-    match (mode, network) {
-        ("tournament", "lan") => { cmd.arg("--auto-host-tournament").arg("--auto-play"); }
-        ("tournament", "steam") => { cmd.arg("--auto-host-steam-tournament").arg("--auto-play"); }
-        ("1v1", "lan") => { cmd.arg("--auto-host-udp").arg("--auto-play"); }
-        ("1v1", "steam") => { cmd.arg("--auto-host-steam").arg("--auto-play"); }
-        _ => unreachable!(),
-    }
-}
-
-/// Launch chessbender on a VM (detached via nohup).
-async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, args: &str) -> anyhow::Result<()> {
+/// Launch game on a VM (detached via nohup).
+async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, binary_name: &str, vm_user: &str, log_file: &str, args: &str) -> anyhow::Result<()> {
     let cmd = format!(
         "cd {remote_dir} && \
          export LD_LIBRARY_PATH=\"{remote_dir}:$LD_LIBRARY_PATH\" \
-         XDG_RUNTIME_DIR=/tmp/runtime-chessbender \
+         XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
          DISPLAY=:0 && \
-         nohup ./chessbender {args} > game.log 2>&1 &"
+         nohup ./{binary_name} {args} > {log_file} 2>&1 &"
     );
     let result = ssh.run(ip, &cmd).await;
     if !result.success {
@@ -417,8 +417,8 @@ async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, args: &str) ->
     Ok(())
 }
 
-async fn collect_vm_log(ssh: &SshClient, ip: &str, remote_dir: &str, max_lines: usize) -> String {
-    let cmd = format!("tail -n {max_lines} {remote_dir}/game.log 2>/dev/null || echo '(no log)'");
+async fn collect_vm_log(ssh: &SshClient, ip: &str, remote_dir: &str, log_file: &str, max_lines: usize) -> String {
+    let cmd = format!("tail -n {max_lines} {remote_dir}/{log_file} 2>/dev/null || echo '(no log)'");
     ssh.run(ip, &cmd).await.stdout
 }
 
@@ -450,8 +450,9 @@ fn monitor_local_process(
     timeout: Duration,
     shutdown_timeout: Duration,
     project_root: &Path,
-    vm_ips: &[(String, String)],
+    vm_ips: &[(VmName, IpAddr)],
     ssh: &SshClient,
+    remote_dir: &str,
 ) -> anyhow::Result<(String, Option<i32>, bool)> {
     use std::io::Read as _;
 
@@ -485,7 +486,7 @@ fn monitor_local_process(
 
     let rt = tokio::runtime::Handle::current();
     let local_hb = LocalHeartbeat { dir: project_root };
-    let vm_hb = VmHeartbeat { rt: &rt, ssh, vms: vm_ips };
+    let vm_hb = VmHeartbeat { rt: &rt, ssh, vms: vm_ips, remote_dir };
 
     loop {
         match child.try_wait() {
@@ -495,8 +496,7 @@ fn monitor_local_process(
                 break;
             }
             Ok(None) if start.elapsed() > timeout => {
-                kill_process_group(child, shutdown_timeout);
-                exit_code = child.try_wait().ok().flatten().and_then(|s| s.code());
+                exit_code = kill_and_reap(child, shutdown_timeout);
                 timed_out = true;
                 break;
             }
@@ -505,8 +505,7 @@ fn monitor_local_process(
                     last_heartbeat_check = Instant::now();
                     if check_stall(&local_hb, &mut last_local_ts, HEARTBEAT_STALL_SECS) {
                         eprintln!("Local heartbeat stall — killing");
-                        kill_process_group(child, shutdown_timeout);
-                        exit_code = child.try_wait().ok().flatten().and_then(|s| s.code());
+                        exit_code = kill_and_reap(child, shutdown_timeout);
                         timed_out = true;
                         break;
                     }
@@ -516,8 +515,7 @@ fn monitor_local_process(
                     last_vm_check = Instant::now();
                     if check_stall(&vm_hb, &mut last_vm_ts, HEARTBEAT_STALL_SECS) {
                         eprintln!("VM heartbeat stall — killing");
-                        kill_process_group(child, shutdown_timeout);
-                        exit_code = child.try_wait().ok().flatten().and_then(|s| s.code());
+                        exit_code = kill_and_reap(child, shutdown_timeout);
                         timed_out = true;
                         break;
                     }
@@ -532,6 +530,12 @@ fn monitor_local_process(
     let stdout = stdout_thread.join().unwrap_or_default();
     let stderr = stderr_thread.join().unwrap_or_default();
     Ok((format!("{stdout}{stderr}"), exit_code, timed_out))
+}
+
+/// Kill the process group and reap the exit code.
+fn kill_and_reap(child: &mut std::process::Child, shutdown_timeout: Duration) -> Option<i32> {
+    kill_process_group(child, shutdown_timeout);
+    child.try_wait().ok().flatten().and_then(|s| s.code())
 }
 
 fn kill_process_group(child: &mut std::process::Child, shutdown_timeout: Duration) {
@@ -565,7 +569,7 @@ fn kill_process_group(child: &mut std::process::Child, shutdown_timeout: Duratio
     }
 }
 
-fn exit_code_label(code: i32) -> &'static str {
+pub fn exit_code_label(code: i32) -> &'static str {
     match code {
         0 => "SUCCESS",
         1 => "ERROR",

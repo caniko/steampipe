@@ -1,7 +1,7 @@
 use crate::config::ClusterConfig;
 
 /// Run the `net-up` subcommand: create bridge, TAP devices, NAT rules.
-pub fn up(config: &ClusterConfig, nft: &str) -> anyhow::Result<()> {
+pub fn up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
     println!("==> Setting up cluster network...");
 
     let bridge = &config.bridge;
@@ -67,7 +67,7 @@ pub fn up(config: &ClusterConfig, nft: &str) -> anyhow::Result<()> {
 }
 
 /// Run the `net-down` subcommand: tear down bridge, TAP devices, NAT rules.
-pub fn down(config: &ClusterConfig, nft: &str) -> anyhow::Result<()> {
+pub fn down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
     println!("==> Tearing down cluster network...");
 
     // Remove nftables table (removes all rules in it)
