@@ -62,7 +62,7 @@ pub fn stop_vm(config: &ClusterConfig, vm: &VmDef) {
         }
 }
 
-/// Run the `up` subcommand: start all VMs and wait for SSH.
+/// Run the `up` subcommand: start all VMs in config and wait for SSH.
 pub async fn up(config: &ClusterConfig, runners_dir: &Path) -> anyhow::Result<()> {
     state::ensure_state_dir(&config.state_dir)?;
 
@@ -79,9 +79,11 @@ pub async fn up(config: &ClusterConfig, runners_dir: &Path) -> anyhow::Result<()
         );
     }
 
-    println!("==> Starting {} VMs...", config.vms.len());
+    let target_vms = &config.vms[..];
 
-    for vm in &config.vms {
+    println!("==> Starting {} VM(s)...", target_vms.len());
+
+    for vm in target_vms {
         // Stop any existing instance first
         stop_vm(config, vm);
     }
@@ -89,7 +91,7 @@ pub async fn up(config: &ClusterConfig, runners_dir: &Path) -> anyhow::Result<()
     // Brief pause for cleanup
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    for vm in &config.vms {
+    for vm in target_vms {
         match start_vm(config, vm, runners_dir) {
             Ok(pid) => println!("  {} started (PID {pid})", vm.name),
             Err(e) => eprintln!("  {} FAILED: {e}", vm.name),
@@ -99,7 +101,7 @@ pub async fn up(config: &ClusterConfig, runners_dir: &Path) -> anyhow::Result<()
     println!("==> Waiting for SSH...");
     let ssh = SshClient::new(&config.ssh_key, &config.vm_user);
     let mut tasks = tokio::task::JoinSet::new();
-    for vm in &config.vms {
+    for vm in target_vms {
         let ssh = ssh.clone();
         let name = vm.name.clone();
         let ip = vm.ip.clone();

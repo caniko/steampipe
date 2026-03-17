@@ -28,7 +28,8 @@ pub struct ClusterConfig {
 
 impl ClusterConfig {
     /// Build config with defaults, using the given project root for relative paths.
-    pub fn new(project_root: &Path) -> Self {
+    /// `vm_count` determines how many VMs are in the cluster (clamped to 1..=7).
+    pub fn new(project_root: &Path, vm_count: u8) -> Self {
         let state_dir = std::env::var("XDG_STATE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
@@ -38,7 +39,8 @@ impl ClusterConfig {
             })
             .join("chessbender-cluster");
 
-        let vms = (1..=7)
+        let vm_count = vm_count.clamp(1, 7);
+        let vms = (1..=vm_count)
             .map(|i| VmDef {
                 name: format!("vm-{i}"),
                 ip: format!("10.0.100.{i}"),
@@ -82,7 +84,10 @@ impl ClusterConfig {
             Some(t) => {
                 let vm = self
                     .find_vm(t)
-                    .ok_or_else(|| anyhow::anyhow!("Unknown VM: {t} (expected vm-1..vm-7 or 1..7)"))?;
+                    .ok_or_else(|| {
+                        let max = self.vms.len();
+                        anyhow::anyhow!("Unknown VM: {t} (expected vm-1..vm-{max} or 1..{max})")
+                    })?;
                 if continue_from {
                     Ok(self.vms.iter().filter(|v| v.index >= vm.index).collect())
                 } else {

@@ -15,6 +15,10 @@ pub struct Cli {
     /// SSH key path (default: <project_root>/nix/test-cluster/cluster_key)
     #[arg(long, global = true)]
     pub ssh_key: Option<PathBuf>,
+
+    /// Total number of VMs in the cluster
+    #[arg(long, global = true)]
+    pub vm_count: u8,
 }
 
 #[derive(Subcommand)]
@@ -22,7 +26,7 @@ pub enum Commands {
     /// Show status of all VMs (running, SSH, Steam, game)
     Status,
 
-    /// Start all VMs
+    /// Start VMs (uses --vm-count to determine how many)
     Up {
         /// Path to directory containing vm-N/bin/microvm-run runners
         #[arg(long)]

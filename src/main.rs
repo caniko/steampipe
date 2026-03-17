@@ -24,7 +24,7 @@ async fn main() -> anyhow::Result<()> {
         None => detect_project_root()?,
     };
 
-    let mut config = ClusterConfig::new(&project_root);
+    let mut config = ClusterConfig::new(&project_root, cli.vm_count);
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
