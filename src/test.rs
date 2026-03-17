@@ -177,8 +177,24 @@ pub async fn run<S>(
         anyhow::bail!("target/release/{binary_name} not found");
     }
 
-    let vm_args = test_config.vm_args.as_deref().unwrap_or("");
-    let host_args = test_config.host_args.as_deref().unwrap_or("");
+    // Default args based on network mode when not explicitly provided
+    let default_vm_args;
+    let default_host_args;
+    match test_config.network {
+        NetworkMode::Lan => {
+            default_host_args = "--auto-host-udp --auto-play".to_string();
+            default_vm_args = format!(
+                "--auto-join-udp --udp-addr {}:{} --auto-play --headless",
+                config.host_ip, config.udp_port,
+            );
+        }
+        NetworkMode::Steam => {
+            default_host_args = "--auto-host-steam --auto-play".to_string();
+            default_vm_args = "--auto-join-steam --auto-play --headless".to_string();
+        }
+    }
+    let vm_args = test_config.vm_args.as_deref().unwrap_or(&default_vm_args);
+    let host_args = test_config.host_args.as_deref().unwrap_or(&default_host_args);
 
     let mut passed = 0u32;
     let mut failed = 0u32;
