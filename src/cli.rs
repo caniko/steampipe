@@ -96,4 +96,55 @@ pub enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
+
+    /// Run end-to-end tests: deploy → launch → monitor → collect logs → report
+    Test {
+        /// Game mode: "tournament" or "1v1"
+        #[arg(long)]
+        mode: String,
+
+        /// Network transport: "lan" or "steam"
+        #[arg(long, default_value = "lan")]
+        network: String,
+
+        /// Number of players (2-8, tournament only; host + N-1 VMs)
+        #[arg(long, default_value_t = 8)]
+        players: u8,
+
+        /// Number of test runs
+        #[arg(long, default_value_t = 1)]
+        max_runs: u32,
+
+        /// Timeout per run in seconds
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+
+        /// Grace period (seconds) between SIGTERM and SIGKILL
+        #[arg(long, default_value_t = 5)]
+        shutdown_timeout: u64,
+
+        /// Stop after first failure
+        #[arg(long, default_value_t = true)]
+        stop_on_failure: bool,
+
+        /// Deploy binary + assets before testing
+        #[arg(long, default_value_t = true)]
+        deploy: bool,
+
+        /// Build before deploying
+        #[arg(long, default_value_t = true)]
+        build: bool,
+
+        /// Run local process headless
+        #[arg(long, default_value_t = true)]
+        headless: bool,
+
+        /// Regex filter for output lines
+        #[arg(long)]
+        filter_pattern: Option<String>,
+
+        /// Write full output to this file
+        #[arg(long)]
+        output_file: Option<PathBuf>,
+    },
 }

@@ -8,6 +8,7 @@ mod ssh;
 mod state;
 mod status;
 mod steam;
+mod test;
 mod vm;
 
 use clap::Parser;
@@ -54,6 +55,40 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Run { extra_args } => {
             run_game(&config, &extra_args).await?;
+        }
+        Commands::Test {
+            mode,
+            network,
+            players,
+            max_runs,
+            timeout,
+            shutdown_timeout,
+            stop_on_failure,
+            deploy,
+            build,
+            headless,
+            filter_pattern,
+            output_file,
+        } => {
+            test::run(
+                &config,
+                &project_root,
+                test::TestConfig {
+                    mode,
+                    network,
+                    players,
+                    max_runs,
+                    timeout: std::time::Duration::from_secs(timeout),
+                    shutdown_timeout: std::time::Duration::from_secs(shutdown_timeout),
+                    stop_on_failure,
+                    deploy,
+                    build,
+                    headless,
+                    filter_pattern,
+                    output_file,
+                },
+            )
+            .await?;
         }
     }
 
