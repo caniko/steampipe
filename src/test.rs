@@ -223,6 +223,7 @@ pub async fn run<S>(
             local_cmd.arg(arg);
         }
         local_cmd.current_dir(project_root);
+        local_cmd.env("BEVY_ASSET_ROOT", project_root);
         local_cmd.stdout(std::process::Stdio::piped());
         local_cmd.stderr(std::process::Stdio::piped());
 
