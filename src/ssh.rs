@@ -63,6 +63,18 @@ impl SshClient {
             .spawn()
     }
 
+    /// Run a command with a timeout. Returns a "timed out" error on expiry.
+    pub async fn run_with_timeout(&self, ip: &str, cmd: &str, timeout: Duration) -> SshOutput {
+        match tokio::time::timeout(timeout, self.run(ip, cmd)).await {
+            Ok(output) => output,
+            Err(_) => SshOutput {
+                stdout: String::new(),
+                stderr: "SSH command timed out".into(),
+                success: false,
+            },
+        }
+    }
+
     /// Run a command on a remote host (async).
     pub async fn run(&self, ip: &str, cmd: &str) -> SshOutput {
         let mut args = self.ssh_args(ip);

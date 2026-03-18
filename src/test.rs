@@ -211,29 +211,8 @@ pub async fn run<S>(
         crate::run::kill_games(&ssh, target_vms, binary_name).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        // Launch game on VMs
-        let mut vm_launch_ok = true;
-        for vm in target_vms {
-            if let Err(e) = launch_game(&ssh, &vm.ip, &config.remote_dir, binary_name, &config.vm_user, &config.log_file, vm_args).await {
-                print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name));
-                vm_launch_ok = false;
-            }
-        }
-
-        if !vm_launch_ok {
-            failed += 1;
-            print_and_push(&mut output, "--- FAIL (VM launch failed) ---");
-            crate::run::kill_games(&ssh, target_vms, binary_name).await;
-            if test_config.stop_on_failure {
-                break;
-            }
-            output.push('\n');
-            continue;
-        }
-
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Launch local process
+        // Launch local (host) process FIRST so it's listening when VMs connect
+        eprintln!("[cluster-ctl] Launching local process...");
         let mut local_cmd = std::process::Command::new(&binary_path);
         for arg in host_args.split_whitespace() {
             local_cmd.arg(arg);
@@ -250,6 +229,35 @@ pub async fn run<S>(
         }
 
         let mut child = local_cmd.spawn()?;
+        eprintln!("[cluster-ctl] Host process spawned with PID {}", child.id());
+
+        // Wait for host to start listening before launching VMs
+        eprintln!("[cluster-ctl] Waiting 3s for host to initialize...");
+        tokio::time::sleep(Duration::from_secs(3)).await;
+
+        // Launch game on VMs (joiners)
+        eprintln!("[cluster-ctl] Launching game on VMs...");
+        let mut vm_launch_ok = true;
+        for vm in target_vms {
+            eprintln!("[cluster-ctl]   launching on {}...", vm.name);
+            if let Err(e) = launch_game(&ssh, &vm.ip, &config.remote_dir, binary_name, &config.vm_user, &config.log_file, vm_args).await {
+                print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name));
+                vm_launch_ok = false;
+            }
+        }
+
+        if !vm_launch_ok {
+            failed += 1;
+            print_and_push(&mut output, "--- FAIL (VM launch failed) ---");
+            kill_process_group(&mut child, test_config.shutdown_timeout);
+            crate::run::kill_games(&ssh, target_vms, binary_name).await;
+            if test_config.stop_on_failure {
+                break;
+            }
+            output.push('\n');
+            continue;
+        }
+        eprintln!("[cluster-ctl] VMs launched OK");
 
         // Monitor with heartbeat detection
         cleanup_heartbeat_files(project_root);
@@ -425,10 +433,15 @@ async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, binary_name: &
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
          DISPLAY=:0 && \
-         nohup ./{binary_name} {args} > {log_file} 2>&1 &"
+         nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     );
-    let result = ssh.run(ip, &cmd).await;
+    // Use run_with_timeout to avoid hanging if the SSH channel doesn't close
+    let result = ssh.run_with_timeout(ip, &cmd, Duration::from_secs(5)).await;
     if !result.success {
+        // Timeout is OK here — the command backgrounds successfully but SSH may not close the channel
+        if result.stderr.contains("timed out") {
+            return Ok(());
+        }
         anyhow::bail!("{}", result.stderr);
     }
     Ok(())
