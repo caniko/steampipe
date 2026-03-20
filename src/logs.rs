@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{ClusterConfig, par_each_vm};
 
-/// Run the `logs` subcommand: collect game.log from all VMs.
+/// Run the `logs` subcommand: collect game.log from all instances.
 pub async fn run<S>(
     config: &ClusterConfig<S>,
     project_root: &Path,
@@ -12,21 +12,21 @@ pub async fn run<S>(
     let output_dir = output.unwrap_or_else(|| project_root.join(format!("logs/cluster-{timestamp}")));
     std::fs::create_dir_all(&output_dir)?;
 
-    let ssh = config.ssh_client();
+    let backend = config.backend.clone();
     let remote_dir = config.remote_dir.clone();
     let log_file = config.log_file.clone();
 
     println!("==> Collecting logs to {}", output_dir.display());
 
     par_each_vm(&config.vms, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         let remote_dir = remote_dir.clone();
         let log_file = log_file.clone();
         let dest = output_dir.join(format!("{}.log", vm.name));
         async move {
             let remote_log = format!("{remote_dir}/{log_file}");
             let sources = [Path::new(&remote_log)];
-            match ssh.rsync(&sources, &vm.ip, dest.to_str().unwrap_or(".")).await {
+            match backend.upload(&sources, &vm.ip, dest.to_str().unwrap_or(".")).await {
                 Ok(()) => println!("  {}: collected", vm.name),
                 Err(_) => eprintln!("  {}: no log or unreachable", vm.name),
             }
@@ -38,7 +38,7 @@ pub async fn run<S>(
     Ok(())
 }
 
-/// Stream logs in real-time from all VMs using SSH tail -f.
+/// Stream logs in real-time from all instances.
 pub async fn follow<S>(
     config: &ClusterConfig<S>,
     tail_lines: u32,
@@ -47,7 +47,7 @@ pub async fn follow<S>(
 
     let remote_dir = &config.remote_dir;
     let log_file = &config.log_file;
-    let ssh = config.ssh_client();
+    let backend = &config.backend;
 
     println!("==> Streaming logs from {} VMs (Ctrl+C to stop)...\n", config.vms.len());
 
@@ -65,7 +65,7 @@ pub async fn follow<S>(
         let cmd = format!("tail -n {tail_lines} -f {remote_dir}/{log_file} 2>/dev/null");
 
         let extra_opts = ["-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=10"];
-        let mut child = match ssh.spawn_streaming(&vm.ip, &cmd, &extra_opts) {
+        let mut child = match backend.spawn_streaming(&vm.ip, &cmd, &extra_opts) {
             Ok(c) => c,
             Err(e) => {
                 eprintln!("{color}[{vm_name}]{reset} Failed to connect: {e}");

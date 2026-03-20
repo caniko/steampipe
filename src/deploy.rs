@@ -1,7 +1,7 @@
 use std::path::Path;
 
+use crate::backend::Backend;
 use crate::config::{ClusterConfig, VmDef, par_each_vm};
-use crate::ssh::SshClient;
 
 /// Run `cargo build --release -p <package>`.
 pub async fn build_release(project_root: &Path, cargo_package: &str) -> anyhow::Result<()> {
@@ -17,10 +17,10 @@ pub async fn build_release(project_root: &Path, cargo_package: &str) -> anyhow::
     Ok(())
 }
 
-/// Rsync binary + steam lib + appid + assets to a set of VMs in parallel.
-/// Returns the names of VMs that failed.
+/// Upload binary + steam lib + appid + assets to a set of instances in parallel.
+/// Returns the names of instances that failed.
 pub async fn deploy_to_vms<S>(
-    ssh: &SshClient,
+    backend: &Backend,
     vms: &[VmDef],
     config: &ClusterConfig<S>,
     project_root: &Path,
@@ -40,7 +40,7 @@ pub async fn deploy_to_vms<S>(
     }
 
     let results = par_each_vm(vms, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         let binary = binary.clone();
         let steam_lib = steam_lib.clone();
         let appid_file = appid_file.clone();
@@ -48,15 +48,15 @@ pub async fn deploy_to_vms<S>(
         let remote_dir = remote_dir.clone();
         let binary_name = binary_name.clone();
         async move {
-            ssh.run(&vm.ip, &format!("mkdir -p {remote_dir}")).await;
+            backend.run_cmd(&vm.ip, &format!("mkdir -p {remote_dir}")).await;
             let sources: [&Path; 4] = [
                 binary.as_path(),
                 steam_lib.as_path(),
                 appid_file.as_path(),
                 assets.as_path(),
             ];
-            ssh.rsync(&sources, &vm.ip, &format!("{remote_dir}/")).await?;
-            ssh.run(&vm.ip, &format!("chmod +x {remote_dir}/{binary_name}"))
+            backend.upload(&sources, &vm.ip, &format!("{remote_dir}/")).await?;
+            backend.run_cmd(&vm.ip, &format!("chmod +x {remote_dir}/{binary_name}"))
                 .await;
             anyhow::Ok(vm.name)
         }
@@ -83,7 +83,7 @@ pub async fn verify<S>(
 ) -> anyhow::Result<()> {
     use sha2::{Sha256, Digest};
 
-    let ssh = config.ssh_client();
+    let backend = &config.backend;
     let binary_path = project_root.join(format!("target/release/{}", config.binary_name));
 
     // Compute local checksum of the binary
@@ -96,13 +96,13 @@ pub async fn verify<S>(
     let binary_name = config.binary_name.clone();
 
     let results = par_each_vm(&config.vms, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         let remote_dir = remote_dir.clone();
         let binary_name = binary_name.clone();
         let local_hash = local_hash.clone();
         async move {
             let cmd = format!("sha256sum {remote_dir}/{binary_name} 2>/dev/null | cut -d' ' -f1");
-            let result = ssh.run(&vm.ip, &cmd).await;
+            let result = backend.run_cmd(&vm.ip, &cmd).await;
             let remote_hash = result.stdout.trim().to_string();
             let matches = remote_hash == local_hash;
             (vm.name, matches, remote_hash)
@@ -132,7 +132,7 @@ pub async fn verify<S>(
     Ok(())
 }
 
-/// Run the `deploy` subcommand: build and rsync binary + assets to all VMs.
+/// Run the `deploy` subcommand: build and upload binary + assets to all instances.
 pub async fn run<S>(config: &ClusterConfig<S>, project_root: &Path, no_build: bool, do_verify: bool) -> anyhow::Result<()> {
     if !no_build {
         build_release(project_root, &config.cargo_package).await?;
@@ -142,10 +142,10 @@ pub async fn run<S>(config: &ClusterConfig<S>, project_root: &Path, no_build: bo
         anyhow::bail!("Steam API lib not found: {}", config.steam_api_lib.display());
     }
 
-    let ssh = config.ssh_client();
+    let backend = &config.backend;
     println!("==> Deploying to {} VMs...", config.vms.len());
 
-    let failed = deploy_to_vms(&ssh, &config.vms, config, project_root).await?;
+    let failed = deploy_to_vms(backend, &config.vms, config, project_root).await?;
     if failed.is_empty() {
         println!("==> All VMs deployed");
     } else {

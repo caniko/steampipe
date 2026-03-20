@@ -1,4 +1,5 @@
 mod accounts;
+mod backend;
 mod capture;
 mod cli;
 mod config;
@@ -19,9 +20,22 @@ mod test;
 mod vm;
 mod watch;
 
+use std::path::PathBuf;
+
 use clap::Parser;
 use cli::{Cli, Commands};
-use config::{ClusterConfig, detect_project_root};
+use config::{BackendKind, ClusterConfig, detect_project_root};
+
+/// Require a runners_dir for the microvm backend, or return a dummy path for others.
+fn require_runners_dir(runners_dir: Option<PathBuf>, backend_kind: BackendKind) -> anyhow::Result<PathBuf> {
+    match runners_dir {
+        Some(p) => Ok(p),
+        None if backend_kind == BackendKind::Microvm => {
+            anyhow::bail!("--runners-dir is required for the microvm backend")
+        }
+        None => Ok(PathBuf::from("/dev/null")), // unused by non-microvm backends
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -54,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
 
     let vm_count = cli.vm_count
         .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
-    let mut config = ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref());
+    let mut config = ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref(), cli.backend);
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
@@ -68,17 +82,20 @@ async fn main() -> anyhow::Result<()> {
     state::ensure_state_dir(&config.state_dir)?;
 
     match cli.command {
-        // Commands that require a validated bridge
+        // Commands that require a validated bridge (or skip for non-microvm)
         Commands::Up { runners_dir } => {
-            let validated = config.validate_bridge()?;
+            let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            let validated = config.validate_or_skip_bridge()?;
             vm::up(&validated, &runners_dir).await?;
         }
         Commands::Restart { target, runners_dir } => {
-            let validated = config.validate_bridge()?;
+            let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            let validated = config.validate_or_skip_bridge()?;
             vm::restart(&validated, target.as_deref(), &runners_dir).await?;
         }
         Commands::SteamCheck { target, runners_dir } => {
-            let validated = config.validate_bridge()?;
+            let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            let validated = config.validate_or_skip_bridge()?;
             steam::check(&validated, target.as_deref(), &runners_dir).await?;
         }
         Commands::SteamLogin {
@@ -86,7 +103,8 @@ async fn main() -> anyhow::Result<()> {
             continue_from,
             login_runners_dir,
         } => {
-            let validated = config.validate_bridge()?;
+            let login_runners_dir = require_runners_dir(login_runners_dir, config.backend_kind)?;
+            let validated = config.validate_or_skip_bridge()?;
             steam::login(&validated, target.as_deref(), continue_from, &login_runners_dir, creds.as_ref()).await?;
         }
 

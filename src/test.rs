@@ -4,9 +4,9 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 
+use crate::backend::Backend;
 use crate::cli::NetworkMode;
 use crate::config::{ClusterConfig, IpAddr, VmName};
-use crate::ssh::SshClient;
 
 /// Configuration for a test run.
 pub struct TestConfig {
@@ -39,7 +39,7 @@ struct LocalHeartbeat<'a> {
 
 struct VmHeartbeat<'a> {
     rt: &'a tokio::runtime::Handle,
-    ssh: &'a SshClient,
+    backend: &'a Backend,
     vms: &'a [(VmName, IpAddr)],
     remote_dir: &'a str,
 }
@@ -67,7 +67,7 @@ impl HeartbeatSource for VmHeartbeat<'_> {
         let cmd = format!("cat {}/game_progress_*.json 2>/dev/null || true", self.remote_dir);
         let mut min_ts: Option<u128> = None;
         for (_, ip) in self.vms {
-            let result = self.rt.block_on(self.ssh.run(ip, &cmd));
+            let result = self.rt.block_on(self.backend.run_cmd(ip, &cmd));
             if let Some(ts) = parse_min_timestamp_ms(&result.stdout) {
                 min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
             }
@@ -132,7 +132,7 @@ pub async fn run<S>(
         ),
     )?;
 
-    let ssh = config.ssh_client();
+    let backend = &config.backend;
     let mut output = String::new();
 
     output.push_str(&format!(
@@ -148,7 +148,7 @@ pub async fn run<S>(
             print_and_push(&mut output, "Build OK");
         }
 
-        let failed = crate::deploy::deploy_to_vms(&ssh, target_vms, config, project_root).await?;
+        let failed = crate::deploy::deploy_to_vms(backend, target_vms, config, project_root).await?;
         if !failed.is_empty() {
             anyhow::bail!("Deploy failed for {} VMs", failed.len());
         }
@@ -159,7 +159,7 @@ pub async fn run<S>(
     if test_config.network == NetworkMode::Steam {
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===");
         for vm in target_vms {
-            match crate::steam::ensure_steam(&ssh, &vm.ip).await {
+            match crate::steam::ensure_steam(backend, &vm.ip).await {
                 Ok(()) => print_and_push(&mut output, &format!("  {}: Steam ready", vm.name)),
                 Err(e) => {
                     print_and_push(&mut output, &format!("  {}: FAILED — {e}", vm.name));
@@ -208,7 +208,7 @@ pub async fn run<S>(
         print_and_push(&mut output, &format!("=== RUN {run_num}/{} ===", test_config.max_runs));
 
         // Kill existing games
-        crate::run::kill_games(&ssh, target_vms, binary_name).await;
+        crate::run::kill_games(backend, target_vms, binary_name).await;
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         // Launch local (host) process FIRST so it's listening when VMs connect
@@ -240,7 +240,7 @@ pub async fn run<S>(
         let mut vm_launch_ok = true;
         for vm in target_vms {
             eprintln!("[cluster-ctl]   launching on {}...", vm.name);
-            if let Err(e) = launch_game(&ssh, &vm.ip, &config.remote_dir, binary_name, &config.vm_user, &config.log_file, vm_args).await {
+            if let Err(e) = launch_game(backend, &vm.ip, &config.remote_dir, binary_name, &config.vm_user, &config.log_file, vm_args).await {
                 print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name));
                 vm_launch_ok = false;
             }
@@ -250,7 +250,7 @@ pub async fn run<S>(
             failed += 1;
             print_and_push(&mut output, "--- FAIL (VM launch failed) ---");
             kill_process_group(&mut child, test_config.shutdown_timeout);
-            crate::run::kill_games(&ssh, target_vms, binary_name).await;
+            crate::run::kill_games(backend, target_vms, binary_name).await;
             if test_config.stop_on_failure {
                 break;
             }
@@ -269,7 +269,7 @@ pub async fn run<S>(
             .iter()
             .map(|vm| (vm.name.clone(), vm.ip.clone()))
             .collect();
-        let ssh_for_monitor = ssh.clone();
+        let backend_for_monitor = backend.clone();
         let remote_dir_owned = config.remote_dir.clone();
 
         let (combined, exit_code, was_timeout) = tokio::task::spawn_blocking(move || {
@@ -279,14 +279,14 @@ pub async fn run<S>(
                 shutdown_timeout,
                 &project_root_owned,
                 &vm_ips,
-                &ssh_for_monitor,
+                &backend_for_monitor,
                 &remote_dir_owned,
             )
         })
         .await??;
 
         cleanup_heartbeat_files(project_root);
-        crate::run::kill_games(&ssh, target_vms, binary_name).await;
+        crate::run::kill_games(backend, target_vms, binary_name).await;
 
         // Filter and report
         for line in combined.lines().filter(|l| filter_re.is_match(l)) {
@@ -319,7 +319,7 @@ pub async fn run<S>(
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
             for vm in target_vms {
                 output.push_str(&format!("  [{}]:\n", vm.name));
-                let log = collect_vm_log(&ssh, &vm.ip, &config.remote_dir, &config.log_file, 30).await;
+                let log = collect_vm_log(backend, &vm.ip, &config.remote_dir, &config.log_file, 30).await;
                 for line in log.lines() {
                     output.push_str(&format!("    {line}\n"));
                 }
@@ -425,8 +425,8 @@ fn print_and_push(output: &mut String, msg: &str) {
     output.push('\n');
 }
 
-/// Launch game on a VM (detached via nohup).
-async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, binary_name: &str, vm_user: &str, log_file: &str, args: &str) -> anyhow::Result<()> {
+/// Launch game on an instance (detached via nohup).
+async fn launch_game(backend: &Backend, ip: &str, remote_dir: &str, binary_name: &str, vm_user: &str, log_file: &str, args: &str) -> anyhow::Result<()> {
     let cmd = format!(
         "cd {remote_dir} && \
          export LD_LIBRARY_PATH=\"{remote_dir}:$LD_LIBRARY_PATH\" \
@@ -435,8 +435,8 @@ async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, binary_name: &
          DISPLAY=:0 && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     );
-    // Use run_with_timeout to avoid hanging if the SSH channel doesn't close
-    let result = ssh.run_with_timeout(ip, &cmd, Duration::from_secs(5)).await;
+    // Use run_cmd_timeout to avoid hanging if the channel doesn't close
+    let result = backend.run_cmd_timeout(ip, &cmd, Duration::from_secs(5)).await;
     if !result.success {
         // Timeout is OK here — the command backgrounds successfully but SSH may not close the channel
         if result.stderr.contains("timed out") {
@@ -447,9 +447,9 @@ async fn launch_game(ssh: &SshClient, ip: &str, remote_dir: &str, binary_name: &
     Ok(())
 }
 
-async fn collect_vm_log(ssh: &SshClient, ip: &str, remote_dir: &str, log_file: &str, max_lines: usize) -> String {
+async fn collect_vm_log(backend: &Backend, ip: &str, remote_dir: &str, log_file: &str, max_lines: usize) -> String {
     let cmd = format!("tail -n {max_lines} {remote_dir}/{log_file} 2>/dev/null || echo '(no log)'");
-    ssh.run(ip, &cmd).await.stdout
+    backend.run_cmd(ip, &cmd).await.stdout
 }
 
 fn cleanup_heartbeat_files(dir: &Path) {
@@ -481,7 +481,7 @@ fn monitor_local_process(
     shutdown_timeout: Duration,
     project_root: &Path,
     vm_ips: &[(VmName, IpAddr)],
-    ssh: &SshClient,
+    backend: &Backend,
     remote_dir: &str,
 ) -> anyhow::Result<(String, Option<i32>, bool)> {
     use std::io::Read as _;
@@ -516,7 +516,7 @@ fn monitor_local_process(
 
     let rt = tokio::runtime::Handle::current();
     let local_hb = LocalHeartbeat { dir: project_root };
-    let vm_hb = VmHeartbeat { rt: &rt, ssh, vms: vm_ips, remote_dir };
+    let vm_hb = VmHeartbeat { rt: &rt, backend, vms: vm_ips, remote_dir };
 
     loop {
         match child.try_wait() {

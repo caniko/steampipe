@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
+use crate::config::BackendKind;
+
 /// Network transport layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum NetworkMode {
@@ -45,6 +47,10 @@ pub struct Cli {
     /// Cluster name (for running multiple independent clusters)
     #[arg(long, global = true)]
     pub cluster: Option<String>,
+
+    /// Backend: microvm (default), docker, or local
+    #[arg(long, global = true, value_enum)]
+    pub backend: Option<BackendKind>,
 }
 
 #[derive(Subcommand)]
@@ -54,9 +60,9 @@ pub enum Commands {
 
     /// Start VMs (uses --vm-count to determine how many)
     Up {
-        /// Path to directory containing vm-N/bin/microvm-run runners
+        /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
         #[arg(long)]
-        runners_dir: PathBuf,
+        runners_dir: Option<PathBuf>,
     },
 
     /// Stop all VMs
@@ -66,9 +72,9 @@ pub enum Commands {
     Restart {
         /// Target VM: "all", "3", "vm-3" (default: all)
         target: Option<String>,
-        /// Path to directory containing vm-N/bin/microvm-run runners
+        /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
         #[arg(long)]
-        runners_dir: PathBuf,
+        runners_dir: Option<PathBuf>,
     },
 
     /// Set up cluster networking (bridge, TAP devices, NAT rules). Requires sudo.
@@ -102,18 +108,18 @@ pub enum Commands {
         /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
         #[arg(short = '+', long)]
         continue_from: bool,
-        /// Path to directory containing 4GB login VM runners
+        /// Path to directory containing 4GB login VM runners (required for microvm backend)
         #[arg(long)]
-        login_runners_dir: PathBuf,
+        login_runners_dir: Option<PathBuf>,
     },
 
     /// Check Steam login + health on VMs (boots each VM to verify)
     SteamCheck {
         /// Target VM: "all", "3", "vm-3"
         target: Option<String>,
-        /// Path to directory containing VM runners
+        /// Path to directory containing VM runners (required for microvm backend)
         #[arg(long)]
-        runners_dir: PathBuf,
+        runners_dir: Option<PathBuf>,
     },
 
     /// Start weston + Steam on VMs

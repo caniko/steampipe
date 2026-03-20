@@ -5,7 +5,22 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::ssh::SshClient;
+use clap::ValueEnum;
+use crate::backend::Backend;
+
+/// Which backend to use for running test instances.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendKind {
+    /// NixOS microVMs via microvm-run + SSH (default)
+    #[default]
+    #[serde(alias = "microvm")]
+    Microvm,
+    /// Docker containers via steamcmd base image
+    Docker,
+    /// Local processes on the host (no isolation)
+    Local,
+}
 
 // ── Newtypes for domain-specific string primitives ──
 
@@ -81,6 +96,7 @@ where
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ProjectConfig {
+    pub backend: Option<BackendKind>,
     pub binary_name: Option<String>,
     pub cargo_package: Option<String>,
     pub vm_user: Option<String>,
@@ -93,6 +109,21 @@ pub struct ProjectConfig {
     pub ssh_key: Option<String>,
     pub network: Option<NetworkFileConfig>,
     pub cluster: Option<ClusterSection>,
+    pub docker: Option<DockerConfig>,
+    pub local: Option<LocalConfig>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct DockerConfig {
+    pub image: Option<String>,
+    pub network: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct LocalConfig {
+    pub work_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -125,6 +156,9 @@ pub fn load_project_config(project_root: &Path) -> Option<ProjectConfig> {
 pub fn generate_config_template() -> String {
     r#"# steampipe.toml — cluster-ctl project configuration
 # All values shown are defaults. Uncomment and modify as needed.
+
+# Backend: "microvm" (default), "docker", or "local"
+# backend = "microvm"
 
 # The game binary name (as built by cargo)
 # binary_name = "my-game"
@@ -165,6 +199,15 @@ pub fn generate_config_template() -> String {
 
 [cluster]
 # name = "default"
+
+# Docker backend settings (used when backend = "docker")
+# [docker]
+# image = "steamcmd/steamcmd:latest"
+# network = "steampipe-net"
+
+# Local backend settings (used when backend = "local")
+# [local]
+# work_dir = "/tmp/steampipe-local"
 "#.to_string()
 }
 
@@ -201,12 +244,14 @@ pub struct ClusterConfig<S = Unchecked> {
     pub state_dir: PathBuf,
     pub cluster_name: String,
     pub vms: Vec<VmDef>,
+    pub backend: Backend,
+    pub backend_kind: BackendKind,
     _state: PhantomData<S>,
 }
 
 impl ClusterConfig<Unchecked> {
     /// Build config with defaults, optionally merged with steampipe.toml.
-    pub fn new(project_root: &Path, vm_count: u8, cluster_name: Option<&str>) -> Self {
+    pub fn new(project_root: &Path, vm_count: u8, cluster_name: Option<&str>, backend_override: Option<BackendKind>) -> Self {
         let proj = load_project_config(project_root);
 
         let cluster_name = cluster_name
@@ -243,19 +288,45 @@ impl ClusterConfig<Unchecked> {
             })
             .collect();
 
+        let ssh_key = proj.as_ref()
+            .and_then(|p| p.ssh_key.clone())
+            .map(|k| project_root.join(k))
+            .unwrap_or_else(|| project_root.join("nix/test-cluster/cluster_key"));
+        let vm_user = proj.as_ref().and_then(|p| p.vm_user.clone()).unwrap_or_else(|| "chessbender".into());
+
+        let backend_kind = backend_override
+            .or(proj.as_ref().and_then(|p| p.backend))
+            .unwrap_or_default();
+
+        let backend = match backend_kind {
+            BackendKind::Microvm => Backend::new_microvm(&ssh_key, &vm_user),
+            BackendKind::Docker => {
+                let docker_cfg = proj.as_ref().and_then(|p| p.docker.as_ref());
+                Backend::new_docker(
+                    docker_cfg.and_then(|d| d.image.as_deref()).unwrap_or("steamcmd/steamcmd:latest"),
+                    docker_cfg.and_then(|d| d.network.as_deref()).unwrap_or("steampipe-net"),
+                )
+            }
+            BackendKind::Local => {
+                let local_cfg = proj.as_ref().and_then(|p| p.local.as_ref());
+                let work_dir = local_cfg
+                    .and_then(|l| l.work_dir.as_deref())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| std::env::temp_dir().join("steampipe-local"));
+                Backend::new_local(work_dir)
+            }
+        };
+
         Self {
             bridge: proj.as_ref().and_then(|p| p.network.as_ref()?.bridge.clone()).unwrap_or_else(|| "br-cluster".into()),
             subnet,
             prefix: proj.as_ref().and_then(|p| p.network.as_ref()?.prefix).unwrap_or(24),
             host_ip: proj.as_ref().and_then(|p| p.network.as_ref()?.host_ip.clone()).unwrap_or_else(|| "10.0.100.254".into()),
-            vm_user: proj.as_ref().and_then(|p| p.vm_user.clone()).unwrap_or_else(|| "chessbender".into()),
+            vm_user,
             remote_dir: proj.as_ref().and_then(|p| p.remote_dir.clone()).unwrap_or_else(|| "/home/chessbender/chessbender".into()),
             binary_name: proj.as_ref().and_then(|p| p.binary_name.clone()).unwrap_or_else(|| "chessbender".into()),
             cargo_package: proj.as_ref().and_then(|p| p.cargo_package.clone()).unwrap_or_else(|| "chessbender".into()),
-            ssh_key: proj.as_ref()
-                .and_then(|p| p.ssh_key.clone())
-                .map(|k| project_root.join(k))
-                .unwrap_or_else(|| project_root.join("nix/test-cluster/cluster_key")),
+            ssh_key,
             udp_port: proj.as_ref().and_then(|p| p.network.as_ref()?.udp_port).unwrap_or(27100),
             steam_api_lib: proj.as_ref()
                 .and_then(|p| p.steam_api_lib.clone())
@@ -267,6 +338,8 @@ impl ClusterConfig<Unchecked> {
             state_dir,
             cluster_name,
             vms,
+            backend,
+            backend_kind,
             _state: PhantomData,
         }
     }
@@ -287,15 +360,18 @@ impl ClusterConfig<Unchecked> {
         }
         Ok(self.into_state())
     }
+
+    /// Validate bridge for MicroVM, or skip validation for Docker/Local backends.
+    pub fn validate_or_skip_bridge(self) -> anyhow::Result<ClusterConfig<BridgeReady>> {
+        match self.backend_kind {
+            BackendKind::Microvm => self.validate_bridge(),
+            BackendKind::Docker | BackendKind::Local => Ok(self.into_state()),
+        }
+    }
 }
 
 /// Methods available on any config state (both Unchecked and BridgeReady).
 impl<S> ClusterConfig<S> {
-    /// Create an `SshClient` from this config's key and user.
-    pub fn ssh_client(&self) -> SshClient {
-        SshClient::new(&self.ssh_key, &self.vm_user)
-    }
-
     /// Transition to a different typestate.
     fn into_state<T>(self) -> ClusterConfig<T> {
         ClusterConfig {
@@ -316,6 +392,8 @@ impl<S> ClusterConfig<S> {
             state_dir: self.state_dir,
             cluster_name: self.cluster_name,
             vms: self.vms,
+            backend: self.backend,
+            backend_kind: self.backend_kind,
             _state: PhantomData,
         }
     }

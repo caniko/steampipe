@@ -36,10 +36,10 @@ async fn run_loop<S>(
     config: &ClusterConfig<S>,
     interval_secs: u64,
 ) -> anyhow::Result<()> {
-    let ssh = config.ssh_client();
+    let backend = &config.backend;
 
     loop {
-        let statuses = poll_vm_statuses(&config.vms, &ssh, &config.state_dir, &config.binary_name).await;
+        let statuses = poll_vm_statuses(&config.vms, backend, &config.state_dir, &config.binary_name).await;
         let last_refresh = chrono::Local::now().format("%H:%M:%S").to_string();
 
         let running = statuses.iter().filter(|s| s.vm_running).count();

@@ -1,14 +1,14 @@
+use crate::backend::Backend;
 use crate::config::{ClusterConfig, VmDef, par_each_vm};
-use crate::ssh::SshClient;
 use crate::steam;
 
-/// Kill game process on a set of VMs in parallel.
-pub async fn kill_games(ssh: &SshClient, vms: &[VmDef], binary_name: &str) {
+/// Kill game process on a set of instances in parallel.
+pub async fn kill_games(backend: &Backend, vms: &[VmDef], binary_name: &str) {
     let results = par_each_vm(vms, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         let binary_name = binary_name.to_owned();
         async move {
-            ssh.run(&vm.ip, &format!("pkill -x {binary_name} 2>/dev/null || true"))
+            backend.run_cmd(&vm.ip, &format!("pkill -x {binary_name} 2>/dev/null || true"))
                 .await;
         }
     })
@@ -16,18 +16,17 @@ pub async fn kill_games(ssh: &SshClient, vms: &[VmDef], binary_name: &str) {
     let _ = results; // JoinErrors are non-fatal here
 }
 
-/// Run the `stop-game` subcommand: kill game on all VMs.
+/// Run the `stop-game` subcommand: kill game on all instances.
 pub async fn stop_game<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
-    let ssh = config.ssh_client();
     println!("==> Stopping game on all VMs...");
-    kill_games(&ssh, &config.vms, &config.binary_name).await;
+    kill_games(&config.backend, &config.vms, &config.binary_name).await;
     println!("==> Done");
     Ok(())
 }
 
-/// Run the `run` subcommand: start weston + Steam + game on all VMs.
+/// Run the `run` subcommand: start weston + Steam + game on all instances.
 pub async fn start_game<S>(config: &ClusterConfig<S>, extra_args: &[String]) -> anyhow::Result<()> {
-    let ssh = config.ssh_client();
+    let backend = config.backend.clone();
     let remote_dir = config.remote_dir.clone();
     let binary_name = config.binary_name.clone();
     let extra = extra_args.join(" ");
@@ -35,7 +34,7 @@ pub async fn start_game<S>(config: &ClusterConfig<S>, extra_args: &[String]) -> 
     println!("==> Starting game on {} VMs...", config.vms.len());
 
     let results = par_each_vm(&config.vms, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         let remote_dir = remote_dir.clone();
         let binary_name = binary_name.clone();
         let extra = extra.clone();
@@ -55,7 +54,7 @@ pub async fn start_game<S>(config: &ClusterConfig<S>, extra_args: &[String]) -> 
                  fi",
                 weston = steam::WESTON_SETUP,
             );
-            let result = ssh.run(&vm.ip, &cmd).await;
+            let result = backend.run_cmd(&vm.ip, &cmd).await;
             (vm.name, result.stdout.trim().to_string())
         }
     })

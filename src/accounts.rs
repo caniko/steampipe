@@ -1,7 +1,7 @@
+use crate::backend::Backend;
 use crate::config::{ClusterConfig, par_each_vm};
-use crate::ssh::SshClient;
 
-/// Per-VM account info collected from the VM.
+/// Per-VM account info collected from the instance.
 #[derive(Debug)]
 struct AccountInfo {
     vm_name: String,
@@ -10,16 +10,16 @@ struct AccountInfo {
     logged_in: bool,
 }
 
-/// Show Steam account status across all VMs.
+/// Show Steam account status across all instances.
 pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
-    let ssh = config.ssh_client();
+    let backend = config.backend.clone();
 
     println!("==> Checking Steam accounts on {} VMs...\n", config.vms.len());
 
     let mut results = par_each_vm(&config.vms, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         async move {
-            let info = check_account(&ssh, &vm.ip).await;
+            let info = check_account(&backend, &vm.ip).await;
             AccountInfo {
                 vm_name: vm.name.to_string(),
                 persona: info.0,
@@ -83,7 +83,7 @@ pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn check_account(ssh: &SshClient, ip: &str) -> (Option<String>, Option<String>, bool) {
+async fn check_account(backend: &Backend, ip: &str) -> (Option<String>, Option<String>, bool) {
     let cmd = r#"
         LOGIN_FILE="$HOME/.local/share/Steam/config/loginusers.vdf"
         if [ -f "$LOGIN_FILE" ]; then
@@ -95,7 +95,7 @@ async fn check_account(ssh: &SshClient, ip: &str) -> (Option<String>, Option<Str
         fi
     "#;
 
-    let result = ssh.run(ip, cmd).await;
+    let result = backend.run_cmd(ip, cmd).await;
     let output = result.stdout.trim();
 
     if let Some(rest) = output.strip_prefix("LOGGED_IN:") {

@@ -1,8 +1,8 @@
+use crate::backend::Backend;
 use crate::config::{ClusterConfig, VmDef, par_each_vm};
-use crate::ssh::SshClient;
 use crate::state;
 
-/// Status of a single VM: process, SSH, Steam, game.
+/// Status of a single instance: process, connectivity, Steam, game.
 pub struct VmStatus {
     pub name: String,
     pub ip: String,
@@ -12,10 +12,10 @@ pub struct VmStatus {
     pub game_running: bool,
 }
 
-/// Poll status of all VMs in parallel. Shared by `status` and `watch`.
+/// Poll status of all instances in parallel. Shared by `status` and `watch`.
 pub async fn poll_vm_statuses(
     vms: &[VmDef],
-    ssh: &SshClient,
+    backend: &Backend,
     state_dir: &std::path::Path,
     binary_name: &str,
 ) -> Vec<VmStatus> {
@@ -23,18 +23,18 @@ pub async fn poll_vm_statuses(
     let binary_name = binary_name.to_owned();
 
     let mut results = par_each_vm(vms, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         let state_dir = state_dir.clone();
         let binary_name = binary_name.clone();
         async move {
             let vm_running = state::read_pid(&state_dir, &vm.name)
                 .is_some_and(state::is_pid_alive);
 
-            let ssh_ok = ssh.is_reachable(&vm.ip).await;
+            let ssh_ok = backend.is_reachable(&vm.ip).await;
 
             let (steam_running, game_running) = if ssh_ok {
-                let steam = ssh.run(&vm.ip, "pgrep -x steam >/dev/null 2>&1 && echo yes || echo no").await;
-                let game = ssh.run(&vm.ip, &format!("pgrep -x {binary_name} >/dev/null 2>&1 && echo yes || echo no")).await;
+                let steam = backend.run_cmd(&vm.ip, "pgrep -x steam >/dev/null 2>&1 && echo yes || echo no").await;
+                let game = backend.run_cmd(&vm.ip, &format!("pgrep -x {binary_name} >/dev/null 2>&1 && echo yes || echo no")).await;
                 (steam.stdout.trim() == "yes", game.stdout.trim() == "yes")
             } else {
                 (false, false)
@@ -57,10 +57,9 @@ pub async fn poll_vm_statuses(
     results
 }
 
-/// Run the `status` subcommand: tabular status of all VMs.
+/// Run the `status` subcommand: tabular status of all instances.
 pub async fn run<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
-    let ssh = config.ssh_client();
-    let results = poll_vm_statuses(&config.vms, &ssh, &config.state_dir, &config.binary_name).await;
+    let results = poll_vm_statuses(&config.vms, &config.backend, &config.state_dir, &config.binary_name).await;
 
     println!("{:<8} {:<14} {:<6} {:<6} {:<8} {:<8}", "VM", "IP", "VM", "SSH", "Steam", "Game");
     println!("{}", "─".repeat(56));

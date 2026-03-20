@@ -1,7 +1,33 @@
+use crate::backend::Backend;
 use crate::config::ClusterConfig;
 
-/// Run the `net-up` subcommand: create bridge, TAP devices, NAT rules.
+/// Run the `net-up` subcommand: set up networking for the active backend.
 pub fn up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
+    match &config.backend {
+        Backend::MicroVm(_) => microvm_net_up(config, nft),
+        Backend::Docker(b) => docker_net_up(config, &b.network),
+        Backend::Local(_) => {
+            println!("==> Local backend: no network setup needed");
+            Ok(())
+        }
+    }
+}
+
+/// Run the `net-down` subcommand: tear down networking for the active backend.
+pub fn down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
+    match &config.backend {
+        Backend::MicroVm(_) => microvm_net_down(config, nft),
+        Backend::Docker(b) => docker_net_down(&b.network),
+        Backend::Local(_) => {
+            println!("==> Local backend: no network teardown needed");
+            Ok(())
+        }
+    }
+}
+
+// ── MicroVM networking (bridge + TAP + nftables) ──
+
+fn microvm_net_up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
     println!("==> Setting up cluster network...");
 
     let bridge = &config.bridge;
@@ -66,8 +92,7 @@ pub fn up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the `net-down` subcommand: tear down bridge, TAP devices, NAT rules.
-pub fn down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
+fn microvm_net_down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
     println!("==> Tearing down cluster network...");
 
     // Remove nftables table (removes all rules in it)
@@ -86,6 +111,56 @@ pub fn down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
     println!("==> Network torn down");
     Ok(())
 }
+
+// ── Docker networking ──
+
+fn docker_net_up<S>(config: &ClusterConfig<S>, network: &str) -> anyhow::Result<()> {
+    println!("==> Setting up Docker network...");
+
+    let subnet = format!("{}.0/{}", config.subnet, config.prefix);
+
+    // Remove existing network if present
+    let _ = std::process::Command::new("docker")
+        .args(["network", "rm", network])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+
+    let status = std::process::Command::new("docker")
+        .args(["network", "create", "--subnet", &subnet, network])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status()?;
+
+    if !status.success() {
+        anyhow::bail!("docker network create failed");
+    }
+
+    println!("  Docker network {network} created ({subnet})");
+    println!("==> Network ready");
+    Ok(())
+}
+
+fn docker_net_down(network: &str) -> anyhow::Result<()> {
+    println!("==> Tearing down Docker network...");
+
+    let status = std::process::Command::new("docker")
+        .args(["network", "rm", network])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status()?;
+
+    if !status.success() {
+        eprintln!("  Warning: docker network rm {network} failed (may not exist)");
+    } else {
+        println!("  Docker network {network} removed");
+    }
+
+    println!("==> Network torn down");
+    Ok(())
+}
+
+// ── Helpers ──
 
 fn run_cmd(program: &str, args: &[&str]) -> anyhow::Result<()> {
     let status = std::process::Command::new(program)

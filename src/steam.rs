@@ -1,9 +1,8 @@
 use std::path::Path;
 
+use crate::backend::Backend;
 use crate::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
 use crate::credentials::{CredentialsMap, VmCredentials};
-use crate::ssh::SshClient;
-use crate::vm;
 
 /// Shell snippet that ensures weston (headless) is running and exports display vars.
 /// Append your own commands after this to run under the compositor.
@@ -28,8 +27,8 @@ else
 fi
 "#;
 
-/// Ensure weston + Steam are running on a VM, waiting for Steam's connection log.
-pub async fn ensure_steam(ssh: &SshClient, ip: &str) -> anyhow::Result<()> {
+/// Ensure weston + Steam are running on an instance, waiting for Steam's connection log.
+pub async fn ensure_steam(backend: &Backend, ip: &str) -> anyhow::Result<()> {
     let log = "/home/chessbender/.local/share/Steam/logs/connection_log.txt";
     let cmd = format!(
         "{WESTON_SETUP}\
@@ -44,26 +43,26 @@ pub async fn ensure_steam(ssh: &SshClient, ip: &str) -> anyhow::Result<()> {
          fi; sleep 1; done; \
          echo STEAM_TIMEOUT"
     );
-    let result = ssh.run(ip, &cmd).await;
+    let result = backend.run_cmd(ip, &cmd).await;
     if !result.success || !result.stdout.contains("STEAM_READY") {
         anyhow::bail!("Steam failed: {}", result.stderr);
     }
     Ok(())
 }
 
-/// Start weston + Steam on target VMs (uses already-running cluster VMs).
+/// Start weston + Steam on target instances (uses already-running cluster instances).
 pub async fn start<S>(config: &ClusterConfig<S>, target: Option<&str>) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, false)?;
-    let ssh = config.ssh_client();
+    let backend = config.backend.clone();
 
     println!("==> Starting Steam on {} VM(s)...", targets.len());
     let script = format!("{WESTON_SETUP}{STEAM_START_SILENT}");
 
     let results = par_each_vm(&targets, |vm| {
-        let ssh = ssh.clone();
+        let backend = backend.clone();
         let script = script.clone();
         async move {
-            let result = ssh.run(&vm.ip, &script).await;
+            let result = backend.run_cmd(&vm.ip, &script).await;
             let status = result.stdout.trim().to_string();
             (vm.name, status)
         }
@@ -77,15 +76,15 @@ pub async fn start<S>(config: &ClusterConfig<S>, target: Option<&str>) -> anyhow
     Ok(())
 }
 
-/// Run the `steam-check` subcommand: boot each VM, verify Steam login + health.
-/// Requires `BridgeReady` — starts and stops VMs, which needs the bridge.
+/// Run the `steam-check` subcommand: boot each instance, verify Steam login + health.
+/// Requires `BridgeReady` — starts and stops instances, which needs the bridge.
 pub async fn check(
     config: &ClusterConfig<BridgeReady>,
     target: Option<&str>,
     runners_dir: &Path,
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, false)?;
-    let ssh = config.ssh_client();
+    let backend = &config.backend;
 
     println!("==> Checking Steam setup on VMs (boot -> check -> shutdown)...");
 
@@ -95,25 +94,25 @@ pub async fn check(
     for vm in &targets {
         println!("\n── {} ({}) ──", vm.name, vm.ip);
 
-        vm::stop_vm(config, vm);
+        backend.stop_instance(config, vm);
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         print!("  Boot: ");
-        if let Err(e) = vm::start_vm(config, vm, runners_dir) {
+        if let Err(e) = backend.start_instance(config, vm, runners_dir) {
             println!("FAIL ({e})");
             failed.push(vm.name.clone());
             continue;
         }
-        if !ssh.wait_ready(&vm.ip, 30).await {
+        if !backend.wait_ready(&vm.ip, 30).await {
             println!("FAIL (SSH timeout)");
-            vm::stop_vm(config, vm);
+            backend.stop_instance(config, vm);
             failed.push(vm.name.clone());
             continue;
         }
         println!("OK");
 
-        let result = ssh
-            .run(
+        let result = backend
+            .run_cmd(
                 &vm.ip,
                 &format!(
                     r#"
@@ -166,7 +165,7 @@ pub async fn check(
             failed.push(vm.name.clone());
         }
 
-        vm::stop_vm(config, vm);
+        backend.stop_instance(config, vm);
     }
 
     println!("\n════════════════════════════════════════");
@@ -184,8 +183,8 @@ pub async fn check(
     Ok(())
 }
 
-/// Run the `steam-login` subcommand: interactive per-VM Steam login wizard.
-/// Requires `BridgeReady` — boots VMs to perform login.
+/// Run the `steam-login` subcommand: interactive per-instance Steam login wizard.
+/// Requires `BridgeReady` — boots instances to perform login.
 pub async fn login(
     config: &ClusterConfig<BridgeReady>,
     target: Option<&str>,
@@ -194,11 +193,10 @@ pub async fn login(
     creds: Option<&CredentialsMap>,
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, continue_from)?;
-    let ssh = config.ssh_client();
 
     for vm in &targets {
         let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
-        if let Err(e) = login_single_vm(config, vm, &ssh, login_runners_dir, vm_creds).await {
+        if let Err(e) = login_single_vm(config, vm, login_runners_dir, vm_creds).await {
             eprintln!("Error with {}: {e}", vm.name);
         }
     }
@@ -208,11 +206,11 @@ pub async fn login(
 async fn login_single_vm(
     config: &ClusterConfig<BridgeReady>,
     vm: &VmDef,
-    ssh: &SshClient,
     login_runners_dir: &Path,
     creds: Option<&VmCredentials>,
 ) -> anyhow::Result<()> {
     let automated = creds.is_some();
+    let backend = &config.backend;
 
     println!();
     println!("══════════════════════════════════════════════════");
@@ -225,20 +223,20 @@ async fn login_single_vm(
     }
     println!("══════════════════════════════════════════════════");
 
-    vm::stop_vm(config, vm);
+    backend.stop_instance(config, vm);
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     println!("  Booting VM...");
-    vm::start_vm(config, vm, login_runners_dir)?;
+    backend.start_instance(config, vm, login_runners_dir)?;
 
     let config_for_cleanup = config.clone();
     let vm_for_cleanup = vm.clone();
     let cleanup = move || {
-        vm::stop_vm(&config_for_cleanup, &vm_for_cleanup);
+        config_for_cleanup.backend.stop_instance(&config_for_cleanup, &vm_for_cleanup);
     };
 
     print!("  Waiting for SSH... ");
-    if !ssh.wait_ready(&vm.ip, 60).await {
+    if !backend.wait_ready(&vm.ip, 60).await {
         println!("timeout");
         cleanup();
         anyhow::bail!("SSH timeout for {}", vm.name);
@@ -247,20 +245,20 @@ async fn login_single_vm(
 
     if let Some(creds) = creds {
         // Automated login via `steam -login`
-        automated_login(ssh, vm, creds).await?;
+        automated_login(backend, vm, creds).await?;
     } else {
         // Interactive VNC-based login (original flow)
-        interactive_login(ssh, vm).await?;
+        interactive_login(backend, vm).await?;
     }
 
     println!("  Shutting down Steam and VM...");
-    ssh.run(
+    backend.run_cmd(
         &vm.ip,
         "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
     )
     .await;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    vm::stop_vm(config, vm);
+    backend.stop_instance(config, vm);
     println!("  {} done.", vm.name);
 
     Ok(())
@@ -269,7 +267,7 @@ async fn login_single_vm(
 /// Automated login: starts weston, runs `steam -login`, waits for login confirmation,
 /// and optionally activates a game key.
 async fn automated_login(
-    ssh: &SshClient,
+    backend: &Backend,
     vm: &VmDef,
     creds: &VmCredentials,
 ) -> anyhow::Result<()> {
@@ -293,7 +291,7 @@ done
 echo STEAM_LOGIN_TIMEOUT"#,
     );
 
-    let result = ssh.run(&vm.ip, &cmd).await;
+    let result = backend.run_cmd(&vm.ip, &cmd).await;
     let output = result.stdout.trim();
 
     if !output.contains("STEAM_LOGIN_OK") {
@@ -315,7 +313,7 @@ echo STEAM_LOGIN_TIMEOUT"#,
 sleep 10
 echo KEY_SUBMITTED"#,
         );
-        let key_result = ssh.run(&vm.ip, &activate_cmd).await;
+        let key_result = backend.run_cmd(&vm.ip, &activate_cmd).await;
         println!("  Game key activation submitted ({})", key_result.stdout.trim());
     }
 
@@ -323,9 +321,9 @@ echo KEY_SUBMITTED"#,
 }
 
 /// Interactive VNC-based login (original flow).
-async fn interactive_login(ssh: &SshClient, vm: &VmDef) -> anyhow::Result<()> {
+async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> {
     println!("  Starting sway + wayvnc + Steam...");
-    ssh.run(
+    backend.run_cmd(
         &vm.ip,
         r#"
         export XDG_RUNTIME_DIR=/tmp/runtime-chessbender
@@ -369,7 +367,7 @@ async fn interactive_login(ssh: &SshClient, vm: &VmDef) -> anyhow::Result<()> {
             let text = text.trim_end_matches('\n');
             if !text.is_empty() {
                 let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
-                ssh.run(
+                backend.run_cmd(
                     &vm.ip,
                     &format!(
                         r#"export XDG_RUNTIME_DIR=/tmp/runtime-chessbender; export WAYLAND_DISPLAY=wayland-1; wtype -- "{escaped}""#
