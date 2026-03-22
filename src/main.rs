@@ -7,9 +7,11 @@ mod credentials;
 mod deploy;
 mod doctor;
 mod history;
+mod lease;
 mod logs;
 mod netem;
 mod net;
+mod resources;
 mod run;
 mod snapshot;
 mod ssh;
@@ -72,6 +74,12 @@ async fn main() -> anyhow::Result<()> {
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
+    if let Some(dir) = &cli.state_dir {
+        config.state_dir = dir.clone();
+    }
+    if let Some(dir) = &cli.lock_dir {
+        config.lock_dir = dir.clone();
+    }
 
     let creds = cli
         .credentials
@@ -83,10 +91,18 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         // Commands that require a validated bridge (or skip for non-microvm)
-        Commands::Up { runners_dir } => {
+        Commands::Up { runners_dir, idle_timeout: _ } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
             let validated = config.validate_or_skip_bridge()?;
-            vm::up(&validated, &runners_dir).await?;
+            let result = vm::up(&validated, &runners_dir).await?;
+
+            // Hold leases in foreground until Ctrl+C
+            println!("==> Holding {} VM(s). Press Ctrl+C to shut down.", result.vms.len());
+            tokio::signal::ctrl_c().await?;
+
+            println!();
+            vm::down_vms(&validated, &result.vms);
+            drop(result.leases);
         }
         Commands::Restart { target, runners_dir } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;

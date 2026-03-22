@@ -107,6 +107,12 @@ pub struct ProjectConfig {
     pub log_file: Option<String>,
     pub max_vms: Option<u8>,
     pub ssh_key: Option<String>,
+    /// Directory for VM lock files (default: $XDG_RUNTIME_DIR/steampipe/)
+    pub lock_dir: Option<String>,
+    /// Minimum free RAM per VM in MB (default: 2048)
+    pub ram_per_vm_mb: Option<u64>,
+    /// Minimum RAM to keep free for the host in MB (default: 2048)
+    pub host_ram_reserve_mb: Option<u64>,
     pub network: Option<NetworkFileConfig>,
     pub cluster: Option<ClusterSection>,
     pub docker: Option<DockerConfig>,
@@ -140,6 +146,8 @@ pub struct NetworkFileConfig {
 #[serde(default)]
 pub struct ClusterSection {
     pub name: Option<String>,
+    /// Absolute path override for state directory (share cluster state across projects).
+    pub state_dir: Option<String>,
 }
 
 /// Load project config from a steampipe.toml file.
@@ -199,6 +207,7 @@ pub fn generate_config_template() -> String {
 
 [cluster]
 # name = "default"
+# state_dir = "/absolute/path/to/shared/state"
 
 # Docker backend settings (used when backend = "docker")
 # [docker]
@@ -246,6 +255,9 @@ pub struct ClusterConfig<S = Unchecked> {
     pub vms: Vec<VmDef>,
     pub backend: Backend,
     pub backend_kind: BackendKind,
+    pub lock_dir: PathBuf,
+    pub ram_per_vm: u64,
+    pub host_ram_reserve: u64,
     _state: PhantomData<S>,
 }
 
@@ -268,11 +280,16 @@ impl ClusterConfig<Unchecked> {
             })
             .join("steampipe");
 
-        let state_dir = if cluster_name == "default" {
-            base_state_dir
-        } else {
-            base_state_dir.join(&cluster_name)
-        };
+        let state_dir = proj.as_ref()
+            .and_then(|p| p.cluster.as_ref()?.state_dir.clone())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                if cluster_name == "default" {
+                    base_state_dir
+                } else {
+                    base_state_dir.join(&cluster_name)
+                }
+            });
 
         let max_vms = proj.as_ref().and_then(|p| p.max_vms).unwrap_or(7);
         let vm_count = vm_count.clamp(1, max_vms);
@@ -317,6 +334,19 @@ impl ClusterConfig<Unchecked> {
             }
         };
 
+        let lock_dir = proj.as_ref()
+            .and_then(|p| p.lock_dir.clone())
+            .map(PathBuf::from)
+            .unwrap_or_else(crate::lease::default_lock_dir);
+
+        let mb = 1024 * 1024;
+        let ram_per_vm = proj.as_ref()
+            .and_then(|p| p.ram_per_vm_mb)
+            .unwrap_or(2048) * mb;
+        let host_ram_reserve = proj.as_ref()
+            .and_then(|p| p.host_ram_reserve_mb)
+            .unwrap_or(2048) * mb;
+
         Self {
             bridge: proj.as_ref().and_then(|p| p.network.as_ref()?.bridge.clone()).unwrap_or_else(|| "br-cluster".into()),
             subnet,
@@ -340,6 +370,9 @@ impl ClusterConfig<Unchecked> {
             vms,
             backend,
             backend_kind,
+            lock_dir,
+            ram_per_vm,
+            host_ram_reserve,
             _state: PhantomData,
         }
     }
@@ -394,6 +427,9 @@ impl<S> ClusterConfig<S> {
             vms: self.vms,
             backend: self.backend,
             backend_kind: self.backend_kind,
+            lock_dir: self.lock_dir,
+            ram_per_vm: self.ram_per_vm,
+            host_ram_reserve: self.host_ram_reserve,
             _state: PhantomData,
         }
     }

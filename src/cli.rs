@@ -48,9 +48,17 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub cluster: Option<String>,
 
+    /// Override state directory (share cluster state across projects)
+    #[arg(long, global = true)]
+    pub state_dir: Option<PathBuf>,
+
     /// Backend: microvm (default), docker, or local
     #[arg(long, global = true, value_enum)]
     pub backend: Option<BackendKind>,
+
+    /// Override lock directory for VM reservation (default: $XDG_RUNTIME_DIR/steampipe/)
+    #[arg(long, global = true)]
+    pub lock_dir: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -58,11 +66,15 @@ pub enum Commands {
     /// Show status of all VMs (running, SSH, Steam, game)
     Status,
 
-    /// Start VMs (uses --vm-count to determine how many)
+    /// Start VMs and hold locks (foreground). Uses --vm-count to determine how many.
     Up {
         /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
         #[arg(long)]
         runners_dir: Option<PathBuf>,
+
+        /// Auto-shutdown idle VMs after this many seconds (0 = disabled, default: disabled)
+        #[arg(long)]
+        idle_timeout: Option<u64>,
     },
 
     /// Stop all VMs
