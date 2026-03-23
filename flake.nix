@@ -28,7 +28,7 @@
         pname = "cluster-ctl";
         version = "0.1.0";
         src = ./.;
-        cargoHash = "sha256-MBLGM53O+MRy2lkhL24A52zleEMaIiznLXcSYirEFdM=";
+        cargoHash = "sha256-WnzBFMwAt4HB5ayNZI9+kt83LK9KRDHfGcZ8ag/9Yuo=";
         nativeBuildInputs = [toolchain];
       };
     in {
