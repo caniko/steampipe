@@ -1,3 +1,9 @@
+//! Cluster configuration: VM definitions, project config, and typestate bridge validation.
+//!
+//! The main type is [`ClusterConfig`] which holds all settings for a cluster session.
+//! It uses a typestate pattern (`Unchecked` → `BridgeReady`) to enforce that the
+//! network bridge is validated before starting VMs.
+
 use std::fmt;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -25,10 +31,14 @@ pub enum BackendKind {
 // ── Newtypes for domain-specific string primitives ──
 
 /// A VM name (e.g. "vm-3"). Prevents accidental use as an IP or MAC.
+///
+/// Derefs to `str` for convenience. Implements `Display`, `Ord`, `AsRef<str>`, `AsRef<Path>`.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct VmName(pub String);
 
 /// An IPv4 address string (e.g. "10.0.100.3").
+///
+/// Derefs to `str` for convenience. Prevents mixing with VM names in function signatures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpAddr(pub String);
 
@@ -275,8 +285,8 @@ impl ClusterConfig<Unchecked> {
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
                 dirs::home_dir()
-                    .expect("no home directory")
-                    .join(".local/state")
+                    .map(|d| d.join(".local/state"))
+                    .unwrap_or_else(|| PathBuf::from("/tmp"))
             })
             .join("steampipe");
 

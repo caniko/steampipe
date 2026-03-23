@@ -1,20 +1,15 @@
+//! Host resource checks (RAM availability) before starting VMs.
+
 use std::fs;
 
 /// RAM requirements for starting VMs.
+///
+/// Used by [`check_ram`] to verify sufficient memory before each VM launch.
 pub struct RamRequirements {
     /// Minimum free RAM per VM (bytes).
     pub per_vm: u64,
     /// Minimum RAM to keep free for the host (bytes).
     pub host_reserve: u64,
-}
-
-impl Default for RamRequirements {
-    fn default() -> Self {
-        Self {
-            per_vm: 2 * 1024 * 1024 * 1024,       // 2 GB
-            host_reserve: 2 * 1024 * 1024 * 1024,  // 2 GB
-        }
-    }
 }
 
 /// Read `MemAvailable` from `/proc/meminfo` (Linux only).
@@ -28,7 +23,7 @@ pub fn available_ram() -> anyhow::Result<u64> {
             return Ok(kb * 1024);
         }
     }
-    anyhow::bail!("MemAvailable not found in /proc/meminfo")
+    anyhow::bail!("MemAvailable not found in /proc/meminfo (Linux required)")
 }
 
 /// Check whether there is enough RAM to start one more VM.

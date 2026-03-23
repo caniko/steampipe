@@ -44,12 +44,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Commands that don't need project root or config
-    match &cli.command {
-        Commands::Completions { shell } => {
-            cli::print_completions(*shell);
-            return Ok(());
-        }
-        _ => {}
+    if let Commands::Completions { shell } = &cli.command {
+        cli::print_completions(*shell);
+        return Ok(());
     }
 
     let project_root = match &cli.project_root {

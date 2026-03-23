@@ -7,6 +7,9 @@ use crate::ssh::SshClient;
 use crate::state;
 
 /// Backend-agnostic command output.
+///
+/// Returned by `Backend::run_cmd` and `Backend::run_cmd_timeout`. Check `success`
+/// before trusting `stdout`; on failure, `stderr` contains the error details.
 #[derive(Debug)]
 pub struct CmdOutput {
     pub stdout: String,
@@ -15,6 +18,9 @@ pub struct CmdOutput {
 }
 
 /// Execution backend for cluster instances.
+///
+/// All VM operations (commands, file uploads, lifecycle) are dispatched through
+/// this enum. Each variant wraps a backend-specific implementation.
 #[derive(Debug, Clone)]
 pub enum Backend {
     MicroVm(MicroVmBackend),
@@ -215,42 +221,6 @@ impl Backend {
         }
     }
 
-    /// Check if an instance is running.
-    #[allow(dead_code)]
-    pub fn is_instance_running<S>(&self, config: &ClusterConfig<S>, vm: &VmDef) -> bool {
-        match self {
-            Self::MicroVm(_) => {
-                state::read_pid(&config.state_dir, &vm.name).is_some_and(state::is_pid_alive)
-            }
-            Self::Docker(_) => {
-                std::process::Command::new("docker")
-                    .args(["inspect", "-f", "{{.State.Running}}", &vm.name.0])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .output()
-                    .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
-            }
-            Self::Local(_) => true,
-        }
-    }
-
-    /// Whether this backend supports network emulation (tc/netem on TAP devices).
-    #[allow(dead_code)]
-    pub fn supports_netem(&self) -> bool {
-        matches!(self, Self::MicroVm(_))
-    }
-
-    /// Whether this backend supports Steam client operations.
-    #[allow(dead_code)]
-    pub fn supports_steam(&self) -> bool {
-        matches!(self, Self::MicroVm(_) | Self::Docker(_))
-    }
-
-    /// Whether this backend supports screenshot capture.
-    #[allow(dead_code)]
-    pub fn supports_screenshots(&self) -> bool {
-        matches!(self, Self::MicroVm(_))
-    }
 }
 
 // ── MicroVM lifecycle ──

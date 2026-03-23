@@ -1,3 +1,5 @@
+//! VM lifecycle management: start, stop, restart cluster instances.
+
 use std::path::Path;
 
 use crate::config::{BridgeReady, ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
@@ -105,7 +107,7 @@ pub async fn up(
     }
 
     if started.is_empty() {
-        anyhow::bail!("no VMs were started");
+        anyhow::bail!("no VMs were started — check RAM availability and runner paths");
     }
 
     if started.len() < vms.len() {

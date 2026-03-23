@@ -1,3 +1,5 @@
+//! Binary + asset deployment to cluster VMs with content-addressable caching.
+
 use std::path::Path;
 
 use sha2::{Sha256, Digest};
@@ -14,7 +16,7 @@ pub async fn build_release(project_root: &Path, cargo_package: &str) -> anyhow::
         .status()
         .await?;
     if !status.success() {
-        anyhow::bail!("cargo build failed");
+        anyhow::bail!("cargo build --release -p {cargo_package} failed (exit {})", status);
     }
     Ok(())
 }
@@ -47,7 +49,9 @@ async fn pool_deploy_binary(
     if !cached {
         backend.upload(&[binary_path], ip, &format!("{pool_dir}/")).await?;
         // Rename from the original filename to the hash
-        let uploaded_name = binary_path.file_name().unwrap().to_string_lossy();
+        let uploaded_name = binary_path.file_name()
+            .expect("binary_path validated to exist, so it has a file name")
+            .to_string_lossy();
         backend.run_cmd(ip, &format!("mv {pool_dir}/{uploaded_name} {blob_path}")).await;
         backend.run_cmd(ip, &format!("chmod +x {blob_path}")).await;
     }

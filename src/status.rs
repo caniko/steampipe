@@ -1,12 +1,12 @@
 use crate::backend::Backend;
-use crate::config::{ClusterConfig, VmDef, par_each_vm};
+use crate::config::{ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
 use crate::lease;
 use crate::state;
 
 /// Status of a single instance: process, connectivity, Steam, game.
 pub struct VmStatus {
-    pub name: String,
-    pub ip: String,
+    pub name: VmName,
+    pub ip: IpAddr,
     pub vm_running: bool,
     pub ssh_ok: bool,
     pub steam_running: bool,
@@ -42,8 +42,8 @@ pub async fn poll_vm_statuses(
             };
 
             VmStatus {
-                name: vm.name.to_string(),
-                ip: vm.ip.to_string(),
+                name: vm.name.clone(),
+                ip: vm.ip.clone(),
                 vm_running,
                 ssh_ok,
                 steam_running,

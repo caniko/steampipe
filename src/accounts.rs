@@ -100,8 +100,8 @@ async fn check_account(backend: &Backend, ip: &str) -> (Option<String>, Option<S
 
     if let Some(rest) = output.strip_prefix("LOGGED_IN:") {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();
-        let persona = parts.first().filter(|s| !s.is_empty() && *s != &"unknown").map(|s| s.to_string());
-        let steam_id = parts.get(1).filter(|s| !s.is_empty() && *s != &"unknown").map(|s| s.to_string());
+        let persona = parts.first().filter(|s| !s.is_empty() && **s != "unknown").map(|s| s.to_string());
+        let steam_id = parts.get(1).filter(|s| !s.is_empty() && **s != "unknown").map(|s| s.to_string());
         (persona, steam_id, true)
     } else {
         (None, None, false)

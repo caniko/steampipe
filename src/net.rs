@@ -133,7 +133,7 @@ fn docker_net_up<S>(config: &ClusterConfig<S>, network: &str) -> anyhow::Result<
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("docker network create failed");
+        anyhow::bail!("docker network create --subnet {subnet} {network} failed — is Docker running?");
     }
 
     println!("  Docker network {network} created ({subnet})");

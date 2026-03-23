@@ -38,3 +38,36 @@ pub fn is_pid_alive(pid: u32) -> bool {
 pub fn is_socket_file(name: &str) -> bool {
     name.ends_with(".sock") || name.contains(".vsock")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_socket_file_matches() {
+        assert!(is_socket_file("console.sock"));
+        assert!(is_socket_file("vm-1.vsock.3"));
+        assert!(is_socket_file("monitor.sock"));
+    }
+
+    #[test]
+    fn is_socket_file_rejects() {
+        assert!(!is_socket_file("vm.log"));
+        assert!(!is_socket_file("vm.pid"));
+        assert!(!is_socket_file(""));
+    }
+
+    #[test]
+    fn pid_roundtrip() {
+        let dir = std::env::temp_dir().join("steampipe-test-state");
+        let _ = std::fs::create_dir_all(&dir);
+
+        write_pid(&dir, "test-vm", 12345).unwrap();
+        assert_eq!(read_pid(&dir, "test-vm"), Some(12345));
+
+        remove_pid(&dir, "test-vm");
+        assert_eq!(read_pid(&dir, "test-vm"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -45,7 +45,7 @@ pub async fn ensure_steam(backend: &Backend, ip: &str) -> anyhow::Result<()> {
     );
     let result = backend.run_cmd(ip, &cmd).await;
     if !result.success || !result.stdout.contains("STEAM_READY") {
-        anyhow::bail!("Steam failed: {}", result.stderr);
+        anyhow::bail!("Steam failed on {ip}: {}", result.stderr);
     }
     Ok(())
 }
@@ -385,4 +385,24 @@ async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> 
 /// Escape single quotes for safe shell interpolation inside single-quoted strings.
 fn shell_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_escape_no_quotes() {
+        assert_eq!(shell_escape("password123"), "password123");
+    }
+
+    #[test]
+    fn shell_escape_single_quotes() {
+        assert_eq!(shell_escape("it's"), "it'\\''s");
+    }
+
+    #[test]
+    fn shell_escape_empty() {
+        assert_eq!(shell_escape(""), "");
+    }
 }

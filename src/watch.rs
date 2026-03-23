@@ -81,8 +81,8 @@ async fn run_loop<S>(
                 .iter()
                 .map(|s| {
                     Row::new(vec![
-                        Cell::from(s.name.as_str()),
-                        Cell::from(s.ip.as_str()),
+                        Cell::from(&*s.name),
+                        Cell::from(&*s.ip),
                         status_cell(s.vm_running),
                         status_cell(s.ssh_ok),
                         status_cell(s.steam_running),

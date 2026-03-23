@@ -1,3 +1,9 @@
+//! End-to-end test orchestration: deploy, launch, monitor, collect logs, report.
+//!
+//! The test loop deploys the game binary to VMs, launches a local host process,
+//! starts game instances on VMs, monitors for heartbeat stalls and timeouts,
+//! and produces a pass/fail summary with failure code breakdown.
+
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -9,6 +15,8 @@ use crate::cli::NetworkMode;
 use crate::config::{ClusterConfig, IpAddr, VmName};
 
 /// Configuration for a test run.
+///
+/// Created from CLI arguments in `main.rs` and passed to [`run`].
 pub struct TestConfig {
     pub network: NetworkMode,
     pub players: u8,
@@ -120,7 +128,7 @@ pub async fn run<S>(
     test_config: TestConfig,
 ) -> anyhow::Result<()> {
     if test_config.players < 2 || test_config.players > 8 {
-        anyhow::bail!("players must be 2-8");
+        anyhow::bail!("players must be 2-8, got {}", test_config.players);
     }
 
     let vm_count = (test_config.players as usize).saturating_sub(1).min(config.vms.len());
@@ -174,7 +182,7 @@ pub async fn run<S>(
     let binary_name = &config.binary_name;
     let binary_path = project_root.join(format!("target/release/{binary_name}"));
     if !binary_path.exists() {
-        anyhow::bail!("target/release/{binary_name} not found");
+        anyhow::bail!("target/release/{binary_name} not found — run with --build or `cargo build --release -p {binary_name}`");
     }
 
     // Default args based on network mode when not explicitly provided
@@ -599,6 +607,7 @@ fn kill_process_group(child: &mut std::process::Child, shutdown_timeout: Duratio
     }
 }
 
+/// Map a game process exit code to a human-readable failure label.
 pub fn exit_code_label(code: i32) -> &'static str {
     match code {
         0 => "SUCCESS",
@@ -614,5 +623,42 @@ pub fn exit_code_label(code: i32) -> &'static str {
         18 => "PEER_READY_TIMEOUT",
         124 => "TIMEOUT",
         _ => "UNKNOWN",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_min_timestamp_ms_single() {
+        let input = r#"{"timestamp_ms": 1000}"#;
+        assert_eq!(parse_min_timestamp_ms(input), Some(1000));
+    }
+
+    #[test]
+    fn parse_min_timestamp_ms_multiple_returns_min() {
+        let input = r#"{"timestamp_ms": 3000}{"timestamp_ms": 1000}{"timestamp_ms": 2000}"#;
+        assert_eq!(parse_min_timestamp_ms(input), Some(1000));
+    }
+
+    #[test]
+    fn parse_min_timestamp_ms_empty() {
+        assert_eq!(parse_min_timestamp_ms(""), None);
+        assert_eq!(parse_min_timestamp_ms("no timestamps here"), None);
+    }
+
+    #[test]
+    fn parse_min_timestamp_ms_no_digits() {
+        assert_eq!(parse_min_timestamp_ms(r#""timestamp_ms": abc"#), None);
+    }
+
+    #[test]
+    fn exit_code_labels() {
+        assert_eq!(exit_code_label(0), "SUCCESS");
+        assert_eq!(exit_code_label(1), "ERROR");
+        assert_eq!(exit_code_label(10), "PHASE_WATCHDOG");
+        assert_eq!(exit_code_label(124), "TIMEOUT");
+        assert_eq!(exit_code_label(999), "UNKNOWN");
     }
 }

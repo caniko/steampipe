@@ -1,3 +1,9 @@
+//! VM reservation via flock-based exclusive locks.
+//!
+//! Each VM slot gets a lock file in the lock directory. Multiple `cluster-ctl`
+//! processes can safely share the same VM pool — a process only uses VMs it holds
+//! exclusive locks on.
+
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -11,11 +17,9 @@ pub struct VmLease {
 }
 
 /// Information about who holds a VM lock (read from lock file metadata).
-#[allow(dead_code)]
 pub struct LeaseInfo {
     pub pid: u32,
     pub cluster: String,
-    pub since: String,
 }
 
 /// Try to exclusively lock a single VM. Returns `None` if already held by another process.
@@ -114,7 +118,6 @@ pub fn probe_holder(vm_id: u8, lock_dir: &Path) -> Option<LeaseInfo> {
     Some(LeaseInfo {
         pid: v.get("pid")?.as_u64()? as u32,
         cluster: v.get("cluster")?.as_str()?.to_string(),
-        since: v.get("since")?.as_str()?.to_string(),
     })
 }
 
