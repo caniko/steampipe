@@ -131,11 +131,9 @@ pub fn show(state_dir: &Path, last_n: Option<usize>) -> anyhow::Result<()> {
     // Failure code breakdown
     let mut code_counts = std::collections::HashMap::new();
     for r in results {
-        for code in &r.exit_codes {
-            if let Some(c) = code {
-                if *c != 0 {
-                    *code_counts.entry(*c).or_insert(0u32) += 1;
-                }
+        for c in r.exit_codes.iter().flatten() {
+            if *c != 0 {
+                *code_counts.entry(*c).or_insert(0u32) += 1;
             }
         }
     }
