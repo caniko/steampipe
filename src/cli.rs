@@ -66,15 +66,23 @@ pub enum Commands {
     /// Show status of all VMs (running, SSH, Steam, game)
     Status,
 
-    /// Start VMs and hold locks (foreground). Uses --vm-count to determine how many.
+    /// Start VMs and hold locks. Uses --vm-count to determine how many.
     Up {
         /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
         #[arg(long)]
         runners_dir: Option<PathBuf>,
 
-        /// Auto-shutdown idle VMs after this many seconds (0 = disabled, default: disabled)
+        /// Daemonize: start VMs, then background a lease-holding process and exit
         #[arg(long)]
-        idle_timeout: Option<u64>,
+        detach: bool,
+    },
+
+    /// Internal: hold VM leases in foreground (used by `up --detach`)
+    #[command(hide = true)]
+    HoldLeases {
+        /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
+        #[arg(long)]
+        runners_dir: Option<PathBuf>,
     },
 
     /// Stop all VMs
@@ -308,6 +316,38 @@ pub enum Commands {
         /// Shell to generate completions for
         shell: Shell,
     },
+}
+
+impl Cli {
+    /// Reconstruct global CLI args for re-exec (e.g. spawning the lease daemon).
+    pub fn global_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        if let Some(count) = self.vm_count {
+            args.extend(["--vm-count".into(), count.to_string()]);
+        }
+        if let Some(ref root) = self.project_root {
+            args.extend(["--project-root".into(), root.display().to_string()]);
+        }
+        if let Some(ref key) = self.ssh_key {
+            args.extend(["--ssh-key".into(), key.display().to_string()]);
+        }
+        if let Some(ref creds) = self.credentials {
+            args.extend(["--credentials".into(), creds.display().to_string()]);
+        }
+        if let Some(ref cluster) = self.cluster {
+            args.extend(["--cluster".into(), cluster.clone()]);
+        }
+        if let Some(ref dir) = self.state_dir {
+            args.extend(["--state-dir".into(), dir.display().to_string()]);
+        }
+        if let Some(ref backend) = self.backend {
+            args.extend(["--backend".into(), format!("{backend:?}").to_lowercase()]);
+        }
+        if let Some(ref dir) = self.lock_dir {
+            args.extend(["--lock-dir".into(), dir.display().to_string()]);
+        }
+        args
+    }
 }
 
 /// Print shell completions to stdout.

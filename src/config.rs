@@ -442,6 +442,23 @@ impl<S> ClusterConfig<S> {
         self.vms.iter().find(|vm| vm.name == target)
     }
 
+    /// Return VMs currently leased by this cluster, or fall back to `self.vms`
+    /// if no leases are held (backward compat for setups without leasing).
+    pub fn leased_vms(&self) -> Vec<VmDef> {
+        let max_vms = self.vms.iter().map(|v| v.index).max().unwrap_or(7);
+        let ids = crate::lease::list_cluster_vms(&self.cluster_name, max_vms, &self.lock_dir);
+        if ids.is_empty() {
+            return self.vms.clone();
+        }
+        ids.iter()
+            .map(|&id| VmDef {
+                name: VmName(format!("vm-{id}")),
+                ip: IpAddr(format!("{}.{id}", self.subnet)),
+                index: id,
+            })
+            .collect()
+    }
+
     /// Parse a target string into a list of VMs.
     pub fn resolve_targets(&self, target: Option<&str>, continue_from: bool) -> anyhow::Result<Vec<VmDef>> {
         match target {

@@ -124,17 +124,36 @@ pub async fn up(
     })
 }
 
-/// Run the `down` subcommand: stop all instances.
+/// Run the `down` subcommand: stop all instances and kill lease daemon if running.
 pub fn down<S>(config: &ClusterConfig<S>) {
-    println!("==> Stopping all VMs...");
-    for vm in &config.vms {
+    // Use leased VMs if available, otherwise fall back to static config
+    let vms = config.leased_vms();
+    println!("==> Stopping {} VM(s)...", vms.len());
+    for vm in &vms {
         let had_pid = state::read_pid(&config.state_dir, &vm.name).is_some();
         config.backend.stop_instance(config, vm);
         if had_pid {
             println!("  {} stopped", vm.name);
         }
     }
+
+    // Kill the lease daemon if one is running
+    kill_daemon(&config.state_dir);
+
     println!("==> Done");
+}
+
+/// Kill the lease-holding daemon process if one is running.
+pub fn kill_daemon(state_dir: &Path) {
+    if let Some(pid) = state::read_pid(state_dir, "daemon") {
+        if state::is_pid_alive(pid) {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+            println!("  lease daemon (PID {pid}) terminated");
+        }
+        state::remove_pid(state_dir, "daemon");
+    }
 }
 
 /// Stop specific VMs by their definitions.

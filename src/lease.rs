@@ -118,6 +118,19 @@ pub fn probe_holder(vm_id: u8, lock_dir: &Path) -> Option<LeaseInfo> {
     })
 }
 
+/// List VM IDs currently leased by a given cluster name.
+pub fn list_cluster_vms(cluster: &str, max_vms: u8, lock_dir: &Path) -> Vec<u8> {
+    let mut ids = Vec::new();
+    for id in 1..=max_vms {
+        if let Some(info) = probe_holder(id, lock_dir) {
+            if info.cluster == cluster {
+                ids.push(id);
+            }
+        }
+    }
+    ids
+}
+
 /// Resolve the lock directory, defaulting to `$XDG_RUNTIME_DIR/steampipe/`.
 pub fn default_lock_dir() -> PathBuf {
     std::env::var("XDG_RUNTIME_DIR")
