@@ -9,11 +9,7 @@ pub fn ensure_state_dir(state_dir: &Path) -> anyhow::Result<()> {
 /// Read a PID from a PID file. Returns None if the file doesn't exist or is invalid.
 pub fn read_pid(state_dir: &Path, vm_name: &str) -> Option<u32> {
     let pid_file = state_dir.join(format!("{vm_name}.pid"));
-    std::fs::read_to_string(pid_file)
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
+    std::fs::read_to_string(pid_file).ok()?.trim().parse().ok()
 }
 
 /// Write a PID to a PID file.

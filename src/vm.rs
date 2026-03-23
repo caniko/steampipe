@@ -52,7 +52,13 @@ pub async fn up(
     state::ensure_state_dir(&config.state_dir)?;
 
     let vm_count = config.vms.len() as u8;
-    let max_vms = config.vms.iter().map(|v| v.index).max().unwrap_or(7).max(vm_count);
+    let max_vms = config
+        .vms
+        .iter()
+        .map(|v| v.index)
+        .max()
+        .unwrap_or(7)
+        .max(vm_count);
 
     // Reserve VMs via flock
     println!("==> Reserving {vm_count} VM(s)...");
@@ -86,19 +92,17 @@ pub async fn up(
     let mut started = Vec::new();
     for vm in &vms {
         match resources::check_ram(&ram_req) {
-            Ok(avail) => {
-                match config.backend.start_instance(config, vm, runners_dir) {
-                    Ok(pid) => {
-                        println!(
-                            "  {} started (PID {pid}, {:.1} GB available)",
-                            vm.name,
-                            avail as f64 / 1e9
-                        );
-                        started.push(vm.clone());
-                    }
-                    Err(e) => eprintln!("  {} FAILED: {e}", vm.name),
+            Ok(avail) => match config.backend.start_instance(config, vm, runners_dir) {
+                Ok(pid) => {
+                    println!(
+                        "  {} started (PID {pid}, {:.1} GB available)",
+                        vm.name,
+                        avail as f64 / 1e9
+                    );
+                    started.push(vm.clone());
                 }
-            }
+                Err(e) => eprintln!("  {} FAILED: {e}", vm.name),
+            },
             Err(e) => {
                 eprintln!("  {} REFUSED: {e}", vm.name);
                 break; // No point trying more VMs if RAM is exhausted

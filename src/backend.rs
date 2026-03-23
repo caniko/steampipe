@@ -53,7 +53,9 @@ pub struct LocalBackend {
 
 impl MicroVmBackend {
     pub fn new(ssh_key: &Path, user: &str) -> Self {
-        Self { ssh: SshClient::new(ssh_key, user) }
+        Self {
+            ssh: SshClient::new(ssh_key, user),
+        }
     }
 }
 
@@ -82,7 +84,11 @@ impl Backend {
         match self {
             Self::MicroVm(b) => {
                 let out = b.ssh.run(ip, cmd).await;
-                CmdOutput { stdout: out.stdout, stderr: out.stderr, success: out.success }
+                CmdOutput {
+                    stdout: out.stdout,
+                    stderr: out.stderr,
+                    success: out.success,
+                }
             }
             Self::Docker(b) => b.docker_exec(ip, cmd).await,
             Self::Local(b) => b.local_exec(cmd).await,
@@ -94,28 +100,28 @@ impl Backend {
         match self {
             Self::MicroVm(b) => {
                 let out = b.ssh.run_with_timeout(ip, cmd, timeout).await;
-                CmdOutput { stdout: out.stdout, stderr: out.stderr, success: out.success }
-            }
-            Self::Docker(b) => {
-                match tokio::time::timeout(timeout, b.docker_exec(ip, cmd)).await {
-                    Ok(output) => output,
-                    Err(_) => CmdOutput {
-                        stdout: String::new(),
-                        stderr: "Command timed out".into(),
-                        success: false,
-                    },
+                CmdOutput {
+                    stdout: out.stdout,
+                    stderr: out.stderr,
+                    success: out.success,
                 }
             }
-            Self::Local(b) => {
-                match tokio::time::timeout(timeout, b.local_exec(cmd)).await {
-                    Ok(output) => output,
-                    Err(_) => CmdOutput {
-                        stdout: String::new(),
-                        stderr: "Command timed out".into(),
-                        success: false,
-                    },
-                }
-            }
+            Self::Docker(b) => match tokio::time::timeout(timeout, b.docker_exec(ip, cmd)).await {
+                Ok(output) => output,
+                Err(_) => CmdOutput {
+                    stdout: String::new(),
+                    stderr: "Command timed out".into(),
+                    success: false,
+                },
+            },
+            Self::Local(b) => match tokio::time::timeout(timeout, b.local_exec(cmd)).await {
+                Ok(output) => output,
+                Err(_) => CmdOutput {
+                    stdout: String::new(),
+                    stderr: "Command timed out".into(),
+                    success: false,
+                },
+            },
         }
     }
 
@@ -137,24 +143,17 @@ impl Backend {
                     .stderr(Stdio::null())
                     .spawn()
             }
-            Self::Local(b) => {
-                tokio::process::Command::new("sh")
-                    .args(["-c", cmd])
-                    .current_dir(&b.work_dir)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .spawn()
-            }
+            Self::Local(b) => tokio::process::Command::new("sh")
+                .args(["-c", cmd])
+                .current_dir(&b.work_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn(),
         }
     }
 
     /// Upload files to a remote instance.
-    pub async fn upload(
-        &self,
-        sources: &[&Path],
-        ip: &str,
-        dest: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn upload(&self, sources: &[&Path], ip: &str, dest: &str) -> anyhow::Result<()> {
         match self {
             Self::MicroVm(b) => b.ssh.rsync(sources, ip, dest).await,
             Self::Docker(_) => docker_cp_to(sources, ip, dest).await,
@@ -184,11 +183,16 @@ impl Backend {
         match self {
             Self::MicroVm(b) => b.ssh.wait_ready(ip, timeout_secs).await,
             Self::Docker(_) => {
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs as u64);
+                let deadline =
+                    tokio::time::Instant::now() + Duration::from_secs(timeout_secs as u64);
                 let mut delay = Duration::from_millis(500);
                 loop {
-                    if self.is_reachable(ip).await { return true; }
-                    if tokio::time::Instant::now() >= deadline { return false; }
+                    if self.is_reachable(ip).await {
+                        return true;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return false;
+                    }
                     let remaining = deadline - tokio::time::Instant::now();
                     tokio::time::sleep(delay.min(remaining)).await;
                     delay = (delay * 2).min(Duration::from_secs(4));
@@ -220,7 +224,6 @@ impl Backend {
             Self::Local(_) => {} // no-op
         }
     }
-
 }
 
 // ── MicroVM lifecycle ──
@@ -322,7 +325,11 @@ fn docker_start(
     // Write container ID as "pid" for state tracking
     let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
     state::write_pid(&config.state_dir, &vm.name, 0)?; // placeholder PID
-    eprintln!("  {} container started: {}...", vm.name, &container_id[..12.min(container_id.len())]);
+    eprintln!(
+        "  {} container started: {}...",
+        vm.name,
+        &container_id[..12.min(container_id.len())]
+    );
     Ok(0)
 }
 
@@ -375,7 +382,10 @@ async fn docker_cp_to(sources: &[&Path], container: &str, dest: &str) -> anyhow:
             .await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("docker cp {} to {container}:{dest} failed: {stderr}", src.display());
+            anyhow::bail!(
+                "docker cp {} to {container}:{dest} failed: {stderr}",
+                src.display()
+            );
         }
     }
     Ok(())

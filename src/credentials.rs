@@ -41,8 +41,9 @@ pub fn load(path: &Path, identity: Option<&Path>) -> anyhow::Result<CredentialsM
     let contents = if is_age_encrypted(path) {
         decrypt_age(path, identity)?
     } else {
-        std::fs::read_to_string(path)
-            .map_err(|e| anyhow::anyhow!("Failed to read credentials file {}: {e}", path.display()))?
+        std::fs::read_to_string(path).map_err(|e| {
+            anyhow::anyhow!("Failed to read credentials file {}: {e}", path.display())
+        })?
     };
 
     let file: CredentialsFile = toml::from_str(&contents)
@@ -82,7 +83,8 @@ fn run_age_decrypt(bin: &str, path: &Path, identity: Option<&Path>) -> anyhow::R
 
     cmd.arg(path);
 
-    let output = cmd.output()
+    let output = cmd
+        .output()
         .map_err(|e| anyhow::anyhow!("{bin} not found or failed to execute: {e}"))?;
 
     if !output.status.success() {

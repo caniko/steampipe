@@ -23,7 +23,10 @@ impl fmt::Display for NetworkMode {
 }
 
 #[derive(Parser)]
-#[command(name = "cluster-ctl", about = "VM cluster orchestration for multiplayer game testing")]
+#[command(
+    name = "cluster-ctl",
+    about = "VM cluster orchestration for multiplayer game testing"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,

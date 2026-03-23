@@ -19,7 +19,10 @@ pub fn apply<S>(
             anyhow::bail!("--jitter requires --latency");
         }
         if jit > latency_ms.unwrap_or(0) {
-            eprintln!("  Warning: jitter ({jit}ms) exceeds latency ({}ms)", latency_ms.unwrap_or(0));
+            eprintln!(
+                "  Warning: jitter ({jit}ms) exceeds latency ({}ms)",
+                latency_ms.unwrap_or(0)
+            );
         }
     }
     let targets = config.resolve_targets(Some(target), false)?;
@@ -35,8 +38,12 @@ pub fn apply<S>(
             .status();
 
         let mut args: Vec<String> = vec![
-            "qdisc".into(), "add".into(), "dev".into(), tap.clone(),
-            "root".into(), "netem".into(),
+            "qdisc".into(),
+            "add".into(),
+            "dev".into(),
+            tap.clone(),
+            "root".into(),
+            "netem".into(),
         ];
 
         if let Some(lat) = latency_ms {
@@ -57,7 +64,8 @@ pub fn apply<S>(
             args.push(format!("{rate}kbit"));
         }
 
-        let has_netem_params = latency_ms.is_some() || loss_percent.is_some() || rate_kbit.is_some();
+        let has_netem_params =
+            latency_ms.is_some() || loss_percent.is_some() || rate_kbit.is_some();
         if !has_netem_params {
             println!("  {}: no parameters specified, skipping", vm.name);
             continue;

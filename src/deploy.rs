@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 use crate::backend::Backend;
 use crate::config::{ClusterConfig, VmDef, par_each_vm};
@@ -16,7 +16,10 @@ pub async fn build_release(project_root: &Path, cargo_package: &str) -> anyhow::
         .status()
         .await?;
     if !status.success() {
-        anyhow::bail!("cargo build --release -p {cargo_package} failed (exit {})", status);
+        anyhow::bail!(
+            "cargo build --release -p {cargo_package} failed (exit {})",
+            status
+        );
     }
     Ok(())
 }
@@ -43,23 +46,33 @@ async fn pool_deploy_binary(
     backend.run_cmd(ip, &format!("mkdir -p {pool_dir}")).await;
 
     // Check if this hash already exists in the pool
-    let check = backend.run_cmd(ip, &format!("test -f {blob_path} && echo HIT")).await;
+    let check = backend
+        .run_cmd(ip, &format!("test -f {blob_path} && echo HIT"))
+        .await;
     let cached = check.stdout.trim() == "HIT";
 
     if !cached {
-        backend.upload(&[binary_path], ip, &format!("{pool_dir}/")).await?;
+        backend
+            .upload(&[binary_path], ip, &format!("{pool_dir}/"))
+            .await?;
         // Rename from the original filename to the hash
-        let uploaded_name = binary_path.file_name()
+        let uploaded_name = binary_path
+            .file_name()
             .expect("binary_path validated to exist, so it has a file name")
             .to_string_lossy();
-        backend.run_cmd(ip, &format!("mv {pool_dir}/{uploaded_name} {blob_path}")).await;
+        backend
+            .run_cmd(ip, &format!("mv {pool_dir}/{uploaded_name} {blob_path}"))
+            .await;
         backend.run_cmd(ip, &format!("chmod +x {blob_path}")).await;
     }
 
     // Atomic symlink update: binary_name -> .pool/blobs/{hash}
-    backend.run_cmd(ip, &format!(
-        "ln -sfn .pool/blobs/{hash} {remote_dir}/{binary_name}"
-    )).await;
+    backend
+        .run_cmd(
+            ip,
+            &format!("ln -sfn .pool/blobs/{hash} {remote_dir}/{binary_name}"),
+        )
+        .await;
 
     Ok(cached)
 }
@@ -101,20 +114,20 @@ pub async fn deploy_to_vms<S>(
         let binary_name = binary_name.clone();
         let hash = hash.clone();
         async move {
-            backend.run_cmd(&vm.ip, &format!("mkdir -p {remote_dir}")).await;
+            backend
+                .run_cmd(&vm.ip, &format!("mkdir -p {remote_dir}"))
+                .await;
 
             // Pool-aware binary deploy
-            let cached = pool_deploy_binary(
-                &backend, &vm.ip, &binary, &hash, &remote_dir, &binary_name,
-            ).await?;
+            let cached =
+                pool_deploy_binary(&backend, &vm.ip, &binary, &hash, &remote_dir, &binary_name)
+                    .await?;
 
             // Upload remaining assets normally
-            let sources: [&Path; 3] = [
-                steam_lib.as_path(),
-                appid_file.as_path(),
-                assets.as_path(),
-            ];
-            backend.upload(&sources, &vm.ip, &format!("{remote_dir}/")).await?;
+            let sources: [&Path; 3] = [steam_lib.as_path(), appid_file.as_path(), assets.as_path()];
+            backend
+                .upload(&sources, &vm.ip, &format!("{remote_dir}/"))
+                .await?;
 
             anyhow::Ok((vm.name, cached))
         }
@@ -125,7 +138,11 @@ pub async fn deploy_to_vms<S>(
     for result in results {
         match result {
             Ok((name, cached)) => {
-                let status = if cached { "deployed (binary cached)" } else { "deployed" };
+                let status = if cached {
+                    "deployed (binary cached)"
+                } else {
+                    "deployed"
+                };
                 println!("  {name}: {status}");
             }
             Err(e) => {
@@ -138,16 +155,16 @@ pub async fn deploy_to_vms<S>(
 }
 
 /// Verify deployed files via SHA-256 checksums.
-pub async fn verify<S>(
-    config: &ClusterConfig<S>,
-    project_root: &Path,
-) -> anyhow::Result<()> {
+pub async fn verify<S>(config: &ClusterConfig<S>, project_root: &Path) -> anyhow::Result<()> {
     let backend = &config.backend;
     let binary_path = project_root.join(format!("target/release/{}", config.binary_name));
 
     let local_hash = compute_binary_hash(&binary_path)?;
 
-    println!("==> Verifying deployments (binary SHA-256: {}...)", &local_hash[..12]);
+    println!(
+        "==> Verifying deployments (binary SHA-256: {}...)",
+        &local_hash[..12]
+    );
 
     let remote_dir = config.remote_dir.clone();
     let binary_name = config.binary_name.clone();
@@ -176,7 +193,10 @@ pub async fn verify<S>(
             if remote_hash.is_empty() {
                 eprintln!("  {name}: MISSING (binary not found on VM)");
             } else {
-                eprintln!("  {name}: MISMATCH (remote: {}...)", &remote_hash[..12.min(remote_hash.len())]);
+                eprintln!(
+                    "  {name}: MISMATCH (remote: {}...)",
+                    &remote_hash[..12.min(remote_hash.len())]
+                );
             }
         }
     }
@@ -190,13 +210,21 @@ pub async fn verify<S>(
 }
 
 /// Run the `deploy` subcommand: build and upload binary + assets to all instances.
-pub async fn run<S>(config: &ClusterConfig<S>, project_root: &Path, no_build: bool, do_verify: bool) -> anyhow::Result<()> {
+pub async fn run<S>(
+    config: &ClusterConfig<S>,
+    project_root: &Path,
+    no_build: bool,
+    do_verify: bool,
+) -> anyhow::Result<()> {
     if !no_build {
         build_release(project_root, &config.cargo_package).await?;
     }
 
     if !config.steam_api_lib.exists() {
-        anyhow::bail!("Steam API lib not found: {}", config.steam_api_lib.display());
+        anyhow::bail!(
+            "Steam API lib not found: {}",
+            config.steam_api_lib.display()
+        );
     }
 
     let backend = &config.backend;

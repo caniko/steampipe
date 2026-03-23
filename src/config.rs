@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use clap::ValueEnum;
 use crate::backend::Backend;
+use clap::ValueEnum;
 
 /// Which backend to use for running test instances.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ValueEnum)]
@@ -46,7 +46,9 @@ macro_rules! impl_str_newtype {
     ($ty:ident) => {
         impl Deref for $ty {
             type Target = str;
-            fn deref(&self) -> &str { &self.0 }
+            fn deref(&self) -> &str {
+                &self.0
+            }
         }
         impl fmt::Display for $ty {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,19 +56,29 @@ macro_rules! impl_str_newtype {
             }
         }
         impl AsRef<str> for $ty {
-            fn as_ref(&self) -> &str { &self.0 }
+            fn as_ref(&self) -> &str {
+                &self.0
+            }
         }
         impl AsRef<std::path::Path> for $ty {
-            fn as_ref(&self) -> &std::path::Path { self.0.as_ref() }
+            fn as_ref(&self) -> &std::path::Path {
+                self.0.as_ref()
+            }
         }
         impl std::borrow::Borrow<str> for $ty {
-            fn borrow(&self) -> &str { &self.0 }
+            fn borrow(&self) -> &str {
+                &self.0
+            }
         }
         impl PartialEq<str> for $ty {
-            fn eq(&self, other: &str) -> bool { self.0 == other }
+            fn eq(&self, other: &str) -> bool {
+                self.0 == other
+            }
         }
         impl PartialEq<&str> for $ty {
-            fn eq(&self, other: &&str) -> bool { self.0 == *other }
+            fn eq(&self, other: &&str) -> bool {
+                self.0 == *other
+            }
         }
     };
 }
@@ -273,7 +285,12 @@ pub struct ClusterConfig<S = Unchecked> {
 
 impl ClusterConfig<Unchecked> {
     /// Build config with defaults, optionally merged with steampipe.toml.
-    pub fn new(project_root: &Path, vm_count: u8, cluster_name: Option<&str>, backend_override: Option<BackendKind>) -> Self {
+    pub fn new(
+        project_root: &Path,
+        vm_count: u8,
+        cluster_name: Option<&str>,
+        backend_override: Option<BackendKind>,
+    ) -> Self {
         let proj = load_project_config(project_root);
 
         let cluster_name = cluster_name
@@ -290,7 +307,8 @@ impl ClusterConfig<Unchecked> {
             })
             .join("steampipe");
 
-        let state_dir = proj.as_ref()
+        let state_dir = proj
+            .as_ref()
             .and_then(|p| p.cluster.as_ref()?.state_dir.clone())
             .map(PathBuf::from)
             .unwrap_or_else(|| {
@@ -303,7 +321,8 @@ impl ClusterConfig<Unchecked> {
 
         let max_vms = proj.as_ref().and_then(|p| p.max_vms).unwrap_or(7);
         let vm_count = vm_count.clamp(1, max_vms);
-        let subnet = proj.as_ref()
+        let subnet = proj
+            .as_ref()
             .and_then(|p| p.network.as_ref()?.subnet.clone())
             .unwrap_or_else(|| "10.0.100".into());
 
@@ -315,11 +334,15 @@ impl ClusterConfig<Unchecked> {
             })
             .collect();
 
-        let ssh_key = proj.as_ref()
+        let ssh_key = proj
+            .as_ref()
             .and_then(|p| p.ssh_key.clone())
             .map(|k| project_root.join(k))
             .unwrap_or_else(|| project_root.join("nix/test-cluster/cluster_key"));
-        let vm_user = proj.as_ref().and_then(|p| p.vm_user.clone()).unwrap_or_else(|| "chessbender".into());
+        let vm_user = proj
+            .as_ref()
+            .and_then(|p| p.vm_user.clone())
+            .unwrap_or_else(|| "chessbender".into());
 
         let backend_kind = backend_override
             .or(proj.as_ref().and_then(|p| p.backend))
@@ -330,8 +353,12 @@ impl ClusterConfig<Unchecked> {
             BackendKind::Docker => {
                 let docker_cfg = proj.as_ref().and_then(|p| p.docker.as_ref());
                 Backend::new_docker(
-                    docker_cfg.and_then(|d| d.image.as_deref()).unwrap_or("steamcmd/steamcmd:latest"),
-                    docker_cfg.and_then(|d| d.network.as_deref()).unwrap_or("steampipe-net"),
+                    docker_cfg
+                        .and_then(|d| d.image.as_deref())
+                        .unwrap_or("steamcmd/steamcmd:latest"),
+                    docker_cfg
+                        .and_then(|d| d.network.as_deref())
+                        .unwrap_or("steampipe-net"),
                 )
             }
             BackendKind::Local => {
@@ -344,18 +371,19 @@ impl ClusterConfig<Unchecked> {
             }
         };
 
-        let lock_dir = proj.as_ref()
+        let lock_dir = proj
+            .as_ref()
             .and_then(|p| p.lock_dir.clone())
             .map(PathBuf::from)
             .unwrap_or_else(crate::lease::default_lock_dir);
 
         let mb = 1024 * 1024;
-        let ram_per_vm = proj.as_ref()
-            .and_then(|p| p.ram_per_vm_mb)
-            .unwrap_or(2048) * mb;
-        let host_ram_reserve = proj.as_ref()
+        let ram_per_vm = proj.as_ref().and_then(|p| p.ram_per_vm_mb).unwrap_or(2048) * mb;
+        let host_ram_reserve = proj
+            .as_ref()
             .and_then(|p| p.host_ram_reserve_mb)
-            .unwrap_or(2048) * mb;
+            .unwrap_or(2048)
+            * mb;
 
         Self {
             bridge: proj.as_ref().and_then(|p| p.network.as_ref()?.bridge.clone()).unwrap_or_else(|| "br-cluster".into()),
@@ -453,25 +481,31 @@ impl<S> ClusterConfig<S> {
     }
 
     /// Parse a target string into a list of VMs.
-    pub fn resolve_targets(&self, target: Option<&str>, continue_from: bool) -> anyhow::Result<Vec<VmDef>> {
+    pub fn resolve_targets(
+        &self,
+        target: Option<&str>,
+        continue_from: bool,
+    ) -> anyhow::Result<Vec<VmDef>> {
         match target {
             None | Some("all") => Ok(self.vms.clone()),
             Some(t) => {
-                let vm = self
-                    .find_vm(t)
-                    .ok_or_else(|| {
-                        let max = self.vms.len();
-                        anyhow::anyhow!("Unknown VM: {t} (expected vm-1..vm-{max} or 1..{max})")
-                    })?;
+                let vm = self.find_vm(t).ok_or_else(|| {
+                    let max = self.vms.len();
+                    anyhow::anyhow!("Unknown VM: {t} (expected vm-1..vm-{max} or 1..{max})")
+                })?;
                 if continue_from {
-                    Ok(self.vms.iter().filter(|v| v.index >= vm.index).cloned().collect())
+                    Ok(self
+                        .vms
+                        .iter()
+                        .filter(|v| v.index >= vm.index)
+                        .cloned()
+                        .collect())
                 } else {
                     Ok(vec![vm.clone()])
                 }
             }
         }
     }
-
 }
 
 /// Auto-detect project root by walking up from CWD looking for Cargo.toml with workspace.

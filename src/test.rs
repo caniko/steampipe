@@ -72,7 +72,10 @@ impl HeartbeatSource for LocalHeartbeat<'_> {
 
 impl HeartbeatSource for VmHeartbeat<'_> {
     fn min_timestamp(&self) -> Option<u128> {
-        let cmd = format!("cat {}/game_progress_*.json 2>/dev/null || true", self.remote_dir);
+        let cmd = format!(
+            "cat {}/game_progress_*.json 2>/dev/null || true",
+            self.remote_dir
+        );
         let mut min_ts: Option<u128> = None;
         for (_, ip) in self.vms {
             let result = self.rt.block_on(self.backend.run_cmd(ip, &cmd));
@@ -131,7 +134,9 @@ pub async fn run<S>(
         anyhow::bail!("players must be 2-8, got {}", test_config.players);
     }
 
-    let vm_count = (test_config.players as usize).saturating_sub(1).min(config.vms.len());
+    let vm_count = (test_config.players as usize)
+        .saturating_sub(1)
+        .min(config.vms.len());
     let target_vms = &config.vms[..vm_count];
 
     let filter_re = Regex::new(
@@ -156,7 +161,8 @@ pub async fn run<S>(
             print_and_push(&mut output, "Build OK");
         }
 
-        let failed = crate::deploy::deploy_to_vms(backend, target_vms, config, project_root).await?;
+        let failed =
+            crate::deploy::deploy_to_vms(backend, target_vms, config, project_root).await?;
         if !failed.is_empty() {
             anyhow::bail!("Deploy failed for {} VMs", failed.len());
         }
@@ -182,7 +188,9 @@ pub async fn run<S>(
     let binary_name = &config.binary_name;
     let binary_path = project_root.join(format!("target/release/{binary_name}"));
     if !binary_path.exists() {
-        anyhow::bail!("target/release/{binary_name} not found — run with --build or `cargo build --release -p {binary_name}`");
+        anyhow::bail!(
+            "target/release/{binary_name} not found — run with --build or `cargo build --release -p {binary_name}`"
+        );
     }
 
     // Default args based on network mode when not explicitly provided
@@ -202,7 +210,10 @@ pub async fn run<S>(
         }
     }
     let vm_args = test_config.vm_args.as_deref().unwrap_or(&default_vm_args);
-    let host_args = test_config.host_args.as_deref().unwrap_or(&default_host_args);
+    let host_args = test_config
+        .host_args
+        .as_deref()
+        .unwrap_or(&default_host_args);
 
     let mut passed = 0u32;
     let mut failed = 0u32;
@@ -213,7 +224,10 @@ pub async fn run<S>(
     const REPEAT_FAILURE_LIMIT: u32 = 3;
 
     for run_num in 1..=test_config.max_runs {
-        print_and_push(&mut output, &format!("=== RUN {run_num}/{} ===", test_config.max_runs));
+        print_and_push(
+            &mut output,
+            &format!("=== RUN {run_num}/{} ===", test_config.max_runs),
+        );
 
         // Kill existing games
         crate::run::kill_games(backend, target_vms, binary_name).await;
@@ -248,7 +262,17 @@ pub async fn run<S>(
         let mut vm_launch_ok = true;
         for vm in target_vms {
             eprintln!("[cluster-ctl]   launching on {}...", vm.name);
-            if let Err(e) = launch_game(backend, &vm.ip, &config.remote_dir, binary_name, &config.vm_user, &config.log_file, vm_args).await {
+            if let Err(e) = launch_game(
+                backend,
+                &vm.ip,
+                &config.remote_dir,
+                binary_name,
+                &config.vm_user,
+                &config.log_file,
+                vm_args,
+            )
+            .await
+            {
                 print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name));
                 vm_launch_ok = false;
             }
@@ -308,7 +332,10 @@ pub async fn run<S>(
             timed_out_count += 1;
             failed += 1;
             failure_code = Some(-1);
-            print_and_push(&mut output, &format!("--- TIMEOUT ({}s limit) ---", timeout.as_secs()));
+            print_and_push(
+                &mut output,
+                &format!("--- TIMEOUT ({}s limit) ---", timeout.as_secs()),
+            );
         } else if exit_code == Some(0) {
             passed += 1;
             failure_code = None;
@@ -327,7 +354,8 @@ pub async fn run<S>(
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
             for vm in target_vms {
                 output.push_str(&format!("  [{}]:\n", vm.name));
-                let log = collect_vm_log(backend, &vm.ip, &config.remote_dir, &config.log_file, 30).await;
+                let log =
+                    collect_vm_log(backend, &vm.ip, &config.remote_dir, &config.log_file, 30).await;
                 for line in log.lines() {
                     output.push_str(&format!("    {line}\n"));
                 }
@@ -393,7 +421,9 @@ pub async fn run<S>(
     };
     let summary = format!(
         "\n=== SUMMARY ===\n{passed}/{total} passed, {failed} failed{timeout_info}\nConfig: network={}, players={}, vms={vm_count}, timeout={}s",
-        test_config.network, test_config.players, test_config.timeout.as_secs(),
+        test_config.network,
+        test_config.players,
+        test_config.timeout.as_secs(),
     );
     print_and_push(&mut output, &summary);
 
@@ -434,7 +464,15 @@ fn print_and_push(output: &mut String, msg: &str) {
 }
 
 /// Launch game on an instance (detached via nohup).
-async fn launch_game(backend: &Backend, ip: &str, remote_dir: &str, binary_name: &str, vm_user: &str, log_file: &str, args: &str) -> anyhow::Result<()> {
+async fn launch_game(
+    backend: &Backend,
+    ip: &str,
+    remote_dir: &str,
+    binary_name: &str,
+    vm_user: &str,
+    log_file: &str,
+    args: &str,
+) -> anyhow::Result<()> {
     let cmd = format!(
         "cd {remote_dir} && \
          export LD_LIBRARY_PATH=\"{remote_dir}:$LD_LIBRARY_PATH\" \
@@ -444,7 +482,9 @@ async fn launch_game(backend: &Backend, ip: &str, remote_dir: &str, binary_name:
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     );
     // Use run_cmd_timeout to avoid hanging if the channel doesn't close
-    let result = backend.run_cmd_timeout(ip, &cmd, Duration::from_secs(5)).await;
+    let result = backend
+        .run_cmd_timeout(ip, &cmd, Duration::from_secs(5))
+        .await;
     if !result.success {
         // Timeout is OK here — the command backgrounds successfully but SSH may not close the channel
         if result.stderr.contains("timed out") {
@@ -455,7 +495,13 @@ async fn launch_game(backend: &Backend, ip: &str, remote_dir: &str, binary_name:
     Ok(())
 }
 
-async fn collect_vm_log(backend: &Backend, ip: &str, remote_dir: &str, log_file: &str, max_lines: usize) -> String {
+async fn collect_vm_log(
+    backend: &Backend,
+    ip: &str,
+    remote_dir: &str,
+    log_file: &str,
+    max_lines: usize,
+) -> String {
     let cmd = format!("tail -n {max_lines} {remote_dir}/{log_file} 2>/dev/null || echo '(no log)'");
     backend.run_cmd(ip, &cmd).await.stdout
 }
@@ -524,7 +570,12 @@ fn monitor_local_process(
 
     let rt = tokio::runtime::Handle::current();
     let local_hb = LocalHeartbeat { dir: project_root };
-    let vm_hb = VmHeartbeat { rt: &rt, backend, vms: vm_ips, remote_dir };
+    let vm_hb = VmHeartbeat {
+        rt: &rt,
+        backend,
+        vms: vm_ips,
+        remote_dir,
+    };
 
     loop {
         match child.try_wait() {

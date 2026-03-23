@@ -23,7 +23,9 @@ pub fn save<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
     validate_snapshot_name(name)?;
     let snap_dir = snapshots_dir(&config.state_dir).join(name);
     if snap_dir.exists() {
-        anyhow::bail!("Snapshot '{name}' already exists. Delete it first or choose a different name.");
+        anyhow::bail!(
+            "Snapshot '{name}' already exists. Delete it first or choose a different name."
+        );
     }
     std::fs::create_dir_all(&snap_dir)?;
 
@@ -33,7 +35,10 @@ pub fn save<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
         // Check if VM is running — warn user
         if let Some(pid) = state::read_pid(&config.state_dir, &vm.name) {
             if state::is_pid_alive(pid) {
-                eprintln!("  WARNING: {} is running (PID {pid}). Snapshot may be inconsistent.", vm.name);
+                eprintln!(
+                    "  WARNING: {} is running (PID {pid}). Snapshot may be inconsistent.",
+                    vm.name
+                );
             }
         }
 
@@ -75,7 +80,10 @@ pub fn restore<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
     for vm in &config.vms {
         if let Some(pid) = state::read_pid(&config.state_dir, &vm.name) {
             if state::is_pid_alive(pid) {
-                anyhow::bail!("{} is still running (PID {pid}). Stop all VMs before restoring.", vm.name);
+                anyhow::bail!(
+                    "{} is still running (PID {pid}). Stop all VMs before restoring.",
+                    vm.name
+                );
             }
         }
     }

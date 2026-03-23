@@ -9,7 +9,8 @@ pub async fn run<S>(
     output: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let output_dir = output.unwrap_or_else(|| project_root.join(format!("logs/cluster-{timestamp}")));
+    let output_dir =
+        output.unwrap_or_else(|| project_root.join(format!("logs/cluster-{timestamp}")));
     std::fs::create_dir_all(&output_dir)?;
 
     let backend = config.backend.clone();
@@ -26,7 +27,10 @@ pub async fn run<S>(
         async move {
             let remote_log = format!("{remote_dir}/{log_file}");
             let sources = [Path::new(&remote_log)];
-            match backend.upload(&sources, &vm.ip, dest.to_str().unwrap_or(".")).await {
+            match backend
+                .upload(&sources, &vm.ip, dest.to_str().unwrap_or("."))
+                .await
+            {
                 Ok(()) => println!("  {}: collected", vm.name),
                 Err(_) => eprintln!("  {}: no log or unreachable", vm.name),
             }
@@ -39,21 +43,20 @@ pub async fn run<S>(
 }
 
 /// Stream logs in real-time from all instances.
-pub async fn follow<S>(
-    config: &ClusterConfig<S>,
-    tail_lines: u32,
-) -> anyhow::Result<()> {
+pub async fn follow<S>(config: &ClusterConfig<S>, tail_lines: u32) -> anyhow::Result<()> {
     use tokio::io::AsyncBufReadExt;
 
     let remote_dir = &config.remote_dir;
     let log_file = &config.log_file;
     let backend = &config.backend;
 
-    println!("==> Streaming logs from {} VMs (Ctrl+C to stop)...\n", config.vms.len());
+    println!(
+        "==> Streaming logs from {} VMs (Ctrl+C to stop)...\n",
+        config.vms.len()
+    );
 
     let colors = [
-        "\x1b[36m", "\x1b[33m", "\x1b[32m", "\x1b[35m",
-        "\x1b[34m", "\x1b[31m", "\x1b[37m",
+        "\x1b[36m", "\x1b[33m", "\x1b[32m", "\x1b[35m", "\x1b[34m", "\x1b[31m", "\x1b[37m",
     ];
     let reset = "\x1b[0m";
 
