@@ -33,5 +33,12 @@
       };
     in {
       packages.default = cluster-ctl;
+
+      devShells.default = pkgs.mkShell {
+        buildInputs = [
+          toolchain
+          pkgs.cargo-outdated
+        ];
+      };
     });
 }
