@@ -8,7 +8,11 @@ pub async fn kill_games(backend: &Backend, vms: &[VmDef], binary_name: &str) {
         let backend = backend.clone();
         let binary_name = binary_name.to_owned();
         async move {
-            backend.run_cmd(&vm.ip, &format!("pkill -x {binary_name} 2>/dev/null || true"))
+            backend
+                .run_cmd(
+                    &vm.ip,
+                    &format!("pkill -x {binary_name} 2>/dev/null || true"),
+                )
                 .await;
         }
     })

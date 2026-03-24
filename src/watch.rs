@@ -2,14 +2,14 @@ use std::io;
 use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::execute;
+use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
+use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Layout};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, Row, Table, Paragraph};
-use ratatui::Terminal;
+use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
 use crate::config::ClusterConfig;
 use crate::status::poll_vm_statuses;
@@ -39,7 +39,8 @@ async fn run_loop<S>(
     let backend = &config.backend;
 
     loop {
-        let statuses = poll_vm_statuses(&config.vms, backend, &config.state_dir, &config.binary_name).await;
+        let statuses =
+            poll_vm_statuses(&config.vms, backend, &config.state_dir, &config.binary_name).await;
         let last_refresh = chrono::Local::now().format("%H:%M:%S").to_string();
 
         let running = statuses.iter().filter(|s| s.vm_running).count();
@@ -61,11 +62,20 @@ async fn run_loop<S>(
             .split(f.area());
 
             let header = Paragraph::new(Line::from(vec![
-                Span::styled(" cluster-ctl watch ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    " cluster-ctl watch ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" │ "),
                 Span::raw(&message),
             ]))
-            .block(Block::default().borders(Borders::ALL).title(" Cluster Dashboard "));
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Cluster Dashboard "),
+            );
             f.render_widget(header, chunks[0]);
 
             let header_row = Row::new(vec![
@@ -81,8 +91,8 @@ async fn run_loop<S>(
                 .iter()
                 .map(|s| {
                     Row::new(vec![
-                        Cell::from(s.name.as_str()),
-                        Cell::from(s.ip.as_str()),
+                        Cell::from(&*s.name),
+                        Cell::from(&*s.ip),
                         status_cell(s.vm_running),
                         status_cell(s.ssh_ok),
                         status_cell(s.steam_running),
@@ -110,9 +120,17 @@ async fn run_loop<S>(
                 Span::raw(" Last refresh: "),
                 Span::styled(&last_refresh, Style::default().fg(Color::Yellow)),
                 Span::raw(&refresh_info),
-                Span::styled("q", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "q",
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" quit  "),
-                Span::styled("r", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "r",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::raw(" refresh"),
             ]))
             .block(Block::default().borders(Borders::ALL));
@@ -130,7 +148,9 @@ async fn run_loop<S>(
                 if let Event::Key(key) = event::read()? {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(());
+                        }
                         KeyCode::Char('r') => break,
                         _ => {}
                     }

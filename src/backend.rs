@@ -7,6 +7,9 @@ use crate::ssh::SshClient;
 use crate::state;
 
 /// Backend-agnostic command output.
+///
+/// Returned by `Backend::run_cmd` and `Backend::run_cmd_timeout`. Check `success`
+/// before trusting `stdout`; on failure, `stderr` contains the error details.
 #[derive(Debug)]
 pub struct CmdOutput {
     pub stdout: String,
@@ -15,6 +18,9 @@ pub struct CmdOutput {
 }
 
 /// Execution backend for cluster instances.
+///
+/// All VM operations (commands, file uploads, lifecycle) are dispatched through
+/// this enum. Each variant wraps a backend-specific implementation.
 #[derive(Debug, Clone)]
 pub enum Backend {
     MicroVm(MicroVmBackend),
@@ -47,7 +53,9 @@ pub struct LocalBackend {
 
 impl MicroVmBackend {
     pub fn new(ssh_key: &Path, user: &str) -> Self {
-        Self { ssh: SshClient::new(ssh_key, user) }
+        Self {
+            ssh: SshClient::new(ssh_key, user),
+        }
     }
 }
 
@@ -76,7 +84,11 @@ impl Backend {
         match self {
             Self::MicroVm(b) => {
                 let out = b.ssh.run(ip, cmd).await;
-                CmdOutput { stdout: out.stdout, stderr: out.stderr, success: out.success }
+                CmdOutput {
+                    stdout: out.stdout,
+                    stderr: out.stderr,
+                    success: out.success,
+                }
             }
             Self::Docker(b) => b.docker_exec(ip, cmd).await,
             Self::Local(b) => b.local_exec(cmd).await,
@@ -88,28 +100,28 @@ impl Backend {
         match self {
             Self::MicroVm(b) => {
                 let out = b.ssh.run_with_timeout(ip, cmd, timeout).await;
-                CmdOutput { stdout: out.stdout, stderr: out.stderr, success: out.success }
-            }
-            Self::Docker(b) => {
-                match tokio::time::timeout(timeout, b.docker_exec(ip, cmd)).await {
-                    Ok(output) => output,
-                    Err(_) => CmdOutput {
-                        stdout: String::new(),
-                        stderr: "Command timed out".into(),
-                        success: false,
-                    },
+                CmdOutput {
+                    stdout: out.stdout,
+                    stderr: out.stderr,
+                    success: out.success,
                 }
             }
-            Self::Local(b) => {
-                match tokio::time::timeout(timeout, b.local_exec(cmd)).await {
-                    Ok(output) => output,
-                    Err(_) => CmdOutput {
-                        stdout: String::new(),
-                        stderr: "Command timed out".into(),
-                        success: false,
-                    },
-                }
-            }
+            Self::Docker(b) => match tokio::time::timeout(timeout, b.docker_exec(ip, cmd)).await {
+                Ok(output) => output,
+                Err(_) => CmdOutput {
+                    stdout: String::new(),
+                    stderr: "Command timed out".into(),
+                    success: false,
+                },
+            },
+            Self::Local(b) => match tokio::time::timeout(timeout, b.local_exec(cmd)).await {
+                Ok(output) => output,
+                Err(_) => CmdOutput {
+                    stdout: String::new(),
+                    stderr: "Command timed out".into(),
+                    success: false,
+                },
+            },
         }
     }
 
@@ -131,24 +143,17 @@ impl Backend {
                     .stderr(Stdio::null())
                     .spawn()
             }
-            Self::Local(b) => {
-                tokio::process::Command::new("sh")
-                    .args(["-c", cmd])
-                    .current_dir(&b.work_dir)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .spawn()
-            }
+            Self::Local(b) => tokio::process::Command::new("sh")
+                .args(["-c", cmd])
+                .current_dir(&b.work_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn(),
         }
     }
 
     /// Upload files to a remote instance.
-    pub async fn upload(
-        &self,
-        sources: &[&Path],
-        ip: &str,
-        dest: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn upload(&self, sources: &[&Path], ip: &str, dest: &str) -> anyhow::Result<()> {
         match self {
             Self::MicroVm(b) => b.ssh.rsync(sources, ip, dest).await,
             Self::Docker(_) => docker_cp_to(sources, ip, dest).await,
@@ -178,11 +183,16 @@ impl Backend {
         match self {
             Self::MicroVm(b) => b.ssh.wait_ready(ip, timeout_secs).await,
             Self::Docker(_) => {
-                let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs as u64);
+                let deadline =
+                    tokio::time::Instant::now() + Duration::from_secs(timeout_secs as u64);
                 let mut delay = Duration::from_millis(500);
                 loop {
-                    if self.is_reachable(ip).await { return true; }
-                    if tokio::time::Instant::now() >= deadline { return false; }
+                    if self.is_reachable(ip).await {
+                        return true;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return false;
+                    }
                     let remaining = deadline - tokio::time::Instant::now();
                     tokio::time::sleep(delay.min(remaining)).await;
                     delay = (delay * 2).min(Duration::from_secs(4));
@@ -213,43 +223,6 @@ impl Backend {
             Self::Docker(_) => docker_stop(vm),
             Self::Local(_) => {} // no-op
         }
-    }
-
-    /// Check if an instance is running.
-    #[allow(dead_code)]
-    pub fn is_instance_running<S>(&self, config: &ClusterConfig<S>, vm: &VmDef) -> bool {
-        match self {
-            Self::MicroVm(_) => {
-                state::read_pid(&config.state_dir, &vm.name).is_some_and(state::is_pid_alive)
-            }
-            Self::Docker(_) => {
-                std::process::Command::new("docker")
-                    .args(["inspect", "-f", "{{.State.Running}}", &vm.name.0])
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::null())
-                    .output()
-                    .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true")
-            }
-            Self::Local(_) => true,
-        }
-    }
-
-    /// Whether this backend supports network emulation (tc/netem on TAP devices).
-    #[allow(dead_code)]
-    pub fn supports_netem(&self) -> bool {
-        matches!(self, Self::MicroVm(_))
-    }
-
-    /// Whether this backend supports Steam client operations.
-    #[allow(dead_code)]
-    pub fn supports_steam(&self) -> bool {
-        matches!(self, Self::MicroVm(_) | Self::Docker(_))
-    }
-
-    /// Whether this backend supports screenshot capture.
-    #[allow(dead_code)]
-    pub fn supports_screenshots(&self) -> bool {
-        matches!(self, Self::MicroVm(_))
     }
 }
 
@@ -352,7 +325,11 @@ fn docker_start(
     // Write container ID as "pid" for state tracking
     let container_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
     state::write_pid(&config.state_dir, &vm.name, 0)?; // placeholder PID
-    eprintln!("  {} container started: {}...", vm.name, &container_id[..12.min(container_id.len())]);
+    eprintln!(
+        "  {} container started: {}...",
+        vm.name,
+        &container_id[..12.min(container_id.len())]
+    );
     Ok(0)
 }
 
@@ -405,7 +382,10 @@ async fn docker_cp_to(sources: &[&Path], container: &str, dest: &str) -> anyhow:
             .await?;
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("docker cp {} to {container}:{dest} failed: {stderr}", src.display());
+            anyhow::bail!(
+                "docker cp {} to {container}:{dest} failed: {stderr}",
+                src.display()
+            );
         }
     }
     Ok(())

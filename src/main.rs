@@ -9,8 +9,8 @@ mod doctor;
 mod history;
 mod lease;
 mod logs;
-mod netem;
 mod net;
+mod netem;
 mod resources;
 mod run;
 mod snapshot;
@@ -31,7 +31,10 @@ use cli::{Cli, Commands};
 use config::{BackendKind, ClusterConfig, detect_project_root};
 
 /// Require a runners_dir for the microvm backend, or return a dummy path for others.
-fn require_runners_dir(runners_dir: Option<PathBuf>, backend_kind: BackendKind) -> anyhow::Result<PathBuf> {
+fn require_runners_dir(
+    runners_dir: Option<PathBuf>,
+    backend_kind: BackendKind,
+) -> anyhow::Result<PathBuf> {
     match runners_dir {
         Some(p) => Ok(p),
         None if backend_kind == BackendKind::Microvm => {
@@ -46,12 +49,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Commands that don't need project root or config
-    match &cli.command {
-        Commands::Completions { shell } => {
-            cli::print_completions(*shell);
-            return Ok(());
-        }
-        _ => {}
+    if let Commands::Completions { shell } = &cli.command {
+        cli::print_completions(*shell);
+        return Ok(());
     }
 
     let project_root = match &cli.project_root {
@@ -70,9 +70,11 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let vm_count = cli.vm_count
+    let vm_count = cli
+        .vm_count
         .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
-    let mut config = ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref(), cli.backend);
+    let mut config =
+        ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref(), cli.backend);
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
@@ -189,12 +191,18 @@ async fn main() -> anyhow::Result<()> {
             state::remove_pid(&state_dir, "daemon");
             drop(result.leases);
         }
-        Commands::Restart { target, runners_dir } => {
+        Commands::Restart {
+            target,
+            runners_dir,
+        } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
             let validated = config.validate_or_skip_bridge()?;
             vm::restart(&validated, target.as_deref(), &runners_dir).await?;
         }
-        Commands::SteamCheck { target, runners_dir } => {
+        Commands::SteamCheck {
+            target,
+            runners_dir,
+        } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
             let validated = config.validate_or_skip_bridge()?;
             steam::check(&validated, target.as_deref(), &runners_dir).await?;
@@ -206,7 +214,14 @@ async fn main() -> anyhow::Result<()> {
         } => {
             let login_runners_dir = require_runners_dir(login_runners_dir, config.backend_kind)?;
             let validated = config.validate_or_skip_bridge()?;
-            steam::login(&validated, target.as_deref(), continue_from, &login_runners_dir, creds.as_ref()).await?;
+            steam::login(
+                &validated,
+                target.as_deref(),
+                continue_from,
+                &login_runners_dir,
+                creds.as_ref(),
+            )
+            .await?;
         }
 
         // Commands that work on any config state
@@ -214,7 +229,9 @@ async fn main() -> anyhow::Result<()> {
         Commands::Down => vm::down(&config),
         Commands::NetUp { nft } => net::up(&config, &nft)?,
         Commands::NetDown { nft } => net::down(&config, &nft)?,
-        Commands::Deploy { no_build, verify } => deploy::run(&config, &project_root, no_build, verify).await?,
+        Commands::Deploy { no_build, verify } => {
+            deploy::run(&config, &project_root, no_build, verify).await?
+        }
         Commands::StopGame { kill_steam } => run::stop_game(&config, kill_steam).await?,
         Commands::Logs { target, output, follow, lines, head, pattern } => {
             if follow {
@@ -272,7 +289,13 @@ async fn main() -> anyhow::Result<()> {
 
         // New commands
         Commands::Doctor { fix } => doctor::run(&config, fix)?,
-        Commands::Netem { target, latency, jitter, loss, rate } => {
+        Commands::Netem {
+            target,
+            latency,
+            jitter,
+            loss,
+            rate,
+        } => {
             println!("==> Applying network emulation...");
             netem::apply(&config, &target, latency, jitter, loss, rate)?;
             println!("==> Done");

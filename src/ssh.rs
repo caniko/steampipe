@@ -34,11 +34,16 @@ impl SshClient {
         let mut args = vec![
             "-i".into(),
             self.key.to_string_lossy().into_owned(),
-            "-o".into(), "IdentitiesOnly=yes".into(),
-            "-o".into(), "ConnectTimeout=2".into(),
-            "-o".into(), "StrictHostKeyChecking=no".into(),
-            "-o".into(), "UserKnownHostsFile=/dev/null".into(),
-            "-o".into(), "LogLevel=ERROR".into(),
+            "-o".into(),
+            "IdentitiesOnly=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=2".into(),
+            "-o".into(),
+            "StrictHostKeyChecking=no".into(),
+            "-o".into(),
+            "UserKnownHostsFile=/dev/null".into(),
+            "-o".into(),
+            "LogLevel=ERROR".into(),
         ];
         for opt in extra_opts {
             args.push((*opt).into());
@@ -126,23 +131,13 @@ impl SshClient {
     }
 
     /// rsync files to a remote destination.
-    pub async fn rsync(
-        &self,
-        sources: &[&Path],
-        ip: &str,
-        dest: &str,
-    ) -> anyhow::Result<()> {
+    pub async fn rsync(&self, sources: &[&Path], ip: &str, dest: &str) -> anyhow::Result<()> {
         let rsh = format!(
             "ssh -i {} -o IdentitiesOnly=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR",
             self.key.display()
         );
 
-        let mut args: Vec<String> = vec![
-            "-az".into(),
-            "--delete".into(),
-            "-e".into(),
-            rsh,
-        ];
+        let mut args: Vec<String> = vec!["-az".into(), "--delete".into(), "-e".into(), rsh];
         for src in sources {
             args.push(src.to_string_lossy().into_owned());
         }

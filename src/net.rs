@@ -36,7 +36,10 @@ fn microvm_net_up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()>
 
     // Create bridge
     run_cmd("ip", &["link", "add", bridge, "type", "bridge"])?;
-    run_cmd("ip", &["addr", "add", &format!("{host_ip}/{prefix}"), "dev", bridge])?;
+    run_cmd(
+        "ip",
+        &["addr", "add", &format!("{host_ip}/{prefix}"), "dev", bridge],
+    )?;
     run_cmd("ip", &["link", "set", bridge, "up"])?;
     println!("  Bridge {bridge} created ({host_ip}/{prefix})");
 
@@ -66,26 +69,58 @@ fn microvm_net_up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()>
 
     // nftables rules
     let subnet = format!("{}.0/{}", config.subnet, prefix);
-    run_cmd(nft, &[
-        "add", "table", "ip", "cluster",
-    ])?;
-    run_cmd(nft, &[
-        "add", "chain", "ip", "cluster", "nat_post",
-        "{ type nat hook postrouting priority 100 ; }",
-    ])?;
-    run_cmd(nft, &[
-        "add", "rule", "ip", "cluster", "nat_post",
-        "ip", "saddr", &subnet, &format!("oifname \"{default_if}\""), "masquerade",
-    ])?;
+    run_cmd(nft, &["add", "table", "ip", "cluster"])?;
+    run_cmd(
+        nft,
+        &[
+            "add",
+            "chain",
+            "ip",
+            "cluster",
+            "nat_post",
+            "{ type nat hook postrouting priority 100 ; }",
+        ],
+    )?;
+    run_cmd(
+        nft,
+        &[
+            "add",
+            "rule",
+            "ip",
+            "cluster",
+            "nat_post",
+            "ip",
+            "saddr",
+            &subnet,
+            &format!("oifname \"{default_if}\""),
+            "masquerade",
+        ],
+    )?;
     // Allow forwarding through NixOS firewall
-    run_cmd(nft, &[
-        "add", "rule", "ip", "nixos-fw", "forward",
-        &format!("iifname \"{bridge}\""), "accept",
-    ])?;
-    run_cmd(nft, &[
-        "add", "rule", "ip", "nixos-fw", "forward",
-        &format!("oifname \"{bridge}\""), "accept",
-    ])?;
+    run_cmd(
+        nft,
+        &[
+            "add",
+            "rule",
+            "ip",
+            "nixos-fw",
+            "forward",
+            &format!("iifname \"{bridge}\""),
+            "accept",
+        ],
+    )?;
+    run_cmd(
+        nft,
+        &[
+            "add",
+            "rule",
+            "ip",
+            "nixos-fw",
+            "forward",
+            &format!("oifname \"{bridge}\""),
+            "accept",
+        ],
+    )?;
     println!("  NAT + forwarding rules added (via {default_if})");
 
     println!("==> Network ready");
@@ -133,7 +168,9 @@ fn docker_net_up<S>(config: &ClusterConfig<S>, network: &str) -> anyhow::Result<
         .status()?;
 
     if !status.success() {
-        anyhow::bail!("docker network create failed");
+        anyhow::bail!(
+            "docker network create --subnet {subnet} {network} failed — is Docker running?"
+        );
     }
 
     println!("  Docker network {network} created ({subnet})");

@@ -9,7 +9,8 @@ pub async fn run<S>(
     output: Option<PathBuf>,
 ) -> anyhow::Result<()> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let output_dir = output.unwrap_or_else(|| project_root.join(format!("logs/cluster-{timestamp}")));
+    let output_dir =
+        output.unwrap_or_else(|| project_root.join(format!("logs/cluster-{timestamp}")));
     std::fs::create_dir_all(&output_dir)?;
 
     let backend = config.backend.clone();
@@ -26,7 +27,10 @@ pub async fn run<S>(
         async move {
             let remote_log = format!("{remote_dir}/{log_file}");
             let sources = [Path::new(&remote_log)];
-            match backend.upload(&sources, &vm.ip, dest.to_str().unwrap_or(".")).await {
+            match backend
+                .upload(&sources, &vm.ip, dest.to_str().unwrap_or("."))
+                .await
+            {
                 Ok(()) => println!("  {}: collected", vm.name),
                 Err(_) => eprintln!("  {}: no log or unreachable", vm.name),
             }
@@ -98,11 +102,13 @@ pub async fn follow<S>(
     let vms = config.resolve_targets(target, false)?;
     let backend = &config.backend;
 
-    println!("==> Streaming logs from {} VM(s) (Ctrl+C to stop)...\n", vms.len());
+    println!(
+        "==> Streaming logs from {} VM(s) (Ctrl+C to stop)...\n",
+        vms.len()
+    );
 
     let colors = [
-        "\x1b[36m", "\x1b[33m", "\x1b[32m", "\x1b[35m",
-        "\x1b[34m", "\x1b[31m", "\x1b[37m",
+        "\x1b[36m", "\x1b[33m", "\x1b[32m", "\x1b[35m", "\x1b[34m", "\x1b[31m", "\x1b[37m",
     ];
     let reset = "\x1b[0m";
 

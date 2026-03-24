@@ -4,7 +4,11 @@ use crate::backend::Backend;
 use crate::config::{ClusterConfig, VmDef, par_each_vm};
 
 /// Capture a screenshot from an instance using grim (Wayland screenshot tool).
-pub async fn screenshot_vm(backend: &Backend, vm: &VmDef, output_dir: &Path) -> anyhow::Result<PathBuf> {
+pub async fn screenshot_vm(
+    backend: &Backend,
+    vm: &VmDef,
+    output_dir: &Path,
+) -> anyhow::Result<PathBuf> {
     let remote_path = "/tmp/screenshot.png";
     let cmd = format!(
         "export XDG_RUNTIME_DIR=/tmp/runtime-$(whoami); \
@@ -19,16 +23,15 @@ pub async fn screenshot_vm(backend: &Backend, vm: &VmDef, output_dir: &Path) -> 
     // Download via upload (rsync reverse direction)
     let local_path = output_dir.join(format!("{}.png", vm.name));
     let sources = [Path::new(remote_path)];
-    backend.upload(&sources, &vm.ip, local_path.to_str().unwrap_or(".")).await?;
+    backend
+        .upload(&sources, &vm.ip, local_path.to_str().unwrap_or("."))
+        .await?;
 
     Ok(local_path)
 }
 
 /// Capture screenshots from all instances in parallel.
-pub async fn screenshot_all<S>(
-    config: &ClusterConfig<S>,
-    output_dir: &Path,
-) -> anyhow::Result<()> {
+pub async fn screenshot_all<S>(config: &ClusterConfig<S>, output_dir: &Path) -> anyhow::Result<()> {
     std::fs::create_dir_all(output_dir)?;
     let backend = config.backend.clone();
 
@@ -57,11 +60,7 @@ pub async fn screenshot_all<S>(
 }
 
 /// Capture screenshots on test failure. Called from test.rs.
-pub async fn capture_on_failure<S>(
-    config: &ClusterConfig<S>,
-    output_dir: &Path,
-    run_num: u32,
-) {
+pub async fn capture_on_failure<S>(config: &ClusterConfig<S>, output_dir: &Path, run_num: u32) {
     let screenshot_dir = output_dir.join(format!("screenshots/run-{run_num}"));
     if let Err(e) = screenshot_all(config, &screenshot_dir).await {
         eprintln!("  Screenshot capture failed: {e}");

@@ -101,8 +101,14 @@ pub fn show(state_dir: &Path, last_n: Option<usize>) -> anyhow::Result<()> {
         let result_str = if r.failed == 0 { "PASS" } else { "FAIL" };
         println!(
             "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<10}",
-            r.timestamp, r.network, r.players, r.vm_count,
-            r.passed, r.failed, r.timed_out, result_str,
+            r.timestamp,
+            r.network,
+            r.players,
+            r.vm_count,
+            r.passed,
+            r.failed,
+            r.timed_out,
+            result_str,
         );
     }
 
@@ -115,17 +121,19 @@ pub fn show(state_dir: &Path, last_n: Option<usize>) -> anyhow::Result<()> {
     println!();
     println!(
         "  {sessions} session(s), {total_runs} run(s): {total_passed} passed, {total_failed} failed ({:.1}% pass rate)",
-        if total_runs > 0 { total_passed as f64 / total_runs as f64 * 100.0 } else { 0.0 }
+        if total_runs > 0 {
+            total_passed as f64 / total_runs as f64 * 100.0
+        } else {
+            0.0
+        }
     );
 
     // Failure code breakdown
     let mut code_counts = std::collections::HashMap::new();
     for r in results {
-        for code in &r.exit_codes {
-            if let Some(c) = code {
-                if *c != 0 {
-                    *code_counts.entry(*c).or_insert(0u32) += 1;
-                }
+        for c in r.exit_codes.iter().flatten() {
+            if *c != 0 {
+                *code_counts.entry(*c).or_insert(0u32) += 1;
             }
         }
     }
@@ -134,7 +142,10 @@ pub fn show(state_dir: &Path, last_n: Option<usize>) -> anyhow::Result<()> {
         let mut codes: Vec<_> = code_counts.into_iter().collect();
         codes.sort_by(|a, b| b.1.cmp(&a.1));
         for (code, count) in codes {
-            println!("    exit {code} ({}): {count}x", crate::test::exit_code_label(code));
+            println!(
+                "    exit {code} ({}): {count}x",
+                crate::test::exit_code_label(code)
+            );
         }
     }
 

@@ -45,7 +45,7 @@ pub async fn ensure_steam(backend: &Backend, ip: &str) -> anyhow::Result<()> {
     );
     let result = backend.run_cmd(ip, &cmd).await;
     if !result.success || !result.stdout.contains("STEAM_READY") {
-        anyhow::bail!("Steam failed: {}", result.stderr);
+        anyhow::bail!("Steam failed on {ip}: {}", result.stderr);
     }
     Ok(())
 }
@@ -232,7 +232,9 @@ async fn login_single_vm(
     let config_for_cleanup = config.clone();
     let vm_for_cleanup = vm.clone();
     let cleanup = move || {
-        config_for_cleanup.backend.stop_instance(&config_for_cleanup, &vm_for_cleanup);
+        config_for_cleanup
+            .backend
+            .stop_instance(&config_for_cleanup, &vm_for_cleanup);
     };
 
     print!("  Waiting for SSH... ");
@@ -252,11 +254,12 @@ async fn login_single_vm(
     }
 
     println!("  Shutting down Steam and VM...");
-    backend.run_cmd(
-        &vm.ip,
-        "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
-    )
-    .await;
+    backend
+        .run_cmd(
+            &vm.ip,
+            "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
+        )
+        .await;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     backend.stop_instance(config, vm);
     println!("  {} done.", vm.name);
@@ -314,7 +317,10 @@ sleep 10
 echo KEY_SUBMITTED"#,
         );
         let key_result = backend.run_cmd(&vm.ip, &activate_cmd).await;
-        println!("  Game key activation submitted ({})", key_result.stdout.trim());
+        println!(
+            "  Game key activation submitted ({})",
+            key_result.stdout.trim()
+        );
     }
 
     Ok(())
@@ -323,9 +329,10 @@ echo KEY_SUBMITTED"#,
 /// Interactive VNC-based login (original flow).
 async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> {
     println!("  Starting sway + wayvnc + Steam...");
-    backend.run_cmd(
-        &vm.ip,
-        r#"
+    backend
+        .run_cmd(
+            &vm.ip,
+            r#"
         export XDG_RUNTIME_DIR=/tmp/runtime-chessbender
         mkdir -p $XDG_RUNTIME_DIR
         if ! pgrep -x sway >/dev/null; then
@@ -342,8 +349,8 @@ async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> 
             steam -cef-disable-gpu >/dev/null 2>&1 &
         fi
         "#,
-    )
-    .await;
+        )
+        .await;
 
     println!();
     println!("  VNC into:  {}:5900", vm.ip);
@@ -385,4 +392,24 @@ async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> 
 /// Escape single quotes for safe shell interpolation inside single-quoted strings.
 fn shell_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_escape_no_quotes() {
+        assert_eq!(shell_escape("password123"), "password123");
+    }
+
+    #[test]
+    fn shell_escape_single_quotes() {
+        assert_eq!(shell_escape("it's"), "it'\\''s");
+    }
+
+    #[test]
+    fn shell_escape_empty() {
+        assert_eq!(shell_escape(""), "");
+    }
 }

@@ -1,17 +1,31 @@
 use std::path::{Path, PathBuf};
 
 use crate::config::ClusterConfig;
-use crate::state::{self};
+use crate::state;
 
 fn snapshots_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("snapshots")
 }
 
+/// Validate that a snapshot name is safe (no path separators or special names).
+fn validate_snapshot_name(name: &str) -> anyhow::Result<()> {
+    if name.is_empty() {
+        anyhow::bail!("snapshot name cannot be empty");
+    }
+    if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+        anyhow::bail!("snapshot name contains invalid characters: {name:?}");
+    }
+    Ok(())
+}
+
 /// Save a snapshot of VM state directories.
 pub fn save<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
+    validate_snapshot_name(name)?;
     let snap_dir = snapshots_dir(&config.state_dir).join(name);
     if snap_dir.exists() {
-        anyhow::bail!("Snapshot '{name}' already exists. Delete it first or choose a different name.");
+        anyhow::bail!(
+            "Snapshot '{name}' already exists. Delete it first or choose a different name."
+        );
     }
     std::fs::create_dir_all(&snap_dir)?;
 
@@ -21,7 +35,10 @@ pub fn save<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
         // Check if VM is running — warn user
         if let Some(pid) = state::read_pid(&config.state_dir, &vm.name) {
             if state::is_pid_alive(pid) {
-                eprintln!("  WARNING: {} is running (PID {pid}). Snapshot may be inconsistent.", vm.name);
+                eprintln!(
+                    "  WARNING: {} is running (PID {pid}). Snapshot may be inconsistent.",
+                    vm.name
+                );
             }
         }
 
@@ -53,6 +70,7 @@ pub fn save<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
 
 /// Restore a snapshot.
 pub fn restore<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
+    validate_snapshot_name(name)?;
     let snap_dir = snapshots_dir(&config.state_dir).join(name);
     if !snap_dir.exists() {
         anyhow::bail!("Snapshot '{name}' not found");
@@ -62,7 +80,10 @@ pub fn restore<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
     for vm in &config.vms {
         if let Some(pid) = state::read_pid(&config.state_dir, &vm.name) {
             if state::is_pid_alive(pid) {
-                anyhow::bail!("{} is still running (PID {pid}). Stop all VMs before restoring.", vm.name);
+                anyhow::bail!(
+                    "{} is still running (PID {pid}). Stop all VMs before restoring.",
+                    vm.name
+                );
             }
         }
     }
@@ -133,6 +154,7 @@ pub fn list<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
 
 /// Delete a snapshot.
 pub fn delete<S>(config: &ClusterConfig<S>, name: &str) -> anyhow::Result<()> {
+    validate_snapshot_name(name)?;
     let snap_dir = snapshots_dir(&config.state_dir).join(name);
     if !snap_dir.exists() {
         anyhow::bail!("Snapshot '{name}' not found");
@@ -168,4 +190,29 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_snapshot_name_rejects_empty() {
+        assert!(validate_snapshot_name("").is_err());
+    }
+
+    #[test]
+    fn validate_snapshot_name_rejects_path_traversal() {
+        assert!(validate_snapshot_name("..").is_err());
+        assert!(validate_snapshot_name("../etc").is_err());
+        assert!(validate_snapshot_name("foo/bar").is_err());
+        assert!(validate_snapshot_name("foo\\bar").is_err());
+    }
+
+    #[test]
+    fn validate_snapshot_name_accepts_valid() {
+        assert!(validate_snapshot_name("my-snapshot").is_ok());
+        assert!(validate_snapshot_name("before-update").is_ok());
+        assert!(validate_snapshot_name("v1.0").is_ok());
+    }
 }

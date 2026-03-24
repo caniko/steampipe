@@ -14,7 +14,10 @@ struct AccountInfo {
 pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
     let backend = config.backend.clone();
 
-    println!("==> Checking Steam accounts on {} VMs...\n", config.vms.len());
+    println!(
+        "==> Checking Steam accounts on {} VMs...\n",
+        config.vms.len()
+    );
 
     let mut results = par_each_vm(&config.vms, |vm| {
         let backend = backend.clone();
@@ -45,7 +48,10 @@ pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
         let login_str = if info.logged_in { "OK" } else { "─" };
         let persona = info.persona.as_deref().unwrap_or("─");
         let steam_id = info.steam_id.as_deref().unwrap_or("─");
-        println!("{:<8} {:<6} {:<20} {:<20}", info.vm_name, login_str, persona, steam_id);
+        println!(
+            "{:<8} {:<6} {:<20} {:<20}",
+            info.vm_name, login_str, persona, steam_id
+        );
         if info.logged_in {
             logged_in += 1;
         }
@@ -76,7 +82,10 @@ pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
     }
     if !dupes.is_empty() {
         println!();
-        println!("  WARNING: Duplicate accounts detected: {}", dupes.join(", "));
+        println!(
+            "  WARNING: Duplicate accounts detected: {}",
+            dupes.join(", ")
+        );
         println!("  Steam may have issues with multiple sessions on the same account");
     }
 
@@ -100,8 +109,14 @@ async fn check_account(backend: &Backend, ip: &str) -> (Option<String>, Option<S
 
     if let Some(rest) = output.strip_prefix("LOGGED_IN:") {
         let parts: Vec<&str> = rest.splitn(2, ':').collect();
-        let persona = parts.first().filter(|s| !s.is_empty() && *s != &"unknown").map(|s| s.to_string());
-        let steam_id = parts.get(1).filter(|s| !s.is_empty() && *s != &"unknown").map(|s| s.to_string());
+        let persona = parts
+            .first()
+            .filter(|s| !s.is_empty() && **s != "unknown")
+            .map(|s| s.to_string());
+        let steam_id = parts
+            .get(1)
+            .filter(|s| !s.is_empty() && **s != "unknown")
+            .map(|s| s.to_string());
         (persona, steam_id, true)
     } else {
         (None, None, false)

@@ -98,9 +98,17 @@ pub fn run<S>(config: &ClusterConfig<S>, fix: bool) -> anyhow::Result<()> {
 
 fn check_state_dir(state_dir: &Path) -> Check {
     if state_dir.exists() {
-        Check { name: "state directory", status: CheckStatus::Ok, detail: format!("{}", state_dir.display()) }
+        Check {
+            name: "state directory",
+            status: CheckStatus::Ok,
+            detail: format!("{}", state_dir.display()),
+        }
     } else {
-        Check { name: "state directory", status: CheckStatus::Warning, detail: format!("missing: {}", state_dir.display()) }
+        Check {
+            name: "state directory",
+            status: CheckStatus::Warning,
+            detail: format!("missing: {}", state_dir.display()),
+        }
     }
 }
 
@@ -112,17 +120,29 @@ fn check_stale_pid<S>(config: &ClusterConfig<S>, vm_name: &str, fix: bool) -> Ch
         Some(pid) if !state::is_pid_alive(pid) => {
             if fix {
                 state::remove_pid(&config.state_dir, vm_name);
-                Check { name, status: CheckStatus::Fixed, detail: format!("removed stale PID file (was {pid})") }
+                Check {
+                    name,
+                    status: CheckStatus::Fixed,
+                    detail: format!("removed stale PID file (was {pid})"),
+                }
             } else {
-                Check { name, status: CheckStatus::Warning, detail: format!("stale PID {pid} (process dead)") }
+                Check {
+                    name,
+                    status: CheckStatus::Warning,
+                    detail: format!("stale PID {pid} (process dead)"),
+                }
             }
         }
-        Some(pid) => {
-            Check { name, status: CheckStatus::Ok, detail: format!("alive (PID {pid})") }
-        }
-        None => {
-            Check { name, status: CheckStatus::Ok, detail: "no PID file".into() }
-        }
+        Some(pid) => Check {
+            name,
+            status: CheckStatus::Ok,
+            detail: format!("alive (PID {pid})"),
+        },
+        None => Check {
+            name,
+            status: CheckStatus::Ok,
+            detail: "no PID file".into(),
+        },
     }
 }
 
@@ -140,12 +160,24 @@ fn check_orphaned_process(vm_name: &str, fix: bool) -> Check {
                 let _ = std::process::Command::new("pkill")
                     .args(["-f", &pattern])
                     .status();
-                Check { name, status: CheckStatus::Fixed, detail: format!("killed orphaned process(es): {pids}") }
+                Check {
+                    name,
+                    status: CheckStatus::Fixed,
+                    detail: format!("killed orphaned process(es): {pids}"),
+                }
             } else {
-                Check { name, status: CheckStatus::Warning, detail: format!("orphaned process(es): {pids}") }
+                Check {
+                    name,
+                    status: CheckStatus::Warning,
+                    detail: format!("orphaned process(es): {pids}"),
+                }
             }
         }
-        _ => Check { name, status: CheckStatus::Ok, detail: "no orphans".into() },
+        _ => Check {
+            name,
+            status: CheckStatus::Ok,
+            detail: "no orphans".into(),
+        },
     }
 }
 
@@ -154,7 +186,11 @@ fn check_stale_sockets(state_dir: &Path, vm_name: &str, fix: bool) -> Check {
     let name: &'static str = name_str.leak();
     let vm_dir = state_dir.join(vm_name);
     if !vm_dir.exists() {
-        return Check { name, status: CheckStatus::Ok, detail: "no state dir".into() };
+        return Check {
+            name,
+            status: CheckStatus::Ok,
+            detail: "no state dir".into(),
+        };
     }
 
     let mut stale = Vec::new();
@@ -170,14 +206,26 @@ fn check_stale_sockets(state_dir: &Path, vm_name: &str, fix: bool) -> Check {
     }
 
     if stale.is_empty() {
-        Check { name, status: CheckStatus::Ok, detail: "clean".into() }
+        Check {
+            name,
+            status: CheckStatus::Ok,
+            detail: "clean".into(),
+        }
     } else if fix {
         for s in &stale {
             let _ = std::fs::remove_file(vm_dir.join(s));
         }
-        Check { name, status: CheckStatus::Fixed, detail: format!("removed {} socket file(s)", stale.len()) }
+        Check {
+            name,
+            status: CheckStatus::Fixed,
+            detail: format!("removed {} socket file(s)", stale.len()),
+        }
     } else {
-        Check { name, status: CheckStatus::Warning, detail: format!("{} stale socket file(s)", stale.len()) }
+        Check {
+            name,
+            status: CheckStatus::Warning,
+            detail: format!("{} stale socket file(s)", stale.len()),
+        }
     }
 }
 
@@ -189,9 +237,17 @@ fn check_bridge(bridge: &str) -> Check {
         .status()
         .is_ok_and(|s| s.success());
     if ok {
-        Check { name: "bridge", status: CheckStatus::Ok, detail: format!("{bridge} exists") }
+        Check {
+            name: "bridge",
+            status: CheckStatus::Ok,
+            detail: format!("{bridge} exists"),
+        }
     } else {
-        Check { name: "bridge", status: CheckStatus::Error, detail: format!("{bridge} not found — run `cluster-ctl net-up`") }
+        Check {
+            name: "bridge",
+            status: CheckStatus::Error,
+            detail: format!("{bridge} not found — run `cluster-ctl net-up`"),
+        }
     }
 }
 
@@ -206,17 +262,33 @@ fn check_tap_device(vm_name: &str) -> Check {
         .status()
         .is_ok_and(|s| s.success());
     if ok {
-        Check { name, status: CheckStatus::Ok, detail: format!("{tap} exists") }
+        Check {
+            name,
+            status: CheckStatus::Ok,
+            detail: format!("{tap} exists"),
+        }
     } else {
-        Check { name, status: CheckStatus::Warning, detail: format!("{tap} missing") }
+        Check {
+            name,
+            status: CheckStatus::Warning,
+            detail: format!("{tap} missing"),
+        }
     }
 }
 
 fn check_ssh_key(key: &Path) -> Check {
     if key.exists() {
-        Check { name: "ssh key", status: CheckStatus::Ok, detail: format!("{}", key.display()) }
+        Check {
+            name: "ssh key",
+            status: CheckStatus::Ok,
+            detail: format!("{}", key.display()),
+        }
     } else {
-        Check { name: "ssh key", status: CheckStatus::Error, detail: format!("not found: {}", key.display()) }
+        Check {
+            name: "ssh key",
+            status: CheckStatus::Error,
+            detail: format!("not found: {}", key.display()),
+        }
     }
 }
 
@@ -227,7 +299,15 @@ fn check_nftables() -> Check {
         .stderr(std::process::Stdio::null())
         .status();
     match output {
-        Ok(s) if s.success() => Check { name: "nftables", status: CheckStatus::Ok, detail: "cluster table exists".into() },
-        _ => Check { name: "nftables", status: CheckStatus::Warning, detail: "no cluster table (NAT may not be configured)".into() },
+        Ok(s) if s.success() => Check {
+            name: "nftables",
+            status: CheckStatus::Ok,
+            detail: "cluster table exists".into(),
+        },
+        _ => Check {
+            name: "nftables",
+            status: CheckStatus::Warning,
+            detail: "no cluster table (NAT may not be configured)".into(),
+        },
     }
 }
