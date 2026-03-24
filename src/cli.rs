@@ -156,19 +156,31 @@ pub enum Commands {
     },
 
     /// Kill game process on all VMs
-    StopGame,
+    StopGame {
+        /// Also kill Steam and Weston processes
+        #[arg(long)]
+        kill_steam: bool,
+    },
 
     /// Collect game.log from all VMs (or stream live with --follow)
     Logs {
-        /// Output directory (default: logs/cluster-<timestamp>)
+        /// Target VM: "all", "3", "vm-3" (default: all)
+        target: Option<String>,
+        /// Output directory (collect mode: save logs to files)
         #[arg(short, long)]
         output: Option<PathBuf>,
         /// Stream logs in real-time from all VMs (tail -f)
         #[arg(short, long)]
         follow: bool,
-        /// Number of tail lines to show initially when following
-        #[arg(short = 'n', long, default_value_t = 20)]
-        tail: u32,
+        /// Number of lines to show (default: 20 for --follow, 100 for stdout)
+        #[arg(short = 'n', long)]
+        lines: Option<u32>,
+        /// Read from beginning instead of end
+        #[arg(long)]
+        head: bool,
+        /// Filter output lines by regex pattern
+        #[arg(long)]
+        pattern: Option<String>,
     },
 
     /// Run end-to-end tests: deploy -> launch -> monitor -> collect logs -> report
@@ -201,17 +213,17 @@ pub enum Commands {
         #[arg(long, default_value_t = 5)]
         shutdown_timeout: u64,
 
-        /// Stop after first failure
-        #[arg(long, default_value_t = true)]
-        stop_on_failure: bool,
+        /// Don't stop after first failure
+        #[arg(long)]
+        no_stop_on_failure: bool,
 
-        /// Deploy binary + assets before testing
-        #[arg(long, default_value_t = true)]
-        deploy: bool,
+        /// Skip deployment before testing
+        #[arg(long)]
+        no_deploy: bool,
 
-        /// Build before deploying
-        #[arg(long, default_value_t = true)]
-        build: bool,
+        /// Skip cargo build before deploying
+        #[arg(long)]
+        no_build: bool,
 
         /// Regex filter for output lines
         #[arg(long)]
@@ -354,4 +366,288 @@ impl Cli {
 pub fn print_completions(shell: Shell) {
     let mut cmd = Cli::command();
     clap_complete::generate(shell, &mut cmd, "cluster-ctl", &mut std::io::stdout());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: parse a command line into Cli, prepending the binary name.
+    fn parse(args: &[&str]) -> Cli {
+        let mut full = vec!["cluster-ctl"];
+        full.extend_from_slice(args);
+        Cli::try_parse_from(full).expect("CLI parse failed")
+    }
+
+    // ── Logs command ─────────────────────────────────────────────────────
+
+    #[test]
+    fn logs_defaults() {
+        let cli = parse(&["--vm-count", "7", "logs"]);
+        match cli.command {
+            Commands::Logs { target, output, follow, lines, head, pattern } => {
+                assert!(target.is_none());
+                assert!(output.is_none());
+                assert!(!follow);
+                assert!(lines.is_none());
+                assert!(!head);
+                assert!(pattern.is_none());
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn logs_with_target() {
+        let cli = parse(&["--vm-count", "7", "logs", "vm-3"]);
+        match cli.command {
+            Commands::Logs { target, .. } => {
+                assert_eq!(target.as_deref(), Some("vm-3"));
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn logs_with_all_flags() {
+        let cli = parse(&[
+            "--vm-count", "7", "logs",
+            "--head", "--pattern", "ERROR|WARN", "-n", "50",
+            "vm-1",
+        ]);
+        match cli.command {
+            Commands::Logs { target, head, pattern, lines, follow, .. } => {
+                assert_eq!(target.as_deref(), Some("vm-1"));
+                assert!(head);
+                assert_eq!(pattern.as_deref(), Some("ERROR|WARN"));
+                assert_eq!(lines, Some(50));
+                assert!(!follow);
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn logs_follow_with_target() {
+        let cli = parse(&["--vm-count", "7", "logs", "--follow", "vm-2"]);
+        match cli.command {
+            Commands::Logs { follow, target, .. } => {
+                assert!(follow);
+                assert_eq!(target.as_deref(), Some("vm-2"));
+            }
+            _ => panic!("expected Logs command"),
+        }
+    }
+
+    // ── StopGame command ─────────────────────────────────────────────────
+
+    #[test]
+    fn stop_game_default() {
+        let cli = parse(&["--vm-count", "7", "stop-game"]);
+        match cli.command {
+            Commands::StopGame { kill_steam } => assert!(!kill_steam),
+            _ => panic!("expected StopGame"),
+        }
+    }
+
+    #[test]
+    fn stop_game_kill_steam() {
+        let cli = parse(&["--vm-count", "7", "stop-game", "--kill-steam"]);
+        match cli.command {
+            Commands::StopGame { kill_steam } => assert!(kill_steam),
+            _ => panic!("expected StopGame"),
+        }
+    }
+
+    // ── Test command boolean negation ────────────────────────────────────
+
+    #[test]
+    fn test_defaults_enable_everything() {
+        let cli = parse(&["--vm-count", "7", "test"]);
+        match cli.command {
+            Commands::Test { no_build, no_deploy, no_stop_on_failure, .. } => {
+                assert!(!no_build, "build should be enabled by default");
+                assert!(!no_deploy, "deploy should be enabled by default");
+                assert!(!no_stop_on_failure, "stop_on_failure should be enabled by default");
+            }
+            _ => panic!("expected Test command"),
+        }
+    }
+
+    #[test]
+    fn test_no_build() {
+        let cli = parse(&["--vm-count", "7", "test", "--no-build"]);
+        match cli.command {
+            Commands::Test { no_build, no_deploy, .. } => {
+                assert!(no_build);
+                assert!(!no_deploy);
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_no_deploy() {
+        let cli = parse(&["--vm-count", "7", "test", "--no-deploy"]);
+        match cli.command {
+            Commands::Test { no_deploy, no_build, .. } => {
+                assert!(no_deploy);
+                assert!(!no_build);
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_no_stop_on_failure() {
+        let cli = parse(&["--vm-count", "7", "test", "--no-stop-on-failure"]);
+        match cli.command {
+            Commands::Test { no_stop_on_failure, .. } => assert!(no_stop_on_failure),
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_all_negated() {
+        let cli = parse(&[
+            "--vm-count", "7", "test",
+            "--no-build", "--no-deploy", "--no-stop-on-failure",
+        ]);
+        match cli.command {
+            Commands::Test { no_build, no_deploy, no_stop_on_failure, .. } => {
+                assert!(no_build);
+                assert!(no_deploy);
+                assert!(no_stop_on_failure);
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_with_all_options() {
+        let cli = parse(&[
+            "--vm-count", "3", "--cluster", "ci",
+            "test",
+            "--network", "steam",
+            "--players", "4",
+            "--max-runs", "10",
+            "--timeout", "120",
+            "--shutdown-timeout", "3",
+            "--no-build",
+            "--filter-pattern", "PASS|FAIL",
+            "--capture-on-failure",
+            "--host-args=--headless",
+            "--vm-args=--auto-join",
+        ]);
+        match cli.command {
+            Commands::Test {
+                network, players, max_runs, timeout, shutdown_timeout,
+                no_build, no_deploy, no_stop_on_failure,
+                filter_pattern, capture_on_failure, host_args, vm_args, ..
+            } => {
+                assert!(matches!(network, NetworkMode::Steam));
+                assert_eq!(players, 4);
+                assert_eq!(max_runs, 10);
+                assert_eq!(timeout, 120);
+                assert_eq!(shutdown_timeout, 3);
+                assert!(no_build);
+                assert!(!no_deploy);
+                assert!(!no_stop_on_failure);
+                assert_eq!(filter_pattern.as_deref(), Some("PASS|FAIL"));
+                assert!(capture_on_failure);
+                assert_eq!(host_args.as_deref(), Some("--headless"), "host_args should pass through verbatim");
+                assert_eq!(vm_args.as_deref(), Some("--auto-join"));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    // ── Global args roundtrip ────────────────────────────────────────────
+
+    #[test]
+    fn global_args_roundtrip() {
+        let cli = parse(&["--vm-count", "3", "--cluster", "mytest", "status"]);
+        let args = cli.global_args();
+        assert!(args.contains(&"--vm-count".to_string()));
+        assert!(args.contains(&"3".to_string()));
+        assert!(args.contains(&"--cluster".to_string()));
+        assert!(args.contains(&"mytest".to_string()));
+    }
+
+    #[test]
+    fn global_args_minimal() {
+        let cli = parse(&["--vm-count", "1", "status"]);
+        let args = cli.global_args();
+        assert!(args.contains(&"--vm-count".to_string()));
+        assert!(!args.contains(&"--cluster".to_string()));
+    }
+
+    // ── Deploy ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn deploy_defaults() {
+        let cli = parse(&["--vm-count", "7", "deploy"]);
+        match cli.command {
+            Commands::Deploy { no_build, verify } => {
+                assert!(!no_build);
+                assert!(!verify);
+            }
+            _ => panic!("expected Deploy"),
+        }
+    }
+
+    #[test]
+    fn deploy_no_build_verify() {
+        let cli = parse(&["--vm-count", "7", "deploy", "--no-build", "--verify"]);
+        match cli.command {
+            Commands::Deploy { no_build, verify } => {
+                assert!(no_build);
+                assert!(verify);
+            }
+            _ => panic!("expected Deploy"),
+        }
+    }
+
+    // ── Up ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn up_detach() {
+        let cli = parse(&["--vm-count", "1", "up", "--detach", "--runners-dir", "/tmp/r"]);
+        match cli.command {
+            Commands::Up { detach, runners_dir } => {
+                assert!(detach);
+                assert!(runners_dir.is_some());
+            }
+            _ => panic!("expected Up"),
+        }
+    }
+
+    // ── Network mode ─────────────────────────────────────────────────────
+
+    #[test]
+    fn network_mode_display() {
+        assert_eq!(format!("{}", NetworkMode::Lan), "lan");
+        assert_eq!(format!("{}", NetworkMode::Steam), "steam");
+    }
+
+    #[test]
+    fn invalid_network_rejected() {
+        let args = vec!["cluster-ctl", "--vm-count", "7", "test", "--network", "bluetooth"];
+        let result = Cli::try_parse_from(args);
+        assert!(result.is_err());
+    }
+
+    // ── Edge cases ───────────────────────────────────────────────────────
+
+    #[test]
+    fn vm_count_boundary() {
+        assert_eq!(parse(&["--vm-count", "0", "status"]).vm_count, Some(0));
+        assert_eq!(parse(&["--vm-count", "255", "status"]).vm_count, Some(255));
+    }
+
+    #[test]
+    fn missing_vm_count_is_none() {
+        let cli = parse(&["status"]);
+        assert!(cli.vm_count.is_none());
+    }
 }

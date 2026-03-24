@@ -93,7 +93,7 @@ async fn main() -> anyhow::Result<()> {
 
     // For commands that operate on VMs, prefer leased VMs over the static 1..N list
     match &cli.command {
-        Commands::Deploy { .. } | Commands::Run { .. } | Commands::StopGame | Commands::Test { .. } => {
+        Commands::Deploy { .. } | Commands::Run { .. } | Commands::StopGame { .. } | Commands::Test { .. } => {
             config.vms = config.leased_vms();
         }
         _ => {}
@@ -215,12 +215,16 @@ async fn main() -> anyhow::Result<()> {
         Commands::NetUp { nft } => net::up(&config, &nft)?,
         Commands::NetDown { nft } => net::down(&config, &nft)?,
         Commands::Deploy { no_build, verify } => deploy::run(&config, &project_root, no_build, verify).await?,
-        Commands::StopGame => run::stop_game(&config).await?,
-        Commands::Logs { output, follow, tail } => {
+        Commands::StopGame { kill_steam } => run::stop_game(&config, kill_steam).await?,
+        Commands::Logs { target, output, follow, lines, head, pattern } => {
             if follow {
-                logs::follow(&config, tail).await?;
-            } else {
+                let tail_lines = lines.unwrap_or(20);
+                logs::follow(&config, tail_lines, target.as_deref()).await?;
+            } else if output.is_some() {
                 logs::run(&config, &project_root, output).await?;
+            } else {
+                let n = lines.unwrap_or(100);
+                logs::print_stdout(&config, target.as_deref(), n, head, pattern.as_deref()).await?;
             }
         }
         Commands::SteamStart { target } => {
@@ -237,9 +241,9 @@ async fn main() -> anyhow::Result<()> {
             max_runs,
             timeout,
             shutdown_timeout,
-            stop_on_failure,
-            deploy,
-            build,
+            no_stop_on_failure,
+            no_deploy,
+            no_build,
             filter_pattern,
             output_file,
             capture_on_failure,
@@ -255,9 +259,9 @@ async fn main() -> anyhow::Result<()> {
                     max_runs,
                     timeout: std::time::Duration::from_secs(timeout),
                     shutdown_timeout: std::time::Duration::from_secs(shutdown_timeout),
-                    stop_on_failure,
-                    deploy,
-                    build,
+                    stop_on_failure: !no_stop_on_failure,
+                    deploy: !no_deploy,
+                    build: !no_build,
                     filter_pattern,
                     output_file,
                     capture_on_failure,

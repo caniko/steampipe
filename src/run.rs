@@ -17,9 +17,22 @@ pub async fn kill_games(backend: &Backend, vms: &[VmDef], binary_name: &str) {
 }
 
 /// Run the `stop-game` subcommand: kill game on all instances.
-pub async fn stop_game<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
+pub async fn stop_game<S>(config: &ClusterConfig<S>, kill_steam: bool) -> anyhow::Result<()> {
     println!("==> Stopping game on all VMs...");
     kill_games(&config.backend, &config.vms, &config.binary_name).await;
+    if kill_steam {
+        println!("==> Stopping Steam and Weston...");
+        let backend = config.backend.clone();
+        par_each_vm(&config.vms, |vm| {
+            let backend = backend.clone();
+            async move {
+                backend
+                    .run_cmd(&vm.ip, "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; true")
+                    .await;
+            }
+        })
+        .await?;
+    }
     println!("==> Done");
     Ok(())
 }
