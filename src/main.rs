@@ -95,7 +95,10 @@ async fn main() -> anyhow::Result<()> {
 
     // For commands that operate on VMs, prefer leased VMs over the static 1..N list
     match &cli.command {
-        Commands::Deploy { .. } | Commands::Run { .. } | Commands::StopGame { .. } | Commands::Test { .. } => {
+        Commands::Deploy { .. }
+        | Commands::Run { .. }
+        | Commands::StopGame { .. }
+        | Commands::Test { .. } => {
             config.vms = config.leased_vms();
         }
         _ => {}
@@ -106,7 +109,10 @@ async fn main() -> anyhow::Result<()> {
 
     match cli.command {
         // Commands that require a validated bridge (or skip for non-microvm)
-        Commands::Up { runners_dir, detach } => {
+        Commands::Up {
+            runners_dir,
+            detach,
+        } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
 
             if detach {
@@ -152,7 +158,10 @@ async fn main() -> anyhow::Result<()> {
                 let validated = config.validate_or_skip_bridge()?;
                 let result = vm::up(&validated, &runners_dir).await?;
 
-                println!("==> Holding {} VM(s). Press Ctrl+C to shut down.", result.vms.len());
+                println!(
+                    "==> Holding {} VM(s). Press Ctrl+C to shut down.",
+                    result.vms.len()
+                );
                 tokio::signal::ctrl_c().await?;
 
                 println!();
@@ -169,7 +178,11 @@ async fn main() -> anyhow::Result<()> {
             // Signal readiness to parent via PID file
             state::write_pid(&state_dir, "daemon", std::process::id())?;
 
-            println!("==> Holding {} VM(s) (daemon mode, PID {})", result.vms.len(), std::process::id());
+            println!(
+                "==> Holding {} VM(s) (daemon mode, PID {})",
+                result.vms.len(),
+                std::process::id()
+            );
 
             // Block until SIGTERM or Ctrl+C
             #[cfg(unix)]
@@ -233,7 +246,14 @@ async fn main() -> anyhow::Result<()> {
             deploy::run(&config, &project_root, no_build, verify).await?
         }
         Commands::StopGame { kill_steam } => run::stop_game(&config, kill_steam).await?,
-        Commands::Logs { target, output, follow, lines, head, pattern } => {
+        Commands::Logs {
+            target,
+            output,
+            follow,
+            lines,
+            head,
+            pattern,
+        } => {
             if follow {
                 let tail_lines = lines.unwrap_or(20);
                 logs::follow(&config, tail_lines, target.as_deref()).await?;

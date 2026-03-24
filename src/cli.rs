@@ -388,7 +388,14 @@ mod tests {
     fn logs_defaults() {
         let cli = parse(&["--vm-count", "7", "logs"]);
         match cli.command {
-            Commands::Logs { target, output, follow, lines, head, pattern } => {
+            Commands::Logs {
+                target,
+                output,
+                follow,
+                lines,
+                head,
+                pattern,
+            } => {
                 assert!(target.is_none());
                 assert!(output.is_none());
                 assert!(!follow);
@@ -414,12 +421,25 @@ mod tests {
     #[test]
     fn logs_with_all_flags() {
         let cli = parse(&[
-            "--vm-count", "7", "logs",
-            "--head", "--pattern", "ERROR|WARN", "-n", "50",
+            "--vm-count",
+            "7",
+            "logs",
+            "--head",
+            "--pattern",
+            "ERROR|WARN",
+            "-n",
+            "50",
             "vm-1",
         ]);
         match cli.command {
-            Commands::Logs { target, head, pattern, lines, follow, .. } => {
+            Commands::Logs {
+                target,
+                head,
+                pattern,
+                lines,
+                follow,
+                ..
+            } => {
                 assert_eq!(target.as_deref(), Some("vm-1"));
                 assert!(head);
                 assert_eq!(pattern.as_deref(), Some("ERROR|WARN"));
@@ -468,10 +488,18 @@ mod tests {
     fn test_defaults_enable_everything() {
         let cli = parse(&["--vm-count", "7", "test"]);
         match cli.command {
-            Commands::Test { no_build, no_deploy, no_stop_on_failure, .. } => {
+            Commands::Test {
+                no_build,
+                no_deploy,
+                no_stop_on_failure,
+                ..
+            } => {
                 assert!(!no_build, "build should be enabled by default");
                 assert!(!no_deploy, "deploy should be enabled by default");
-                assert!(!no_stop_on_failure, "stop_on_failure should be enabled by default");
+                assert!(
+                    !no_stop_on_failure,
+                    "stop_on_failure should be enabled by default"
+                );
             }
             _ => panic!("expected Test command"),
         }
@@ -481,7 +509,11 @@ mod tests {
     fn test_no_build() {
         let cli = parse(&["--vm-count", "7", "test", "--no-build"]);
         match cli.command {
-            Commands::Test { no_build, no_deploy, .. } => {
+            Commands::Test {
+                no_build,
+                no_deploy,
+                ..
+            } => {
                 assert!(no_build);
                 assert!(!no_deploy);
             }
@@ -493,7 +525,11 @@ mod tests {
     fn test_no_deploy() {
         let cli = parse(&["--vm-count", "7", "test", "--no-deploy"]);
         match cli.command {
-            Commands::Test { no_deploy, no_build, .. } => {
+            Commands::Test {
+                no_deploy,
+                no_build,
+                ..
+            } => {
                 assert!(no_deploy);
                 assert!(!no_build);
             }
@@ -505,7 +541,9 @@ mod tests {
     fn test_no_stop_on_failure() {
         let cli = parse(&["--vm-count", "7", "test", "--no-stop-on-failure"]);
         match cli.command {
-            Commands::Test { no_stop_on_failure, .. } => assert!(no_stop_on_failure),
+            Commands::Test {
+                no_stop_on_failure, ..
+            } => assert!(no_stop_on_failure),
             _ => panic!("expected Test"),
         }
     }
@@ -513,11 +551,20 @@ mod tests {
     #[test]
     fn test_all_negated() {
         let cli = parse(&[
-            "--vm-count", "7", "test",
-            "--no-build", "--no-deploy", "--no-stop-on-failure",
+            "--vm-count",
+            "7",
+            "test",
+            "--no-build",
+            "--no-deploy",
+            "--no-stop-on-failure",
         ]);
         match cli.command {
-            Commands::Test { no_build, no_deploy, no_stop_on_failure, .. } => {
+            Commands::Test {
+                no_build,
+                no_deploy,
+                no_stop_on_failure,
+                ..
+            } => {
                 assert!(no_build);
                 assert!(no_deploy);
                 assert!(no_stop_on_failure);
@@ -529,24 +576,43 @@ mod tests {
     #[test]
     fn test_with_all_options() {
         let cli = parse(&[
-            "--vm-count", "3", "--cluster", "ci",
+            "--vm-count",
+            "3",
+            "--cluster",
+            "ci",
             "test",
-            "--network", "steam",
-            "--players", "4",
-            "--max-runs", "10",
-            "--timeout", "120",
-            "--shutdown-timeout", "3",
+            "--network",
+            "steam",
+            "--players",
+            "4",
+            "--max-runs",
+            "10",
+            "--timeout",
+            "120",
+            "--shutdown-timeout",
+            "3",
             "--no-build",
-            "--filter-pattern", "PASS|FAIL",
+            "--filter-pattern",
+            "PASS|FAIL",
             "--capture-on-failure",
             "--host-args=--headless",
             "--vm-args=--auto-join",
         ]);
         match cli.command {
             Commands::Test {
-                network, players, max_runs, timeout, shutdown_timeout,
-                no_build, no_deploy, no_stop_on_failure,
-                filter_pattern, capture_on_failure, host_args, vm_args, ..
+                network,
+                players,
+                max_runs,
+                timeout,
+                shutdown_timeout,
+                no_build,
+                no_deploy,
+                no_stop_on_failure,
+                filter_pattern,
+                capture_on_failure,
+                host_args,
+                vm_args,
+                ..
             } => {
                 assert!(matches!(network, NetworkMode::Steam));
                 assert_eq!(players, 4);
@@ -558,7 +624,11 @@ mod tests {
                 assert!(!no_stop_on_failure);
                 assert_eq!(filter_pattern.as_deref(), Some("PASS|FAIL"));
                 assert!(capture_on_failure);
-                assert_eq!(host_args.as_deref(), Some("--headless"), "host_args should pass through verbatim");
+                assert_eq!(
+                    host_args.as_deref(),
+                    Some("--headless"),
+                    "host_args should pass through verbatim"
+                );
                 assert_eq!(vm_args.as_deref(), Some("--auto-join"));
             }
             _ => panic!("expected Test"),
@@ -615,9 +685,19 @@ mod tests {
 
     #[test]
     fn up_detach() {
-        let cli = parse(&["--vm-count", "1", "up", "--detach", "--runners-dir", "/tmp/r"]);
+        let cli = parse(&[
+            "--vm-count",
+            "1",
+            "up",
+            "--detach",
+            "--runners-dir",
+            "/tmp/r",
+        ]);
         match cli.command {
-            Commands::Up { detach, runners_dir } => {
+            Commands::Up {
+                detach,
+                runners_dir,
+            } => {
                 assert!(detach);
                 assert!(runners_dir.is_some());
             }
@@ -635,7 +715,14 @@ mod tests {
 
     #[test]
     fn invalid_network_rejected() {
-        let args = vec!["cluster-ctl", "--vm-count", "7", "test", "--network", "bluetooth"];
+        let args = vec![
+            "cluster-ctl",
+            "--vm-count",
+            "7",
+            "test",
+            "--network",
+            "bluetooth",
+        ];
         let result = Cli::try_parse_from(args);
         assert!(result.is_err());
     }

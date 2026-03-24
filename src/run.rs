@@ -31,7 +31,10 @@ pub async fn stop_game<S>(config: &ClusterConfig<S>, kill_steam: bool) -> anyhow
             let backend = backend.clone();
             async move {
                 backend
-                    .run_cmd(&vm.ip, "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; true")
+                    .run_cmd(
+                        &vm.ip,
+                        "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; true",
+                    )
                     .await;
             }
         })
