@@ -241,6 +241,15 @@ pub async fn run<S>(
         }
         local_cmd.current_dir(project_root);
         local_cmd.env("BEVY_ASSET_ROOT", project_root);
+        if let Some(lib_dir) = config.steam_api_lib.parent() {
+            let ld_path = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
+            let new_ld_path = if ld_path.is_empty() {
+                lib_dir.to_string_lossy().into_owned()
+            } else {
+                format!("{}:{}", lib_dir.display(), ld_path)
+            };
+            local_cmd.env("LD_LIBRARY_PATH", new_ld_path);
+        }
         local_cmd.stdout(std::process::Stdio::inherit());
         local_cmd.stderr(std::process::Stdio::inherit());
 

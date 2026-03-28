@@ -1,5 +1,7 @@
+use std::path::Path;
+
 use crate::backend::Backend;
-use crate::config::ClusterConfig;
+use crate::config::{self, ClusterConfig};
 
 /// Run the `net-up` subcommand: set up networking for the active backend.
 pub fn up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
@@ -23,6 +25,47 @@ pub fn down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
             Ok(())
         }
     }
+}
+
+/// Ensure the network bridge is up, setting it up via sudo if needed.
+/// No-op for Docker/Local backends or if the bridge already exists.
+pub fn ensure_bridge<S>(config: &ClusterConfig<S>, project_root: &Path) -> anyhow::Result<()> {
+    match &config.backend {
+        Backend::MicroVm(_) => {
+            if config::bridge_exists(&config.bridge) {
+                return Ok(());
+            }
+            println!(
+                "==> Bridge {} not found, setting up network via sudo...",
+                config.bridge
+            );
+            sudo_net_up(config, project_root)?;
+            if !config::bridge_exists(&config.bridge) {
+                anyhow::bail!(
+                    "Network setup failed: bridge {} still not found after net-up",
+                    config.bridge
+                );
+            }
+            Ok(())
+        }
+        Backend::Docker(_) | Backend::Local(_) => Ok(()),
+    }
+}
+
+fn sudo_net_up<S>(config: &ClusterConfig<S>, project_root: &Path) -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let status = std::process::Command::new("sudo")
+        .arg(&exe)
+        .arg("--vm-count")
+        .arg(config.vms.len().to_string())
+        .arg("--project-root")
+        .arg(project_root)
+        .arg("net-up")
+        .status()?;
+    if !status.success() {
+        anyhow::bail!("sudo cluster-ctl net-up failed (exit {})", status);
+    }
+    Ok(())
 }
 
 // ── MicroVM networking (bridge + TAP + nftables) ──

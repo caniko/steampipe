@@ -155,6 +155,7 @@ async fn main() -> anyhow::Result<()> {
             detach,
         } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            net::ensure_bridge(&config, &project_root)?;
 
             if detach {
                 // Spawn a daemon process that does the full up + hold workflow
@@ -250,6 +251,7 @@ async fn main() -> anyhow::Result<()> {
             runners_dir,
         } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            net::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
             vm::restart(&validated, target.as_deref(), &runners_dir).await?;
         }
@@ -258,6 +260,7 @@ async fn main() -> anyhow::Result<()> {
             runners_dir,
         } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            net::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
             steam::check(&validated, target.as_deref(), &runners_dir).await?;
         }
@@ -267,6 +270,7 @@ async fn main() -> anyhow::Result<()> {
             login_runners_dir,
         } => {
             let login_runners_dir = require_runners_dir(login_runners_dir, config.backend_kind)?;
+            net::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
             steam::login(
                 &validated,

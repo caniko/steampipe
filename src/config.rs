@@ -378,6 +378,17 @@ pub struct ClusterConfig<S = Unchecked> {
     _state: PhantomData<S>,
 }
 
+/// Check whether a network bridge interface exists.
+pub fn bridge_exists(name: &str) -> bool {
+    std::process::Command::new("ip")
+        .args(["link", "show", name])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
 impl ClusterConfig<Unchecked> {
     /// Build config from steampipe.toml, requiring project-specific fields.
     pub fn new(
@@ -531,13 +542,7 @@ impl ClusterConfig<Unchecked> {
 
     /// Check that the network bridge exists, transitioning to `BridgeReady` on success.
     pub fn validate_bridge(self) -> anyhow::Result<ClusterConfig<BridgeReady>> {
-        if !std::process::Command::new("ip")
-            .args(["link", "show", &self.bridge])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()?
-            .success()
-        {
+        if !bridge_exists(&self.bridge) {
             anyhow::bail!(
                 "Bridge {} not found. Run 'cluster-ctl net-up' first.",
                 self.bridge
