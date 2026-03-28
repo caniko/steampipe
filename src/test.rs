@@ -263,8 +263,15 @@ pub async fn run<S>(
             };
             local_cmd.env("LD_LIBRARY_PATH", new_ld_path);
         }
-        local_cmd.stdout(std::process::Stdio::inherit());
-        local_cmd.stderr(std::process::Stdio::inherit());
+        if verbose {
+            local_cmd.stdout(std::process::Stdio::inherit());
+            local_cmd.stderr(std::process::Stdio::inherit());
+        } else {
+            // In MCP mode, stdout is the JSON-RPC transport — must pipe to avoid corruption.
+            // Also enables monitor_local_process to capture output for the report.
+            local_cmd.stdout(std::process::Stdio::piped());
+            local_cmd.stderr(std::process::Stdio::piped());
+        }
 
         #[cfg(unix)]
         {
