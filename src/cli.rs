@@ -326,6 +326,13 @@ pub enum Commands {
     /// Generate a steampipe.toml config template
     Init,
 
+    /// Generate a .yh.cluster.toml config file for yh-mcp cluster defaults
+    YhConfig {
+        /// Overwrite existing file
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for

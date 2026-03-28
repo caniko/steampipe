@@ -6,8 +6,10 @@ use crate::credentials::{CredentialsMap, VmCredentials};
 
 /// Shell snippet that ensures weston (headless) is running and exports display vars.
 /// Append your own commands after this to run under the compositor.
-pub const WESTON_SETUP: &str = r#"
-export XDG_RUNTIME_DIR=/tmp/runtime-chessbender
+pub fn weston_setup(vm_user: &str) -> String {
+    format!(
+        r#"
+export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
 if ! pgrep -x weston >/dev/null; then
     weston --backend=headless --xwayland --no-config >/dev/null 2>&1 &
@@ -15,7 +17,9 @@ if ! pgrep -x weston >/dev/null; then
 fi
 export WAYLAND_DISPLAY=wayland-1
 export DISPLAY=:0
-"#;
+"#
+    )
+}
 
 /// Shell snippet that starts Steam silently if not already running.
 pub const STEAM_START_SILENT: &str = r#"
@@ -28,10 +32,11 @@ fi
 "#;
 
 /// Ensure weston + Steam are running on an instance, waiting for Steam's connection log.
-pub async fn ensure_steam(backend: &Backend, ip: &str) -> anyhow::Result<()> {
-    let log = "/home/chessbender/.local/share/Steam/logs/connection_log.txt";
+pub async fn ensure_steam(backend: &Backend, ip: &str, vm_user: &str) -> anyhow::Result<()> {
+    let log = format!("/home/{vm_user}/.local/share/Steam/logs/connection_log.txt");
+    let weston = weston_setup(vm_user);
     let cmd = format!(
-        "{WESTON_SETUP}\
+        "{weston}\
          if pgrep -x steam >/dev/null; then \
          echo STEAM_READY; exit 0; \
          fi; \
@@ -56,7 +61,7 @@ pub async fn start<S>(config: &ClusterConfig<S>, target: Option<&str>) -> anyhow
     let backend = config.backend.clone();
 
     println!("==> Starting Steam on {} VM(s)...", targets.len());
-    let script = format!("{WESTON_SETUP}{STEAM_START_SILENT}");
+    let script = format!("{}{STEAM_START_SILENT}", weston_setup(&config.vm_user));
 
     let results = par_each_vm(&targets, |vm| {
         let backend = backend.clone();
@@ -111,6 +116,7 @@ pub async fn check(
         }
         println!("OK");
 
+        let weston = weston_setup(&config.vm_user);
         let result = backend
             .run_cmd(
                 &vm.ip,
@@ -126,7 +132,7 @@ pub async fn check(
                         PERSONA=""
                         ERRORS="$ERRORS not-logged-in"
                     fi
-                    {WESTON_SETUP}
+                    {weston}
                     STARTED_WESTON=1
                     steam -silent -cef-disable-gpu >/dev/null 2>&1 &
                     STEAM_PID=$!
@@ -247,10 +253,10 @@ async fn login_single_vm(
 
     if let Some(creds) = creds {
         // Automated login via `steam -login`
-        automated_login(backend, vm, creds).await?;
+        automated_login(backend, vm, creds, &config.vm_user).await?;
     } else {
         // Interactive VNC-based login (original flow)
-        interactive_login(backend, vm).await?;
+        interactive_login(backend, vm, &config.vm_user).await?;
     }
 
     println!("  Shutting down Steam and VM...");
@@ -273,15 +279,17 @@ async fn automated_login(
     backend: &Backend,
     vm: &VmDef,
     creds: &VmCredentials,
+    vm_user: &str,
 ) -> anyhow::Result<()> {
     let user = shell_escape(&creds.steam_user);
     let pass = shell_escape(&creds.steam_pass);
 
     println!("  Logging in as {}...", creds.steam_user);
 
-    let log = "/home/chessbender/.local/share/Steam/logs/connection_log.txt";
+    let log = format!("/home/{vm_user}/.local/share/Steam/logs/connection_log.txt");
+    let weston = weston_setup(vm_user);
     let cmd = format!(
-        r#"{WESTON_SETUP}
+        r#"{weston}
 : > {log} 2>/dev/null
 steam -login '{user}' '{pass}' -silent -cef-disable-gpu >/dev/null 2>&1 &
 for i in $(seq 1 90); do
@@ -327,13 +335,14 @@ echo KEY_SUBMITTED"#,
 }
 
 /// Interactive VNC-based login (original flow).
-async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> {
+async fn interactive_login(backend: &Backend, vm: &VmDef, vm_user: &str) -> anyhow::Result<()> {
     println!("  Starting sway + wayvnc + Steam...");
     backend
         .run_cmd(
             &vm.ip,
-            r#"
-        export XDG_RUNTIME_DIR=/tmp/runtime-chessbender
+            &format!(
+                r#"
+        export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
         mkdir -p $XDG_RUNTIME_DIR
         if ! pgrep -x sway >/dev/null; then
             sway >/dev/null 2>&1 &
@@ -348,7 +357,8 @@ async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> 
         if ! pgrep -x steam >/dev/null; then
             steam -cef-disable-gpu >/dev/null 2>&1 &
         fi
-        "#,
+        "#
+            ),
         )
         .await;
 
@@ -377,7 +387,7 @@ async fn interactive_login(backend: &Backend, vm: &VmDef) -> anyhow::Result<()> 
                 backend.run_cmd(
                     &vm.ip,
                     &format!(
-                        r#"export XDG_RUNTIME_DIR=/tmp/runtime-chessbender; export WAYLAND_DISPLAY=wayland-1; wtype -- "{escaped}""#
+                        r#"export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}; export WAYLAND_DISPLAY=wayland-1; wtype -- "{escaped}""#
                     ),
                 )
                 .await;

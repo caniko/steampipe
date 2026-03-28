@@ -49,6 +49,7 @@ pub async fn start_game<S>(config: &ClusterConfig<S>, extra_args: &[String]) -> 
     let backend = config.backend.clone();
     let remote_dir = config.remote_dir.clone();
     let binary_name = config.binary_name.clone();
+    let weston = steam::weston_setup(&config.vm_user);
     let extra = extra_args.join(" ");
 
     println!("==> Starting game on {} VMs...", config.vms.len());
@@ -57,6 +58,7 @@ pub async fn start_game<S>(config: &ClusterConfig<S>, extra_args: &[String]) -> 
         let backend = backend.clone();
         let remote_dir = remote_dir.clone();
         let binary_name = binary_name.clone();
+        let weston = weston.clone();
         let extra = extra.clone();
         async move {
             let cmd = format!(
@@ -72,7 +74,6 @@ pub async fn start_game<S>(config: &ClusterConfig<S>, extra_args: &[String]) -> 
                      nohup ./{binary_name} {extra} > game.log 2>&1 &\n\
                      echo \"started\"\n\
                  fi",
-                weston = steam::WESTON_SETUP,
             );
             let result = backend.run_cmd(&vm.ip, &cmd).await;
             (vm.name, result.stdout.trim().to_string())

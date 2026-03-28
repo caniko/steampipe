@@ -107,12 +107,12 @@ fn parse_min_timestamp_ms(content: &str) -> Option<u128> {
 
 /// Check if a heartbeat source has stalled beyond `stall_secs`.
 /// Returns `true` if stalled (caller should kill).
-fn check_stall(source: &impl HeartbeatSource, last_ts: &mut Option<u128>, stall_secs: u64) -> bool {
+fn check_stall(source: &impl HeartbeatSource, last_ts: &mut Option<u128>, stall_secs: u64, now: u128) -> bool {
     if let Some(ts) = source.min_timestamp() {
         if let Some(prev) = *last_ts
             && ts <= prev
         {
-            let stale = now_ms().saturating_sub(ts) / 1000;
+            let stale = now.saturating_sub(ts) / 1000;
             if stale > stall_secs as u128 {
                 return true;
             }
@@ -173,7 +173,7 @@ pub async fn run<S>(
     if test_config.network == NetworkMode::Steam {
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===");
         for vm in target_vms {
-            match crate::steam::ensure_steam(backend, &vm.ip).await {
+            match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user).await {
                 Ok(()) => print_and_push(&mut output, &format!("  {}: Steam ready", vm.name)),
                 Err(e) => {
                     print_and_push(&mut output, &format!("  {}: FAILED — {e}", vm.name));
@@ -592,7 +592,7 @@ fn monitor_local_process(
             Ok(None) => {
                 if last_heartbeat_check.elapsed() > Duration::from_secs(2) {
                     last_heartbeat_check = Instant::now();
-                    if check_stall(&local_hb, &mut last_local_ts, HEARTBEAT_STALL_SECS) {
+                    if check_stall(&local_hb, &mut last_local_ts, HEARTBEAT_STALL_SECS, now_ms()) {
                         eprintln!("Local heartbeat stall — killing");
                         exit_code = kill_and_reap(child, shutdown_timeout);
                         timed_out = true;
@@ -602,7 +602,7 @@ fn monitor_local_process(
 
                 if last_vm_check.elapsed() > Duration::from_secs(10) {
                     last_vm_check = Instant::now();
-                    if check_stall(&vm_hb, &mut last_vm_ts, HEARTBEAT_STALL_SECS) {
+                    if check_stall(&vm_hb, &mut last_vm_ts, HEARTBEAT_STALL_SECS, now_ms()) {
                         eprintln!("VM heartbeat stall — killing");
                         exit_code = kill_and_reap(child, shutdown_timeout);
                         timed_out = true;
@@ -711,5 +711,50 @@ mod tests {
         assert_eq!(exit_code_label(10), "PHASE_WATCHDOG");
         assert_eq!(exit_code_label(124), "TIMEOUT");
         assert_eq!(exit_code_label(999), "UNKNOWN");
+    }
+
+    struct FakeHeartbeat(Option<u128>);
+    impl HeartbeatSource for FakeHeartbeat {
+        fn min_timestamp(&self) -> Option<u128> { self.0 }
+    }
+
+    #[test]
+    fn check_stall_no_stall_when_advancing() {
+        let hb = FakeHeartbeat(Some(2000));
+        let mut last = Some(1000);
+        assert!(!check_stall(&hb, &mut last, 30, 2500));
+        assert_eq!(last, Some(2000));
+    }
+
+    #[test]
+    fn check_stall_detected_when_frozen() {
+        let hb = FakeHeartbeat(Some(1000));
+        let mut last = Some(1000);
+        // now is 31 seconds after timestamp
+        assert!(check_stall(&hb, &mut last, 30, 1000 + 31_000));
+    }
+
+    #[test]
+    fn check_stall_no_false_positive_on_first_check() {
+        let hb = FakeHeartbeat(Some(5000));
+        let mut last = None;
+        assert!(!check_stall(&hb, &mut last, 30, 50_000));
+        assert_eq!(last, Some(5000));
+    }
+
+    #[test]
+    fn check_stall_none_heartbeat_no_stall() {
+        let hb = FakeHeartbeat(None);
+        let mut last = Some(1000);
+        assert!(!check_stall(&hb, &mut last, 30, 50_000));
+        assert_eq!(last, Some(1000)); // unchanged
+    }
+
+    #[test]
+    fn check_stall_exact_boundary_no_stall() {
+        let hb = FakeHeartbeat(Some(1000));
+        let mut last = Some(1000);
+        // Exactly at boundary (30s) - should NOT stall (uses > not >=)
+        assert!(!check_stall(&hb, &mut last, 30, 1000 + 30_000));
     }
 }

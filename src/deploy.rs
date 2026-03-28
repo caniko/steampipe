@@ -27,7 +27,8 @@ pub async fn build_release(project_root: &Path, cargo_package: &str) -> anyhow::
 /// Compute the SHA-256 hash of a file, returned as a lowercase hex string.
 pub fn compute_binary_hash(path: &Path) -> anyhow::Result<String> {
     let bytes = std::fs::read(path)?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    let hash = Sha256::digest(&bytes);
+    Ok(hash.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 /// Deploy a binary to a VM's content-addressable pool, skipping upload if the

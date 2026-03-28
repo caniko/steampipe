@@ -70,11 +70,52 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    // YhConfig doesn't need vm_count either
+    if let Commands::YhConfig { force } = &cli.command {
+        let proj = config::load_project_config(&project_root);
+        let cluster_name = cli
+            .cluster
+            .as_deref()
+            .or_else(|| {
+                proj.as_ref()
+                    .and_then(|p| p.cluster.as_ref())
+                    .and_then(|c| c.name.as_deref())
+            })
+            .unwrap_or("default");
+
+        let stem = if cluster_name == "default" {
+            "cluster"
+        } else {
+            cluster_name
+        };
+        let filename = format!("{stem}.yh.cluster.toml");
+        let path = project_root.join(&filename);
+
+        if path.exists() && !force {
+            anyhow::bail!("{filename} already exists. Use --force to overwrite.");
+        }
+
+        let content = config::generate_yh_cluster_config(
+            &project_root,
+            cli.vm_count,
+            cli.cluster.as_deref(),
+            cli.backend,
+            cli.state_dir.as_deref(),
+            cli.lock_dir.as_deref(),
+            cli.ssh_key.as_deref(),
+            cli.credentials.as_deref(),
+        );
+
+        std::fs::write(&path, &content)?;
+        println!("Created {}", path.display());
+        return Ok(());
+    }
+
     let vm_count = cli
         .vm_count
         .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
     let mut config =
-        ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref(), cli.backend);
+        ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref(), cli.backend)?;
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
@@ -346,7 +387,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Accounts => accounts::show(&config).await?,
         Commands::Watch { interval } => watch::run(&config, interval).await?,
-        Commands::Init | Commands::Completions { .. } => unreachable!(),
+        Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } => {
+            unreachable!()
+        }
     }
 
     Ok(())

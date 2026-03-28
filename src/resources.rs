@@ -12,9 +12,8 @@ pub struct RamRequirements {
     pub host_reserve: u64,
 }
 
-/// Read `MemAvailable` from `/proc/meminfo` (Linux only).
-pub fn available_ram() -> anyhow::Result<u64> {
-    let contents = fs::read_to_string("/proc/meminfo")?;
+/// Parse `MemAvailable` from `/proc/meminfo` content string, returning bytes.
+pub(crate) fn parse_mem_available(contents: &str) -> anyhow::Result<u64> {
     for line in contents.lines() {
         if let Some(rest) = line.strip_prefix("MemAvailable:") {
             let kb: u64 = rest
@@ -27,6 +26,38 @@ pub fn available_ram() -> anyhow::Result<u64> {
         }
     }
     anyhow::bail!("MemAvailable not found in /proc/meminfo (Linux required)")
+}
+
+/// Read `MemAvailable` from `/proc/meminfo` (Linux only).
+pub fn available_ram() -> anyhow::Result<u64> {
+    let contents = fs::read_to_string("/proc/meminfo")?;
+    parse_mem_available(&contents)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mem_available_normal() {
+        let contents = "MemTotal:       32000000 kB\nMemFree:         8000000 kB\nMemAvailable:   16000000 kB\nBuffers:          512000 kB\n";
+        let result = parse_mem_available(contents).unwrap();
+        assert_eq!(result, 16000000 * 1024);
+    }
+
+    #[test]
+    fn parse_mem_available_missing() {
+        let contents = "MemTotal:       32000000 kB\nMemFree:         8000000 kB\nBuffers:          512000 kB\n";
+        let result = parse_mem_available(contents);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_mem_available_extra_whitespace() {
+        let contents = "MemTotal:       32000000 kB\nMemAvailable:   12345   kB\n";
+        let result = parse_mem_available(contents).unwrap();
+        assert_eq!(result, 12345 * 1024);
+    }
 }
 
 /// Check whether there is enough RAM to start one more VM.
