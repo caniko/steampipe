@@ -9,6 +9,7 @@ mod doctor;
 mod history;
 mod lease;
 mod logs;
+mod mcp;
 mod net;
 mod netem;
 mod preflight;
@@ -50,6 +51,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     // Commands that don't need project root or config
+    if matches!(&cli.command, Commands::Mcp) {
+        return mcp::serve().await;
+    }
     if let Commands::Completions { shell } = &cli.command {
         cli::print_completions(*shell);
         return Ok(());
@@ -392,7 +396,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Accounts => accounts::show(&config).await?,
         Commands::Watch { interval } => watch::run(&config, interval).await?,
-        Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } => {
+        Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } | Commands::Mcp => {
             unreachable!()
         }
     }

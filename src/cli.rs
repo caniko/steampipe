@@ -333,6 +333,9 @@ pub enum Commands {
         force: bool,
     },
 
+    /// Start MCP server (JSON-RPC over stdio)
+    Mcp,
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
