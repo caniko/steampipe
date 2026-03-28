@@ -184,6 +184,9 @@ pub async fn run<S>(
         output.push('\n');
     }
 
+    // Pre-flight: verify VM→host connectivity (catches missing nftables rules after reboot)
+    crate::preflight::ensure_vm_to_host_connectivity(config, backend, target_vms).await?;
+
     // Step 3: Run loop
     let binary_name = &config.binary_name;
     let binary_path = project_root.join(format!("target/release/{binary_name}"));
@@ -206,7 +209,12 @@ pub async fn run<S>(
         }
         NetworkMode::Steam => {
             default_host_args = "--auto-host-steam --auto-play".to_string();
-            default_vm_args = "--auto-join-steam --auto-play --headless".to_string();
+            let target_flag = crate::accounts::local_steam_id()
+                .map(|id| format!(" --steam-target-id {id}"))
+                .unwrap_or_default();
+            default_vm_args = format!(
+                "--auto-join-steam --auto-play --headless{target_flag}"
+            );
         }
     }
     let vm_args = test_config.vm_args.as_deref().unwrap_or(&default_vm_args);

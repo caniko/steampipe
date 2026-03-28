@@ -11,6 +11,7 @@ mod lease;
 mod logs;
 mod net;
 mod netem;
+mod preflight;
 mod resources;
 mod run;
 mod snapshot;

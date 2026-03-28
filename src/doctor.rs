@@ -66,6 +66,9 @@ pub fn run<S>(config: &ClusterConfig<S>, fix: bool) -> anyhow::Result<()> {
     // 8. Check nftables cluster table
     checks.push(check_nftables());
 
+    // 9. Check nixos-fw bridge accept rule
+    checks.push(check_nixos_fw(&config.bridge, fix));
+
     // Print results
     let mut warnings = 0;
     let mut errors = 0;
@@ -293,21 +296,95 @@ fn check_ssh_key(key: &Path) -> Check {
 }
 
 fn check_nftables() -> Check {
-    let output = std::process::Command::new("nft")
+    // Check both ip (Rust net-up) and inet (Nix cluster-net-up) families
+    let ip_ok = std::process::Command::new("nft")
         .args(["list", "table", "ip", "cluster"])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .status();
-    match output {
-        Ok(s) if s.success() => Check {
+        .status()
+        .is_ok_and(|s| s.success());
+    let inet_ok = std::process::Command::new("nft")
+        .args(["list", "table", "inet", "cluster"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+
+    if ip_ok || inet_ok {
+        let family = if inet_ok { "inet" } else { "ip" };
+        Check {
             name: "nftables",
             status: CheckStatus::Ok,
-            detail: "cluster table exists".into(),
-        },
-        _ => Check {
+            detail: format!("cluster table exists ({family})"),
+        }
+    } else {
+        Check {
             name: "nftables",
             status: CheckStatus::Warning,
             detail: "no cluster table (NAT may not be configured)".into(),
-        },
+        }
+    }
+}
+
+fn check_nixos_fw(bridge: &str, fix: bool) -> Check {
+    // Check if nixos-fw input chain has an accept rule for the bridge
+    let output = std::process::Command::new("nft")
+        .args(["list", "chain", "inet", "nixos-fw", "input"])
+        .output();
+    let has_rule = match &output {
+        Ok(out) if out.status.success() => {
+            let text = String::from_utf8_lossy(&out.stdout);
+            text.contains(&format!("iifname \"{bridge}\"")) && text.contains("accept")
+        }
+        _ => false,
+    };
+
+    // Check if the nixos-fw table exists at all
+    let table_exists = output.as_ref().is_ok_and(|o| o.status.success());
+
+    if has_rule {
+        return Check {
+            name: "nixos-fw",
+            status: CheckStatus::Ok,
+            detail: format!("bridge {bridge} accepted in nixos-fw input"),
+        };
+    }
+
+    if !table_exists {
+        return Check {
+            name: "nixos-fw",
+            status: CheckStatus::Ok,
+            detail: "no nixos-fw table (not NixOS or firewall disabled)".into(),
+        };
+    }
+
+    // Table exists but rule is missing
+    if fix {
+        let iifname = format!("iifname \"{bridge}\"");
+        let ok = std::process::Command::new("sudo")
+            .args(["nft", "insert", "rule", "inet", "nixos-fw", "input", &iifname, "accept"])
+            .status()
+            .is_ok_and(|s| s.success());
+        if ok {
+            Check {
+                name: "nixos-fw",
+                status: CheckStatus::Fixed,
+                detail: format!("inserted accept rule for {bridge} in nixos-fw input"),
+            }
+        } else {
+            Check {
+                name: "nixos-fw",
+                status: CheckStatus::Error,
+                detail: "sudo nft insert failed — run manually: sudo nft insert rule inet nixos-fw input iifname \"br-cluster\" accept".into(),
+            }
+        }
+    } else {
+        Check {
+            name: "nixos-fw",
+            status: CheckStatus::Error,
+            detail: format!(
+                "nixos-fw blocks {bridge} — VMs cannot reach host. Run with --fix or: just cluster-net-up"
+            ),
+        }
     }
 }

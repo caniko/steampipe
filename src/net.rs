@@ -180,6 +180,22 @@ pub(crate) fn plan_net_up(
         ],
     ));
 
+    // NixOS firewall bypass: allow VM traffic into the host.
+    // NixOS's nixos-fw table uses inet family. This may fail on non-NixOS
+    // systems — callers should treat it as best-effort.
+    cmds.push(NetCmd::new(
+        nft,
+        &[
+            "insert",
+            "rule",
+            "inet",
+            "nixos-fw",
+            "input",
+            &iifname,
+            "accept",
+        ],
+    ));
+
     cmds
 }
 
@@ -227,9 +243,19 @@ fn microvm_net_up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()>
         nft,
     );
 
-    // Execute, printing progress at milestones
-    for cmd in &cmds {
-        run_cmd(&cmd.program, &cmd.args.iter().map(|s| s.as_str()).collect::<Vec<_>>())?;
+    // Execute, printing progress at milestones.
+    // The last command (nixos-fw insert) is best-effort — may fail on non-NixOS.
+    let last_idx = cmds.len().saturating_sub(1);
+    for (i, cmd) in cmds.iter().enumerate() {
+        let args: Vec<&str> = cmd.args.iter().map(|s| s.as_str()).collect();
+        if i == last_idx {
+            // Best-effort: nixos-fw rule (may not exist on non-NixOS)
+            if run_cmd(&cmd.program, &args).is_err() {
+                println!("  (nixos-fw rule skipped — not a NixOS host?)");
+            }
+        } else {
+            run_cmd(&cmd.program, &args)?;
+        }
     }
 
     println!("  Bridge {bridge} created ({}/{}", config.host_ip, config.prefix);

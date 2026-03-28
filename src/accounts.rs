@@ -92,6 +92,20 @@ pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Read the local machine's Steam ID from loginusers.vdf.
+pub fn local_steam_id() -> anyhow::Result<u64> {
+    let home = std::env::var("HOME")?;
+    let path = format!("{home}/.local/share/Steam/config/loginusers.vdf");
+    let content = std::fs::read_to_string(&path)?;
+    let re = regex::Regex::new(r#"^\s*"(\d{17})""#).unwrap();
+    for line in content.lines() {
+        if let Some(caps) = re.captures(line) {
+            return caps[1].parse::<u64>().map_err(Into::into);
+        }
+    }
+    anyhow::bail!("No Steam ID found in {path}")
+}
+
 async fn check_account(backend: &Backend, ip: &str) -> (Option<String>, Option<String>, bool) {
     let cmd = r#"
         LOGIN_FILE="$HOME/.local/share/Steam/config/loginusers.vdf"
