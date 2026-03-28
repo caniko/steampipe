@@ -293,7 +293,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::NetUp { nft } => net::up(&config, &nft)?,
         Commands::NetDown { nft } => net::down(&config, &nft)?,
         Commands::Deploy { no_build, verify } => {
-            deploy::run(&config, &project_root, no_build, verify).await?
+            deploy::run(&config, &project_root, no_build, verify, true).await?
         }
         Commands::StopGame { kill_steam } => run::stop_game(&config, kill_steam).await?,
         Commands::Logs {
@@ -352,6 +352,7 @@ async fn main() -> anyhow::Result<()> {
                     filter_pattern,
                     output_file,
                     capture_on_failure,
+                    verbose: true,
                 },
             )
             .await?;

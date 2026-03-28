@@ -5,7 +5,14 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::backend::Backend;
-use crate::config::{ClusterConfig, VmDef, par_each_vm};
+use crate::config::{ClusterConfig, VmDef, VmName, par_each_vm};
+
+/// Result of deploying to a single VM.
+pub struct DeployVmResult {
+    pub vm_name: VmName,
+    pub cached: bool,
+    pub error: Option<String>,
+}
 
 /// Run `cargo build --release -p <package>`.
 pub async fn build_release(project_root: &Path, cargo_package: &str) -> anyhow::Result<()> {
@@ -80,13 +87,15 @@ async fn pool_deploy_binary(
 
 /// Upload binary + steam lib + appid + assets to a set of instances in parallel.
 /// Uses a content-addressable pool to skip binary uploads when the hash matches.
-/// Returns the names of instances that failed.
+/// Returns per-VM deployment results (check `error` field for failures).
+/// When `verbose` is true, progress messages are printed to stdout/stderr.
 pub async fn deploy_to_vms<S>(
     backend: &Backend,
     vms: &[VmDef],
     config: &ClusterConfig<S>,
     project_root: &Path,
-) -> anyhow::Result<Vec<String>> {
+    verbose: bool,
+) -> anyhow::Result<Vec<DeployVmResult>> {
     let binary = project_root.join(format!("target/release/{}", config.binary_name));
     let assets = project_root.join(&config.assets_dir);
     let steam_lib = config.steam_api_lib.clone();
@@ -103,7 +112,9 @@ pub async fn deploy_to_vms<S>(
 
     // Hash the binary once before the parallel fan-out
     let hash = compute_binary_hash(&binary)?;
-    println!("  binary hash: {}...", &hash[..12]);
+    if verbose {
+        println!("  binary hash: {}...", &hash[..12]);
+    }
 
     let results = par_each_vm(vms, |vm| {
         let backend = backend.clone();
@@ -135,24 +146,41 @@ pub async fn deploy_to_vms<S>(
     })
     .await?;
 
-    let mut failed = Vec::new();
+    let mut vm_results = Vec::new();
     for result in results {
         match result {
-            Ok((name, cached)) => {
-                let status = if cached {
-                    "deployed (binary cached)"
-                } else {
-                    "deployed"
-                };
-                println!("  {name}: {status}");
+            Ok((vm_name, cached)) => {
+                if verbose {
+                    let status = if cached {
+                        "deployed (binary cached)"
+                    } else {
+                        "deployed"
+                    };
+                    println!("  {vm_name}: {status}");
+                }
+                vm_results.push(DeployVmResult {
+                    vm_name,
+                    cached,
+                    error: None,
+                });
             }
             Err(e) => {
-                eprintln!("  FAILED: {e}");
-                failed.push(e.to_string());
+                let error_str = e.to_string();
+                if verbose {
+                    eprintln!("  FAILED: {error_str}");
+                }
+                // Extract vm_name from the error context if available — we don't
+                // have it here since the error bubbled out of the closure, so use
+                // a sentinel. In practice par_each_vm errors contain the context.
+                vm_results.push(DeployVmResult {
+                    vm_name: VmName(error_str.clone()),
+                    cached: false,
+                    error: Some(error_str),
+                });
             }
         }
     }
-    Ok(failed)
+    Ok(vm_results)
 }
 
 /// Verify deployed files via SHA-256 checksums.
@@ -211,11 +239,14 @@ pub async fn verify<S>(config: &ClusterConfig<S>, project_root: &Path) -> anyhow
 }
 
 /// Run the `deploy` subcommand: build and upload binary + assets to all instances.
+/// When `verbose` is true, progress messages are printed; set to false when called
+/// from MCP tools to avoid corrupting JSON-RPC stdout.
 pub async fn run<S>(
     config: &ClusterConfig<S>,
     project_root: &Path,
     no_build: bool,
     do_verify: bool,
+    verbose: bool,
 ) -> anyhow::Result<()> {
     if !no_build {
         build_release(project_root, &config.cargo_package).await?;
@@ -229,13 +260,18 @@ pub async fn run<S>(
     }
 
     let backend = &config.backend;
-    println!("==> Deploying to {} VMs...", config.vms.len());
+    if verbose {
+        println!("==> Deploying to {} VMs...", config.vms.len());
+    }
 
-    let failed = deploy_to_vms(backend, &config.vms, config, project_root).await?;
-    if failed.is_empty() {
-        println!("==> All VMs deployed");
+    let results = deploy_to_vms(backend, &config.vms, config, project_root, verbose).await?;
+    let failed_count = results.iter().filter(|r| r.error.is_some()).count();
+    if failed_count == 0 {
+        if verbose {
+            println!("==> All VMs deployed");
+        }
     } else {
-        anyhow::bail!("Deploy failed for {} VMs", failed.len());
+        anyhow::bail!("Deploy failed for {} VMs", failed_count);
     }
 
     if do_verify {

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{ClusterConfig, par_each_vm};
+use crate::config::{ClusterConfig, VmName, par_each_vm};
 
 /// Run the `logs` subcommand: collect game.log from all instances to files.
 pub async fn run<S>(
@@ -42,14 +42,14 @@ pub async fn run<S>(
     Ok(())
 }
 
-/// Print logs to stdout (no file output). Supports target filtering, head/tail, line count, and regex.
-pub async fn print_stdout<S>(
+/// Collect logs from VM instances. Returns (vm_name, log_text) pairs.
+pub async fn collect_logs<S>(
     config: &ClusterConfig<S>,
     target: Option<&str>,
     lines: u32,
     head: bool,
     pattern: Option<&str>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Vec<(VmName, String)>> {
     let vms = config.resolve_targets(target, false)?;
     let backend = config.backend.clone();
     let remote_dir = config.remote_dir.clone();
@@ -76,6 +76,19 @@ pub async fn print_stdout<S>(
         }
     })
     .await?;
+
+    Ok(results)
+}
+
+/// Print logs to stdout (no file output). Supports target filtering, head/tail, line count, and regex.
+pub async fn print_stdout<S>(
+    config: &ClusterConfig<S>,
+    target: Option<&str>,
+    lines: u32,
+    head: bool,
+    pattern: Option<&str>,
+) -> anyhow::Result<()> {
+    let results = collect_logs(config, target, lines, head, pattern).await?;
 
     for (name, output) in &results {
         let trimmed = output.trim();

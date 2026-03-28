@@ -4,13 +4,13 @@ use crate::config::ClusterConfig;
 use crate::state;
 
 /// Diagnostic check result.
-struct Check {
-    name: &'static str,
-    status: CheckStatus,
-    detail: String,
+pub struct Check {
+    pub name: &'static str,
+    pub status: CheckStatus,
+    pub detail: String,
 }
 
-enum CheckStatus {
+pub enum CheckStatus {
     Ok,
     Warning,
     Error,
@@ -18,7 +18,7 @@ enum CheckStatus {
 }
 
 impl Check {
-    fn icon(&self) -> &'static str {
+    pub fn icon(&self) -> &'static str {
         match self.status {
             CheckStatus::Ok => "OK",
             CheckStatus::Warning => "WARN",
@@ -28,10 +28,8 @@ impl Check {
     }
 }
 
-/// Run the `doctor` subcommand: diagnose and optionally fix cluster health issues.
-pub fn run<S>(config: &ClusterConfig<S>, fix: bool) -> anyhow::Result<()> {
-    println!("==> Cluster health check...\n");
-
+/// Run all diagnostic checks and return results without printing.
+pub fn diagnose<S>(config: &ClusterConfig<S>, fix: bool) -> Vec<Check> {
     let mut checks = Vec::new();
 
     // 1. Check state directory exists
@@ -68,6 +66,15 @@ pub fn run<S>(config: &ClusterConfig<S>, fix: bool) -> anyhow::Result<()> {
 
     // 9. Check nixos-fw bridge accept rule
     checks.push(check_nixos_fw(&config.bridge, fix));
+
+    checks
+}
+
+/// Run the `doctor` subcommand: diagnose and optionally fix cluster health issues.
+pub fn run<S>(config: &ClusterConfig<S>, fix: bool) -> anyhow::Result<()> {
+    println!("==> Cluster health check...\n");
+
+    let checks = diagnose(config, fix);
 
     // Print results
     let mut warnings = 0;

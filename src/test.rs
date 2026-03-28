@@ -31,6 +31,8 @@ pub struct TestConfig {
     pub filter_pattern: Option<String>,
     pub output_file: Option<PathBuf>,
     pub capture_on_failure: bool,
+    /// When false, suppress `println!` output (for MCP tools where stdout is JSON-RPC).
+    pub verbose: bool,
 }
 
 // ── Heartbeat trait: static dispatch for local vs. VM heartbeat sources ──
@@ -129,7 +131,7 @@ pub async fn run<S>(
     config: &ClusterConfig<S>,
     project_root: &Path,
     test_config: TestConfig,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     if test_config.players < 2 || test_config.players > 8 {
         anyhow::bail!("players must be 2-8, got {}", test_config.players);
     }
@@ -146,6 +148,7 @@ pub async fn run<S>(
     )?;
 
     let backend = &config.backend;
+    let verbose = test_config.verbose;
     let mut output = String::new();
 
     output.push_str(&format!(
@@ -155,28 +158,29 @@ pub async fn run<S>(
 
     // Step 1: Deploy (reuse deploy module)
     if test_config.deploy {
-        print_and_push(&mut output, "=== DEPLOYING ===");
+        print_and_push(&mut output, "=== DEPLOYING ===", verbose);
         if test_config.build {
             crate::deploy::build_release(project_root, &config.cargo_package).await?;
-            print_and_push(&mut output, "Build OK");
+            print_and_push(&mut output, "Build OK", verbose);
         }
 
-        let failed =
-            crate::deploy::deploy_to_vms(backend, target_vms, config, project_root).await?;
-        if !failed.is_empty() {
-            anyhow::bail!("Deploy failed for {} VMs", failed.len());
+        let deploy_results =
+            crate::deploy::deploy_to_vms(backend, target_vms, config, project_root, false).await?;
+        let failed_count = deploy_results.iter().filter(|r| r.error.is_some()).count();
+        if failed_count > 0 {
+            anyhow::bail!("Deploy failed for {} VMs", failed_count);
         }
         output.push('\n');
     }
 
     // Step 2: Ensure Steam on VMs if steam network
     if test_config.network == NetworkMode::Steam {
-        print_and_push(&mut output, "=== STARTING STEAM ON VMs ===");
+        print_and_push(&mut output, "=== STARTING STEAM ON VMs ===", verbose);
         for vm in target_vms {
             match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user).await {
-                Ok(()) => print_and_push(&mut output, &format!("  {}: Steam ready", vm.name)),
+                Ok(()) => print_and_push(&mut output, &format!("  {}: Steam ready", vm.name), verbose),
                 Err(e) => {
-                    print_and_push(&mut output, &format!("  {}: FAILED — {e}", vm.name));
+                    print_and_push(&mut output, &format!("  {}: FAILED — {e}", vm.name), verbose);
                     anyhow::bail!("Steam setup failed on {}", vm.name);
                 }
             }
@@ -235,6 +239,7 @@ pub async fn run<S>(
         print_and_push(
             &mut output,
             &format!("=== RUN {run_num}/{} ===", test_config.max_runs),
+            verbose,
         );
 
         // Kill existing games
@@ -290,14 +295,14 @@ pub async fn run<S>(
             )
             .await
             {
-                print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name));
+                print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name), verbose);
                 vm_launch_ok = false;
             }
         }
 
         if !vm_launch_ok {
             failed += 1;
-            print_and_push(&mut output, "--- FAIL (VM launch failed) ---");
+            print_and_push(&mut output, "--- FAIL (VM launch failed) ---", verbose);
             kill_process_group(&mut child, test_config.shutdown_timeout);
             crate::run::kill_games(backend, target_vms, binary_name).await;
             if test_config.stop_on_failure {
@@ -352,18 +357,19 @@ pub async fn run<S>(
             print_and_push(
                 &mut output,
                 &format!("--- TIMEOUT ({}s limit) ---", timeout.as_secs()),
+                verbose,
             );
         } else if exit_code == Some(0) {
             passed += 1;
             failure_code = None;
-            print_and_push(&mut output, "--- PASS ---");
+            print_and_push(&mut output, "--- PASS ---", verbose);
         } else {
             failed += 1;
             failure_code = exit_code;
             let code_str: Cow<'static, str> = exit_code
                 .map(|c| Cow::Owned(format!("{c} ({})", exit_code_label(c))))
                 .unwrap_or(Cow::Borrowed("signal"));
-            print_and_push(&mut output, &format!("--- FAIL (exit {code_str}) ---"));
+            print_and_push(&mut output, &format!("--- FAIL (exit {code_str}) ---"), verbose);
         }
 
         // Collect VM logs on failure
@@ -418,6 +424,7 @@ pub async fn run<S>(
                     &format!(
                         "\n--- EARLY STOP: {consecutive_fail_count} consecutive identical failures (exit {label}) ---"
                     ),
+                    verbose,
                 );
                 break;
             }
@@ -442,11 +449,13 @@ pub async fn run<S>(
         test_config.players,
         test_config.timeout.as_secs(),
     );
-    print_and_push(&mut output, &summary);
+    print_and_push(&mut output, &summary, verbose);
 
     if let Some(path) = &test_config.output_file {
         std::fs::write(path, &output)?;
-        println!("Output written to {}", path.display());
+        if verbose {
+            println!("Output written to {}", path.display());
+        }
     }
 
     // Save to test history
@@ -467,15 +476,17 @@ pub async fn run<S>(
     }
 
     if failed > 0 {
-        anyhow::bail!("{failed}/{total} runs failed");
+        anyhow::bail!("{output}\n{failed}/{total} runs failed");
     }
-    Ok(())
+    Ok(output)
 }
 
 // ── Helpers ──
 
-fn print_and_push(output: &mut String, msg: &str) {
-    println!("{msg}");
+fn print_and_push(output: &mut String, msg: &str, verbose: bool) {
+    if verbose {
+        println!("{msg}");
+    }
     output.push_str(msg);
     output.push('\n');
 }
