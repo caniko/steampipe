@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use crate::backend::Backend;
 use crate::config::{ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
 use crate::lease;
@@ -33,16 +35,19 @@ pub async fn poll_vm_statuses(
             let ssh_ok = backend.is_reachable(&vm.ip).await;
 
             let (steam_running, game_running) = if ssh_ok {
+                let timeout = Duration::from_secs(5);
                 let steam = backend
-                    .run_cmd(
+                    .run_cmd_timeout(
                         &vm.ip,
                         "pgrep -x steam >/dev/null 2>&1 && echo yes || echo no",
+                        timeout,
                     )
                     .await;
                 let game = backend
-                    .run_cmd(
+                    .run_cmd_timeout(
                         &vm.ip,
                         &format!("pgrep -x {binary_name} >/dev/null 2>&1 && echo yes || echo no"),
+                        timeout,
                     )
                     .await;
                 (steam.stdout.trim() == "yes", game.stdout.trim() == "yes")

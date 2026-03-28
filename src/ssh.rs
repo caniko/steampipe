@@ -44,6 +44,10 @@ impl SshClient {
             "UserKnownHostsFile=/dev/null".into(),
             "-o".into(),
             "LogLevel=ERROR".into(),
+            "-o".into(),
+            "ServerAliveInterval=1".into(),
+            "-o".into(),
+            "ServerAliveCountMax=3".into(),
         ];
         for opt in extra_opts {
             args.push((*opt).into());
@@ -106,9 +110,12 @@ impl SshClient {
         }
     }
 
-    /// Check if SSH is reachable (async).
+    /// Check if SSH is reachable (async). Times out after 5s to avoid hanging
+    /// when a VM is half-alive (TCP connects but auth/command hangs).
     pub async fn is_reachable(&self, ip: &str) -> bool {
-        self.run(ip, "true").await.success
+        self.run_with_timeout(ip, "true", Duration::from_secs(5))
+            .await
+            .success
     }
 
     /// Wait for SSH to become reachable, retrying with exponential backoff.
