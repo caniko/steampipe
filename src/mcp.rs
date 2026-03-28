@@ -96,6 +96,22 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
     tokio::runtime::Handle::current().block_on(f)
 }
 
+/// Fail fast if the network bridge is down — avoids SSH hangs when VMs are unreachable.
+fn require_bridge(config: &ClusterConfig<Unchecked>) -> Result<(), ErrorData> {
+    if !crate::config::bridge_exists(&config.bridge) {
+        return Err(ErrorData::internal_error(
+            format!(
+                "Bridge '{}' is not up — VMs are unreachable.\n\
+                 Run: sudo cluster-ctl net-up\n\
+                 Or:  nix run .#cluster-net-up",
+                config.bridge
+            ),
+            None,
+        ));
+    }
+    Ok(())
+}
+
 // ── Input types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -291,6 +307,7 @@ impl SteampipeMcp {
         Parameters(input): Parameters<ClusterStatusInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let config = build_config(&input.cluster)?;
+        require_bridge(&config)?;
 
         let statuses = block_on(crate::status::poll_vm_statuses(
             &config.vms,
@@ -339,6 +356,7 @@ impl SteampipeMcp {
         Parameters(input): Parameters<ClusterLogsInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let config = build_config(&input.cluster)?;
+        require_bridge(&config)?;
         let lines = input.max_lines.unwrap_or(100);
         let head = !input.tail.unwrap_or(true);
 
@@ -372,6 +390,7 @@ impl SteampipeMcp {
         Parameters(input): Parameters<ClusterDeployInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let config = build_config(&input.cluster)?;
+        require_bridge(&config)?;
         let root = project_root()?;
         let do_build = input.build.unwrap_or(true);
         let do_verify = input.verify.unwrap_or(false);
@@ -432,6 +451,7 @@ impl SteampipeMcp {
         Parameters(input): Parameters<ClusterStopInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let config = build_config(&input.cluster)?;
+        require_bridge(&config)?;
         let kill_steam = input.kill_steam.unwrap_or(false);
 
         block_on(crate::run::kill_games(
@@ -472,6 +492,7 @@ impl SteampipeMcp {
         Parameters(input): Parameters<ClusterTestInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let config = build_config(&input.cluster)?;
+        require_bridge(&config)?;
         let root = project_root()?;
 
         let network = match input.network.as_deref().unwrap_or("lan") {
