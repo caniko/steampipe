@@ -91,11 +91,6 @@ fn project_root() -> Result<std::path::PathBuf, ErrorData> {
         .map_err(|e| ErrorData::internal_error(format!("Cannot find project root: {e}"), None))
 }
 
-/// Run an async future on the current tokio runtime from a sync context.
-fn block_on<F: std::future::Future>(f: F) -> F::Output {
-    tokio::runtime::Handle::current().block_on(f)
-}
-
 /// Fail fast if the network bridge is down — avoids SSH hangs when VMs are unreachable.
 fn require_bridge(config: &ClusterConfig<Unchecked>) -> Result<(), ErrorData> {
     if !crate::config::bridge_exists(&config.bridge) {
@@ -302,19 +297,20 @@ impl SteampipeMcp {
     #[tool(
         description = "Check status of all VMs in the cluster. Shows SSH reachability, whether the game/Steam/Weston processes are running, and which cluster holds the VM lease."
     )]
-    fn cluster_status(
+    async fn cluster_status(
         &self,
         Parameters(input): Parameters<ClusterStatusInput>,
     ) -> Result<CallToolResult, ErrorData> {
         let config = build_config(&input.cluster)?;
         require_bridge(&config)?;
 
-        let statuses = block_on(crate::status::poll_vm_statuses(
+        let statuses = crate::status::poll_vm_statuses(
             &config.vms,
             &config.backend,
             &config.state_dir,
             &config.binary_name,
-        ));
+        )
+        .await;
 
         let mut text = format!(
             "{:<8} {:<14} {:<16} {:<6} {:<6} {:<8} {:<8}\n",
@@ -351,7 +347,7 @@ impl SteampipeMcp {
     #[tool(
         description = "Read game logs from cluster VMs. Can target a specific VM or all VMs. Supports head/tail mode and regex filtering."
     )]
-    fn cluster_logs(
+    async fn cluster_logs(
         &self,
         Parameters(input): Parameters<ClusterLogsInput>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -360,13 +356,14 @@ impl SteampipeMcp {
         let lines = input.max_lines.unwrap_or(100);
         let head = !input.tail.unwrap_or(true);
 
-        let results = block_on(crate::logs::collect_logs(
+        let results = crate::logs::collect_logs(
             &config,
             input.vm.as_deref(),
             lines,
             head,
             input.pattern.as_deref(),
-        ))
+        )
+        .await
         .map_err(|e| ErrorData::internal_error(format!("Failed to collect logs: {e}"), None))?;
 
         let mut text = String::new();
@@ -385,7 +382,7 @@ impl SteampipeMcp {
     #[tool(
         description = "Build and deploy the game binary + assets to cluster VMs. Uses content-addressable pool with SHA-256 verification to skip unchanged binaries."
     )]
-    fn cluster_deploy(
+    async fn cluster_deploy(
         &self,
         Parameters(input): Parameters<ClusterDeployInput>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -397,18 +394,20 @@ impl SteampipeMcp {
 
         // Build
         if do_build {
-            block_on(crate::deploy::build_release(&root, &config.cargo_package))
+            crate::deploy::build_release(&root, &config.cargo_package)
+                .await
                 .map_err(|e| ErrorData::internal_error(format!("Build failed: {e}"), None))?;
         }
 
         // Deploy (verbose=false to avoid stdout corruption)
-        let results = block_on(crate::deploy::deploy_to_vms(
+        let results = crate::deploy::deploy_to_vms(
             &config.backend,
             &config.vms,
             &config,
             &root,
             false,
-        ))
+        )
+        .await
         .map_err(|e| ErrorData::internal_error(format!("Deploy failed: {e}"), None))?;
 
         let mut text = String::new();
@@ -446,7 +445,7 @@ impl SteampipeMcp {
     #[tool(
         description = "Kill the game process on all cluster VMs. Optionally also kill Steam and Weston processes."
     )]
-    fn cluster_stop(
+    async fn cluster_stop(
         &self,
         Parameters(input): Parameters<ClusterStopInput>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -454,29 +453,23 @@ impl SteampipeMcp {
         require_bridge(&config)?;
         let kill_steam = input.kill_steam.unwrap_or(false);
 
-        block_on(crate::run::kill_games(
-            &config.backend,
-            &config.vms,
-            &config.binary_name,
-        ));
+        crate::run::kill_games(&config.backend, &config.vms, &config.binary_name).await;
 
         let mut text = format!("Game stopped on {} VM(s)", config.vms.len());
 
         if kill_steam {
-            block_on(async {
-                crate::config::par_each_vm(&config.vms, |vm| {
-                    let backend = config.backend.clone();
-                    async move {
-                        backend
-                            .run_cmd(
-                                &vm.ip,
-                                "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; true",
-                            )
-                            .await;
-                    }
-                })
-                .await
+            crate::config::par_each_vm(&config.vms, |vm| {
+                let backend = config.backend.clone();
+                async move {
+                    backend
+                        .run_cmd(
+                            &vm.ip,
+                            "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; true",
+                        )
+                        .await;
+                }
             })
+            .await
             .map_err(|e| ErrorData::internal_error(format!("Failed to stop Steam: {e}"), None))?;
             text.push_str("\nSteam and Weston stopped");
         }
@@ -487,7 +480,7 @@ impl SteampipeMcp {
     #[tool(
         description = "Run end-to-end test on the VM cluster. Handles: deploy, Steam setup, game launch on VMs, heartbeat monitoring, log collection, and pass/fail reporting. Supports LAN (UDP) or Steam networking. Returns PASS/FAIL per run with failure codes and VM log excerpts."
     )]
-    fn cluster_test(
+    async fn cluster_test(
         &self,
         Parameters(input): Parameters<ClusterTestInput>,
     ) -> Result<CallToolResult, ErrorData> {
@@ -539,7 +532,7 @@ impl SteampipeMcp {
             verbose: false, // suppress println to avoid corrupting MCP transport
         };
 
-        let result = block_on(crate::test::run(&config, &root, test_config));
+        let result = crate::test::run(&config, &root, test_config).await;
 
         match result {
             Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
