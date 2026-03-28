@@ -28,7 +28,7 @@
         pname = "cluster-ctl";
         version = "0.1.0";
         src = ./.;
-        cargoHash = "sha256-WnzBFMwAt4HB5ayNZI9+kt83LK9KRDHfGcZ8ag/9Yuo=";
+        cargoHash = "sha256-1sRPWm0r0yuPa+MGXM2Z6BPUdZsLTnxnxXBktUNeZJI=";
         nativeBuildInputs = [toolchain];
       };
     in {
@@ -38,6 +38,10 @@
         buildInputs = [
           toolchain
           pkgs.cargo-outdated
+        ];
+        packages = [
+          pkgs.just
+          cluster-ctl
         ];
       };
     });
