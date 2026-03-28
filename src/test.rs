@@ -80,7 +80,11 @@ impl HeartbeatSource for VmHeartbeat<'_> {
         );
         let mut min_ts: Option<u128> = None;
         for (_, ip) in self.vms {
-            let result = self.rt.block_on(self.backend.run_cmd(ip, &cmd));
+            let result = self.rt.block_on(self.backend.run_cmd_timeout(
+                ip,
+                &cmd,
+                std::time::Duration::from_secs(5),
+            ));
             if let Some(ts) = parse_min_timestamp_ms(&result.stdout) {
                 min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
             }
