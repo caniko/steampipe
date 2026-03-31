@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::config::{BridgeReady, ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
-use crate::lease::{self, VmLease};
+use crate::lease;
 use crate::resources::{self, RamRequirements};
 use crate::state;
 
@@ -37,18 +37,11 @@ async fn wait_and_report(config: &ClusterConfig<BridgeReady>, vms: &[VmDef]) {
     }
 }
 
-/// Result of a successful `up` operation. Holds leases for the process lifetime.
-pub struct UpResult {
-    pub vms: Vec<VmDef>,
-    pub leases: Vec<VmLease>,
-}
-
 /// Run the `up` subcommand: reserve VMs, check RAM, start instances, wait for connectivity.
-/// Returns held leases — dropping them releases the VM locks.
 pub async fn up(
     config: &ClusterConfig<BridgeReady>,
     runners_dir: &Path,
-) -> anyhow::Result<UpResult> {
+) -> anyhow::Result<Vec<VmDef>> {
     state::ensure_state_dir(&config.state_dir)?;
 
     let vm_count = config.vms.len() as u8;
@@ -60,17 +53,17 @@ pub async fn up(
         .unwrap_or(7)
         .max(vm_count);
 
-    // Reserve VMs via flock
+    // Reserve VM slots (checks for claims held by other clusters)
     println!("==> Reserving {vm_count} VM(s)...");
-    let leases = lease::reserve_n(vm_count, max_vms, &config.lock_dir, &config.cluster_name)?;
+    let ids = lease::reserve_n(vm_count, max_vms, &config.lock_dir, &config.cluster_name)?;
 
     // Build VmDefs from the reserved IDs (which may differ from 1..N)
-    let vms: Vec<VmDef> = leases
+    let vms: Vec<VmDef> = ids
         .iter()
-        .map(|l| VmDef {
-            name: VmName(format!("vm-{}", l.vm_id)),
-            ip: IpAddr(format!("{}.{}", config.subnet, l.vm_id)),
-            index: l.vm_id,
+        .map(|&id| VmDef {
+            name: VmName(format!("vm-{id}")),
+            ip: IpAddr(format!("{}.{id}", config.subnet)),
+            index: id,
         })
         .collect();
 
@@ -94,6 +87,8 @@ pub async fn up(
         match resources::check_ram(&ram_req) {
             Ok(avail) => match config.backend.start_instance(config, vm, runners_dir) {
                 Ok(pid) => {
+                    // Write claim file so other commands can find this VM
+                    lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
                     println!(
                         "  {} started (PID {pid}, {:.1} GB available)",
                         vm.name,
@@ -124,13 +119,10 @@ pub async fn up(
 
     wait_and_report(config, &started).await;
 
-    Ok(UpResult {
-        vms: started,
-        leases,
-    })
+    Ok(started)
 }
 
-/// Run the `down` subcommand: stop all instances and kill lease daemon if running.
+/// Run the `down` subcommand: stop all instances and remove claim files.
 pub fn down<S>(config: &ClusterConfig<S>) {
     // Use leased VMs if available, otherwise fall back to static config
     let vms = config.leased_vms();
@@ -138,40 +130,12 @@ pub fn down<S>(config: &ClusterConfig<S>) {
     for vm in &vms {
         let had_pid = state::read_pid(&config.state_dir, &vm.name).is_some();
         config.backend.stop_instance(config, vm);
+        lease::remove_claim(vm.index, &config.lock_dir);
         if had_pid {
             println!("  {} stopped", vm.name);
         }
     }
 
-    // Kill the lease daemon if one is running
-    kill_daemon(&config.state_dir);
-
-    println!("==> Done");
-}
-
-/// Kill the lease-holding daemon process if one is running.
-pub fn kill_daemon(state_dir: &Path) {
-    if let Some(pid) = state::read_pid(state_dir, "daemon") {
-        if state::is_pid_alive(pid) {
-            let _ = std::process::Command::new("kill")
-                .args(["-TERM", &pid.to_string()])
-                .status();
-            println!("  lease daemon (PID {pid}) terminated");
-        }
-        state::remove_pid(state_dir, "daemon");
-    }
-}
-
-/// Stop specific VMs by their definitions.
-pub fn down_vms<S>(config: &ClusterConfig<S>, vms: &[VmDef]) {
-    println!("==> Stopping {} VM(s)...", vms.len());
-    for vm in vms {
-        let had_pid = state::read_pid(&config.state_dir, &vm.name).is_some();
-        config.backend.stop_instance(config, vm);
-        if had_pid {
-            println!("  {} stopped", vm.name);
-        }
-    }
     println!("==> Done");
 }
 
@@ -188,6 +152,7 @@ pub async fn restart(
     for vm in &targets {
         let had_pid = state::read_pid(&config.state_dir, &vm.name).is_some();
         config.backend.stop_instance(config, vm);
+        lease::remove_claim(vm.index, &config.lock_dir);
         if had_pid {
             println!("  {} stopped", vm.name);
         }
@@ -197,7 +162,10 @@ pub async fn restart(
 
     for vm in &targets {
         match config.backend.start_instance(config, vm, runners_dir) {
-            Ok(pid) => println!("  {} started (PID {pid})", vm.name),
+            Ok(pid) => {
+                lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
+                println!("  {} started (PID {pid})", vm.name);
+            }
             Err(e) => eprintln!("  {} FAILED: {e}", vm.name),
         }
     }

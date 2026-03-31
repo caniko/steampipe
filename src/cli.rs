@@ -90,20 +90,8 @@ pub enum Commands {
     /// Show status of all VMs (running, SSH, Steam, game)
     Status,
 
-    /// Start VMs and hold locks. Uses --vm-count to determine how many.
+    /// Start VMs. Uses --vm-count to determine how many.
     Up {
-        /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
-        #[arg(long)]
-        runners_dir: Option<PathBuf>,
-
-        /// Daemonize: start VMs, then background a lease-holding process and exit
-        #[arg(long)]
-        detach: bool,
-    },
-
-    /// Internal: hold VM leases in foreground (used by `up --detach`)
-    #[command(hide = true)]
-    HoldLeases {
         /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
         #[arg(long)]
         runners_dir: Option<PathBuf>,
@@ -366,38 +354,6 @@ pub enum Commands {
         /// Shell to generate completions for
         shell: Shell,
     },
-}
-
-impl Cli {
-    /// Reconstruct global CLI args for re-exec (e.g. spawning the lease daemon).
-    pub fn global_args(&self) -> Vec<String> {
-        let mut args = Vec::new();
-        if let Some(count) = self.vm_count {
-            args.extend(["--vm-count".into(), count.to_string()]);
-        }
-        if let Some(ref root) = self.project_root {
-            args.extend(["--project-root".into(), root.display().to_string()]);
-        }
-        if let Some(ref key) = self.ssh_key {
-            args.extend(["--ssh-key".into(), key.display().to_string()]);
-        }
-        if let Some(ref creds) = self.credentials {
-            args.extend(["--credentials".into(), creds.display().to_string()]);
-        }
-        if let Some(ref cluster) = self.cluster {
-            args.extend(["--cluster".into(), cluster.clone()]);
-        }
-        if let Some(ref dir) = self.state_dir {
-            args.extend(["--state-dir".into(), dir.display().to_string()]);
-        }
-        if let Some(ref backend) = self.backend {
-            args.extend(["--backend".into(), format!("{backend:?}").to_lowercase()]);
-        }
-        if let Some(ref dir) = self.lock_dir {
-            args.extend(["--lock-dir".into(), dir.display().to_string()]);
-        }
-        args
-    }
 }
 
 /// Print shell completions to stdout.
@@ -670,26 +626,6 @@ mod tests {
         }
     }
 
-    // ── Global args roundtrip ────────────────────────────────────────────
-
-    #[test]
-    fn global_args_roundtrip() {
-        let cli = parse(&["--vm-count", "3", "--cluster", "mytest", "status"]);
-        let args = cli.global_args();
-        assert!(args.contains(&"--vm-count".to_string()));
-        assert!(args.contains(&"3".to_string()));
-        assert!(args.contains(&"--cluster".to_string()));
-        assert!(args.contains(&"mytest".to_string()));
-    }
-
-    #[test]
-    fn global_args_minimal() {
-        let cli = parse(&["--vm-count", "1", "status"]);
-        let args = cli.global_args();
-        assert!(args.contains(&"--vm-count".to_string()));
-        assert!(!args.contains(&"--cluster".to_string()));
-    }
-
     // ── Deploy ───────────────────────────────────────────────────────────
 
     #[test]
@@ -713,30 +649,6 @@ mod tests {
                 assert!(verify);
             }
             _ => panic!("expected Deploy"),
-        }
-    }
-
-    // ── Up ───────────────────────────────────────────────────────────────
-
-    #[test]
-    fn up_detach() {
-        let cli = parse(&[
-            "--vm-count",
-            "1",
-            "up",
-            "--detach",
-            "--runners-dir",
-            "/tmp/r",
-        ]);
-        match cli.command {
-            Commands::Up {
-                detach,
-                runners_dir,
-            } => {
-                assert!(detach);
-                assert!(runners_dir.is_some());
-            }
-            _ => panic!("expected Up"),
         }
     }
 

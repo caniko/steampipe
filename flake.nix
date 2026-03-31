@@ -16,7 +16,7 @@
     flake-utils,
     ...
   }:
-    flake-utils.lib.eachDefaultSystem (system: let
+    (flake-utils.lib.eachDefaultSystem (system: let
       pkgs = import nixpkgs {
         inherit system;
         overlays = [(import rust-overlay)];
@@ -44,5 +44,8 @@
           cluster-ctl
         ];
       };
-    });
+    }))
+    // {
+      nixosModules.default = import ./nix/module.nix;
+    };
 }

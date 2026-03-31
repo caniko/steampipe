@@ -25,8 +25,6 @@ mod vm;
 mod watch;
 
 use std::path::PathBuf;
-use std::process::Stdio;
-use std::time::{Duration, Instant};
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -150,106 +148,14 @@ async fn main() -> anyhow::Result<()> {
         _ => {}
     }
 
-    // Extract global args before consuming cli.command in the match
-    let global_args = cli.global_args();
-
     match cli.command {
         // Commands that require a validated bridge (or skip for non-microvm)
-        Commands::Up {
-            runners_dir,
-            detach,
-        } => {
+        Commands::Up { runners_dir } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
             net::ensure_bridge(&config, &project_root)?;
-
-            if detach {
-                // Spawn a daemon process that does the full up + hold workflow
-                let exe = std::env::current_exe()?;
-                let daemon_pid_file = config.state_dir.join("daemon.pid");
-                let _ = std::fs::remove_file(&daemon_pid_file);
-
-                let mut cmd = std::process::Command::new(exe);
-                cmd.args(&global_args);
-                cmd.arg("hold-leases");
-                cmd.arg("--runners-dir").arg(&runners_dir);
-                cmd.stdin(Stdio::null());
-                cmd.stdout(Stdio::inherit());
-                cmd.stderr(Stdio::inherit());
-
-                #[cfg(unix)]
-                {
-                    use std::os::unix::process::CommandExt;
-                    cmd.process_group(0);
-                }
-
-                let child = cmd.spawn()?;
-                let child_pid = child.id();
-
-                // Poll for readiness (daemon writes PID file once VMs are up)
-                let deadline = Instant::now() + Duration::from_secs(120);
-                loop {
-                    if daemon_pid_file.exists() {
-                        println!("==> Detached (daemon PID {child_pid})");
-                        break;
-                    }
-                    if Instant::now() > deadline {
-                        let _ = std::process::Command::new("kill")
-                            .args(["-TERM", &child_pid.to_string()])
-                            .status();
-                        anyhow::bail!("daemon did not become ready within 120s");
-                    }
-                    std::thread::sleep(Duration::from_millis(500));
-                }
-            } else {
-                // Foreground mode: hold leases until Ctrl+C
-                let validated = config.validate_or_skip_bridge()?;
-                let result = vm::up(&validated, &runners_dir).await?;
-
-                println!(
-                    "==> Holding {} VM(s). Press Ctrl+C to shut down.",
-                    result.vms.len()
-                );
-                tokio::signal::ctrl_c().await?;
-
-                println!();
-                vm::down_vms(&validated, &result.vms);
-                drop(result.leases);
-            }
-        }
-        Commands::HoldLeases { runners_dir } => {
-            let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-            let state_dir = config.state_dir.clone();
             let validated = config.validate_or_skip_bridge()?;
-            let result = vm::up(&validated, &runners_dir).await?;
-
-            // Signal readiness to parent via PID file
-            state::write_pid(&state_dir, "daemon", std::process::id())?;
-
-            println!(
-                "==> Holding {} VM(s) (daemon mode, PID {})",
-                result.vms.len(),
-                std::process::id()
-            );
-
-            // Block until SIGTERM or Ctrl+C
-            #[cfg(unix)]
-            {
-                use tokio::signal::unix::{SignalKind, signal};
-                let mut sigterm = signal(SignalKind::terminate())?;
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {},
-                    _ = sigterm.recv() => {},
-                }
-            }
-            #[cfg(not(unix))]
-            {
-                tokio::signal::ctrl_c().await?;
-            }
-
-            println!("\n==> Daemon shutting down...");
-            vm::down_vms(&validated, &result.vms);
-            state::remove_pid(&state_dir, "daemon");
-            drop(result.leases);
+            let started = vm::up(&validated, &runners_dir).await?;
+            println!("==> {} VM(s) running", started.len());
         }
         Commands::Restart {
             target,
