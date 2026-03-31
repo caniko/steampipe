@@ -33,7 +33,7 @@ pub async fn stop_game<S>(config: &ClusterConfig<S>, kill_steam: bool) -> anyhow
                 backend
                     .run_cmd(
                         &vm.ip,
-                        "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; true",
+                        "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; pkill -x sway 2>/dev/null; true",
                     )
                     .await;
             }

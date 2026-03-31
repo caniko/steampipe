@@ -31,6 +31,8 @@ pub struct TestConfig {
     pub filter_pattern: Option<String>,
     pub output_file: Option<PathBuf>,
     pub capture_on_failure: bool,
+    /// VM display mode: headless (game gets `--headless`), weston, or sway.
+    pub display: crate::cli::DisplayMode,
     /// When false, suppress `println!` output (for MCP tools where stdout is JSON-RPC).
     pub verbose: bool,
 }
@@ -177,14 +179,61 @@ pub async fn run<S>(
         output.push('\n');
     }
 
-    // Step 2: Ensure Steam on VMs if steam network
+    // Step 2a: Start compositor on VMs if display mode requires it
+    if test_config.display != crate::cli::DisplayMode::Headless {
+        print_and_push(
+            &mut output,
+            &format!("=== STARTING {} ON VMs ===", test_config.display),
+            verbose,
+        );
+        let setup_script =
+            crate::steam::compositor_setup(test_config.display, &config.vm_user);
+        for vm in target_vms {
+            let result = backend.run_cmd(&vm.ip, &setup_script).await;
+            if result.success {
+                print_and_push(
+                    &mut output,
+                    &format!("  {}: {} ready", vm.name, test_config.display),
+                    verbose,
+                );
+            } else {
+                print_and_push(
+                    &mut output,
+                    &format!("  {}: compositor FAILED — {}", vm.name, result.stderr),
+                    verbose,
+                );
+                anyhow::bail!("Compositor setup failed on {}", vm.name);
+            }
+        }
+        output.push('\n');
+    }
+
+    // Step 2b: Ensure Steam on VMs if steam network
     if test_config.network == NetworkMode::Steam {
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===", verbose);
+        // If display is Headless, Steam still needs weston as a compositor
+        let compositor = if test_config.display == crate::cli::DisplayMode::Headless {
+            crate::steam::weston_setup(&config.vm_user)
+        } else {
+            // Compositor already running from step 2a — just export the env vars
+            String::new()
+        };
         for vm in target_vms {
-            match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user).await {
-                Ok(()) => print_and_push(&mut output, &format!("  {}: Steam ready", vm.name), verbose),
+            match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user, &compositor).await
+            {
+                Ok(()) => {
+                    print_and_push(
+                        &mut output,
+                        &format!("  {}: Steam ready", vm.name),
+                        verbose,
+                    )
+                }
                 Err(e) => {
-                    print_and_push(&mut output, &format!("  {}: FAILED — {e}", vm.name), verbose);
+                    print_and_push(
+                        &mut output,
+                        &format!("  {}: FAILED — {e}", vm.name),
+                        verbose,
+                    );
                     anyhow::bail!("Steam setup failed on {}", vm.name);
                 }
             }
@@ -204,14 +253,20 @@ pub async fn run<S>(
         );
     }
 
-    // Default args based on network mode when not explicitly provided
+    // Default args based on network mode when not explicitly provided.
+    // Host never gets --headless; VMs get it only in headless display mode.
+    let vm_headless = if test_config.display == crate::cli::DisplayMode::Headless {
+        " --headless"
+    } else {
+        ""
+    };
     let default_vm_args;
     let default_host_args;
     match test_config.network {
         NetworkMode::Lan => {
             default_host_args = "--auto-host-udp --auto-play".to_string();
             default_vm_args = format!(
-                "--auto-join-udp --udp-addr {}:{} --auto-play --headless",
+                "--auto-join-udp --udp-addr {}:{} --auto-play{vm_headless}",
                 config.host_ip, config.udp_port,
             );
         }
@@ -221,7 +276,7 @@ pub async fn run<S>(
                 .map(|id| format!(" --steam-target-id {id}"))
                 .unwrap_or_default();
             default_vm_args = format!(
-                "--auto-join-steam --auto-play --headless{target_flag}"
+                "--auto-join-steam --auto-play{vm_headless}{target_flag}"
             );
         }
     }

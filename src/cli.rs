@@ -22,6 +22,27 @@ impl fmt::Display for NetworkMode {
     }
 }
 
+/// VM display mode: controls compositor setup on VMs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DisplayMode {
+    /// No compositor — game binary gets `--headless`
+    Headless,
+    /// Start Weston (headless backend) — game renders to virtual display
+    Weston,
+    /// Start Sway compositor
+    Sway,
+}
+
+impl fmt::Display for DisplayMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Headless => f.write_str("headless"),
+            Self::Weston => f.write_str("weston"),
+            Self::Sway => f.write_str("sway"),
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "cluster-ctl",
@@ -239,6 +260,10 @@ pub enum Commands {
         /// Capture screenshots on test failure
         #[arg(long)]
         capture_on_failure: bool,
+
+        /// VM display mode: headless, weston (default), or sway
+        #[arg(long, default_value = "weston")]
+        display: DisplayMode,
     },
 
     /// Diagnose and repair cluster health issues

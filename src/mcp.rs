@@ -197,9 +197,9 @@ pub struct ClusterTestInput {
     /// Build before deploying (default: true).
     #[serde(default)]
     pub build: Option<bool>,
-    /// Run host in headless mode (default: true).
+    /// VM display mode: "headless", "weston" (default), or "sway".
     #[serde(default)]
-    pub headless: Option<bool>,
+    pub display: Option<String>,
     /// Capture screenshots on failure (default: false).
     #[serde(default)]
     pub capture_on_failure: Option<bool>,
@@ -464,7 +464,7 @@ impl SteampipeMcp {
                     backend
                         .run_cmd(
                             &vm.ip,
-                            "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; true",
+                            "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; pkill -x sway 2>/dev/null; true",
                         )
                         .await;
                 }
@@ -504,22 +504,25 @@ impl SteampipeMcp {
             _ => 8,
         };
 
-        // Build host_args: inject --headless if requested
-        let headless = input.headless.unwrap_or(true);
-        let host_args = match (input.host_args, headless) {
-            (Some(args), true) if !args.contains("--headless") => {
-                Some(format!("{args} --headless"))
+        let display = match input.display.as_deref().unwrap_or("weston") {
+            "headless" => crate::cli::DisplayMode::Headless,
+            "weston" => crate::cli::DisplayMode::Weston,
+            "sway" => crate::cli::DisplayMode::Sway,
+            other => {
+                return Err(ErrorData::invalid_params(
+                    format!(
+                        "display must be \"headless\", \"weston\", or \"sway\", got \"{other}\""
+                    ),
+                    None,
+                ));
             }
-            (Some(args), _) => Some(args),
-            (None, true) => Some("--headless".to_string()),
-            (None, false) => None,
         };
 
         let test_config = crate::test::TestConfig {
             network,
             players: input.players.unwrap_or(default_players),
             vm_args: input.vm_args,
-            host_args,
+            host_args: input.host_args,
             max_runs: input.max_runs.unwrap_or(1).min(50),
             timeout: Duration::from_secs(input.timeout.unwrap_or(300)),
             shutdown_timeout: Duration::from_secs(input.shutdown_timeout.unwrap_or(5)),
@@ -529,6 +532,7 @@ impl SteampipeMcp {
             filter_pattern: input.filter_pattern,
             output_file: input.output_file.map(std::path::PathBuf::from),
             capture_on_failure: input.capture_on_failure.unwrap_or(false),
+            display,
             verbose: false, // suppress println to avoid corrupting MCP transport
         };
 

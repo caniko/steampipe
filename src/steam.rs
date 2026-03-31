@@ -21,6 +21,31 @@ export DISPLAY=:0
     )
 }
 
+/// Shell snippet that ensures sway is running and exports display vars.
+pub fn sway_setup(vm_user: &str) -> String {
+    format!(
+        r#"
+export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
+mkdir -p $XDG_RUNTIME_DIR
+if ! pgrep -x sway >/dev/null; then
+    sway >/dev/null 2>&1 &
+    sleep 2
+fi
+export WAYLAND_DISPLAY=wayland-1
+export DISPLAY=:0
+"#
+    )
+}
+
+/// Return the compositor setup snippet for a display mode (empty for Headless).
+pub fn compositor_setup(mode: crate::cli::DisplayMode, vm_user: &str) -> String {
+    match mode {
+        crate::cli::DisplayMode::Headless => String::new(),
+        crate::cli::DisplayMode::Weston => weston_setup(vm_user),
+        crate::cli::DisplayMode::Sway => sway_setup(vm_user),
+    }
+}
+
 /// Shell snippet that starts Steam silently if not already running.
 pub const STEAM_START_SILENT: &str = r#"
 if pgrep -x steam >/dev/null; then
@@ -31,12 +56,19 @@ else
 fi
 "#;
 
-/// Ensure weston + Steam are running on an instance, waiting for Steam's connection log.
-pub async fn ensure_steam(backend: &Backend, ip: &str, vm_user: &str) -> anyhow::Result<()> {
+/// Ensure compositor + Steam are running on an instance, waiting for Steam's connection log.
+///
+/// `compositor` is a shell snippet that starts the compositor (from [`compositor_setup`]).
+/// Pass an empty string if the compositor is already running.
+pub async fn ensure_steam(
+    backend: &Backend,
+    ip: &str,
+    vm_user: &str,
+    compositor: &str,
+) -> anyhow::Result<()> {
     let log = format!("/home/{vm_user}/.local/share/Steam/logs/connection_log.txt");
-    let weston = weston_setup(vm_user);
     let cmd = format!(
-        "{weston}\
+        "{compositor}\
          if pgrep -x steam >/dev/null; then \
          echo STEAM_READY; exit 0; \
          fi; \

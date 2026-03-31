@@ -334,6 +334,7 @@ async fn main() -> anyhow::Result<()> {
             filter_pattern,
             output_file,
             capture_on_failure,
+            display,
         } => {
             test::run(
                 &config,
@@ -352,6 +353,7 @@ async fn main() -> anyhow::Result<()> {
                     filter_pattern,
                     output_file,
                     capture_on_failure,
+                    display,
                     verbose: true,
                 },
             )
