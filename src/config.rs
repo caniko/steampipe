@@ -162,6 +162,8 @@ pub struct NetworkFileConfig {
     pub prefix: Option<u8>,
     pub host_ip: Option<String>,
     pub udp_port: Option<u16>,
+    /// Owner of TAP devices (username). Needed for unprivileged VM hypervisors.
+    pub tap_owner: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -375,6 +377,7 @@ pub struct ClusterConfig<S = Unchecked> {
     pub lock_dir: PathBuf,
     pub ram_per_vm: u64,
     pub host_ram_reserve: u64,
+    pub tap_owner: Option<String>,
     _state: PhantomData<S>,
 }
 
@@ -536,6 +539,7 @@ impl ClusterConfig<Unchecked> {
             lock_dir,
             ram_per_vm,
             host_ram_reserve,
+            tap_owner: proj.as_ref().and_then(|p| p.network.as_ref()?.tap_owner.clone()),
             _state: PhantomData,
         })
     }
@@ -587,6 +591,7 @@ impl<S> ClusterConfig<S> {
             lock_dir: self.lock_dir,
             ram_per_vm: self.ram_per_vm,
             host_ram_reserve: self.host_ram_reserve,
+            tap_owner: self.tap_owner,
             _state: PhantomData,
         }
     }
@@ -680,6 +685,7 @@ impl ClusterConfig<Unchecked> {
             lock_dir: std::env::temp_dir().join("steampipe-test-locks"),
             ram_per_vm: 2048 * 1024 * 1024,
             host_ram_reserve: 2048 * 1024 * 1024,
+            tap_owner: None,
             _state: PhantomData,
         }
     }

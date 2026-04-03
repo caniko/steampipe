@@ -8,21 +8,24 @@ let
   cfg = config.services.steampipe-cluster;
   vmNames = builtins.genList (i: "vm-${toString (i + 1)}") cfg.vmCount;
   tapNames = map (n: "tap-${n}") vmNames;
-  cidr = "${cfg.subnet}.0/${toString cfg.prefix}";
 
-  tapNetdevs = builtins.listToAttrs (map (tap: {
-    name = "40-${tap}";
-    value.netdevConfig = {
-      Name = tap;
-      Kind = "tap";
-    };
-  }) tapNames);
-
-  tapNetworks = builtins.listToAttrs (map (tap: {
-    name = "40-${tap}";
+  # NM ensureProfiles for TAP devices (bridge slaves)
+  tapProfiles = builtins.listToAttrs (map (tap: {
+    name = tap;
     value = {
-      matchConfig.Name = tap;
-      networkConfig.Bridge = cfg.bridge;
+      connection = {
+        id = tap;
+        type = "tun";
+        master = cfg.bridge;
+        slave-type = "bridge";
+        autoconnect = "true";
+      };
+      tun = {
+        mode = "2"; # TAP
+        vnet-hdr = "true";
+      } // lib.optionalAttrs (cfg.tapOwner != null) {
+        owner = cfg.tapOwner;
+      };
     };
   }) tapNames);
 in
@@ -68,53 +71,48 @@ in
         If null, masquerade applies to all outbound traffic.
       '';
     };
+
+    tapOwner = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = null;
+      description = ''
+        User who owns the TAP devices. Required for unprivileged VM
+        hypervisors (e.g. cloud-hypervisor) to open TAP devices.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
     boot.kernel.sysctl."net.ipv4.ip_forward" = lib.mkDefault 1;
 
-    systemd.network.enable = true;
-
-    # Bridge + TAP netdevs
-    systemd.network.netdevs = {
-      "40-${cfg.bridge}".netdevConfig = {
-        Name = cfg.bridge;
-        Kind = "bridge";
-      };
-    } // tapNetdevs;
-
-    # Bridge IP + TAP→bridge attachment
-    systemd.network.networks = {
-      "40-${cfg.bridge}" = {
-        matchConfig.Name = cfg.bridge;
-        address = ["${cfg.hostIp}/${toString cfg.prefix}"];
-        networkConfig.ConfigureWithoutCarrier = true;
-      };
-    } // tapNetworks;
+    # Bridge + TAP devices via NetworkManager
+    networking.networkmanager.ensureProfiles.profiles =
+      {
+        "${cfg.bridge}" = {
+          connection = {
+            id = cfg.bridge;
+            type = "bridge";
+            interface-name = cfg.bridge;
+            autoconnect = "true";
+          };
+          bridge.stp = "false";
+          ipv4 = {
+            method = "manual";
+            addresses = "${cfg.hostIp}/${toString cfg.prefix}";
+          };
+          ipv6.method = "disabled";
+        };
+      }
+      // tapProfiles;
 
     # Trust the bridge interface in the NixOS firewall
     networking.firewall.trustedInterfaces = [cfg.bridge];
 
-    # nftables: NAT + forwarding
-    networking.nftables.enable = true;
-    networking.nftables.tables.cluster = {
-      family = "ip";
-      content = ''
-        chain nat_post {
-          type nat hook postrouting priority 100 ;
-          ip saddr ${cidr} ${
-            if cfg.natInterface != null
-            then ''oifname "${cfg.natInterface}"''
-            else ""
-          } masquerade
-        }
-
-        chain forward {
-          type filter hook forward priority 0 ;
-          iifname "${cfg.bridge}" accept
-          oifname "${cfg.bridge}" accept
-        }
-      '';
+    # NAT masquerade via NixOS module (auto-uses nftables when enabled)
+    networking.nat = {
+      enable = true;
+      externalInterface = cfg.natInterface;
+      internalInterfaces = [cfg.bridge];
     };
   };
 }

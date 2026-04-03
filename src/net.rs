@@ -104,6 +104,7 @@ pub(crate) fn plan_net_up(
     vm_names: &[&str],
     default_if: &str,
     nft: &str,
+    tap_owner: Option<&str>,
 ) -> Vec<NetCmd> {
     let mut cmds = Vec::new();
 
@@ -118,7 +119,12 @@ pub(crate) fn plan_net_up(
     // Create TAP devices
     for name in vm_names {
         let tap = format!("tap-{name}");
-        cmds.push(NetCmd::new("ip", &["tuntap", "add", &tap, "mode", "tap"]));
+        let mut tap_args: Vec<&str> = vec!["tuntap", "add", &tap, "mode", "tap"];
+        if let Some(owner) = tap_owner {
+            tap_args.extend_from_slice(&["user", owner]);
+        }
+        tap_args.push("vnet_hdr");
+        cmds.push(NetCmd::new("ip", &tap_args));
         cmds.push(NetCmd::new("ip", &["link", "set", &tap, "master", bridge]));
         cmds.push(NetCmd::new("ip", &["link", "set", &tap, "up"]));
     }
@@ -241,6 +247,7 @@ fn microvm_net_up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()>
         &vm_names,
         &default_if,
         nft,
+        config.tap_owner.as_deref(),
     );
 
     // Execute, printing progress at milestones.
@@ -372,7 +379,7 @@ mod tests {
 
     #[test]
     fn plan_net_up_bridge_commands_first() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft");
+        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
         assert_eq!(cmds[0], NetCmd::new("ip", &["link", "add", "br-test", "type", "bridge"]));
         assert_eq!(
             cmds[1],
@@ -391,6 +398,7 @@ mod tests {
             &["vm-1", "vm-2", "vm-3"],
             "eth0",
             "nft",
+            None,
         );
         // 3 bridge cmds + 3 TAP cmds per VM (9) + 1 sysctl + 6 nft = 19 total
         let tap_cmds: Vec<_> = cmds
@@ -405,7 +413,7 @@ mod tests {
 
     #[test]
     fn plan_net_up_nft_masquerade_uses_subnet() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft");
+        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
         let masq = cmds
             .iter()
             .find(|c| c.args.iter().any(|a| a == "masquerade"))
@@ -416,7 +424,7 @@ mod tests {
 
     #[test]
     fn plan_net_up_forward_chain_in_cluster_table() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft");
+        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
         let fwd_chain = cmds.iter().find(|c| {
             c.args.contains(&"chain".into())
                 && c.args.contains(&"forward".into())
@@ -428,7 +436,7 @@ mod tests {
 
     #[test]
     fn plan_net_up_forward_rules_reference_bridge() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft");
+        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
         let fwd_rules: Vec<_> = cmds
             .iter()
             .filter(|c| {
@@ -443,9 +451,25 @@ mod tests {
 
     #[test]
     fn plan_net_up_uses_custom_nft_path() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "/usr/bin/nft");
+        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "/usr/bin/nft", None);
         let nft_cmds: Vec<_> = cmds.iter().filter(|c| c.program == "/usr/bin/nft").collect();
         assert!(nft_cmds.len() >= 5); // table + nat_post chain + nat rule + fwd chain + 2 fwd rules
+    }
+
+    #[test]
+    fn plan_net_up_tap_has_vnet_hdr() {
+        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
+        let tap_create = cmds.iter().find(|c| c.args.contains(&"tuntap".into())).unwrap();
+        assert!(tap_create.args.contains(&"vnet_hdr".into()));
+    }
+
+    #[test]
+    fn plan_net_up_tap_owner() {
+        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", Some("can"));
+        let tap_create = cmds.iter().find(|c| c.args.contains(&"tuntap".into())).unwrap();
+        assert!(tap_create.args.contains(&"user".into()));
+        assert!(tap_create.args.contains(&"can".into()));
+        assert!(tap_create.args.contains(&"vnet_hdr".into()));
     }
 
     #[test]
