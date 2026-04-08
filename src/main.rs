@@ -1,17 +1,19 @@
 mod accounts;
 mod backend;
+mod bisect;
 mod capture;
 mod cli;
 mod config;
 mod credentials;
 mod deploy;
-mod doctor;
 mod history;
+mod hooks;
 mod lease;
 mod logs;
 mod mcp;
 mod net;
 mod netem;
+mod output;
 mod preflight;
 mod resources;
 mod run;
@@ -27,8 +29,9 @@ mod watch;
 use std::path::PathBuf;
 
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, HistoryAction, NetworkMode, DisplayMode};
 use config::{BackendKind, ClusterConfig, detect_project_root};
+use output::OutputFormat;
 
 /// Require a runners_dir for the microvm backend, or return a dummy path for others.
 fn require_runners_dir(
@@ -42,6 +45,18 @@ fn require_runners_dir(
         }
         None => Ok(PathBuf::from("/dev/null")), // unused by non-microvm backends
     }
+}
+
+/// Resolve a test config field: CLI explicit > profile > default.
+macro_rules! resolve {
+    ($cli:expr, $profile:expr, $field:ident, $default:expr) => {
+        $cli.unwrap_or_else(|| {
+            $profile
+                .as_ref()
+                .and_then(|p| p.$field.clone())
+                .unwrap_or($default)
+        })
+    };
 }
 
 #[tokio::main]
@@ -142,7 +157,8 @@ async fn main() -> anyhow::Result<()> {
         Commands::Deploy { .. }
         | Commands::Run { .. }
         | Commands::StopGame { .. }
-        | Commands::Test { .. } => {
+        | Commands::Test { .. }
+        | Commands::Bisect { .. } => {
             config.vms = config.leased_vms();
         }
         _ => {}
@@ -227,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
             run::start_game(&config, &extra_args).await?;
         }
         Commands::Test {
+            profile,
             network,
             players,
             vm_args,
@@ -241,42 +258,182 @@ async fn main() -> anyhow::Result<()> {
             output_file,
             capture_on_failure,
             display,
+            chaos_profile,
+            heartbeat_stall_secs,
+            output_format,
+            on_complete,
+            on_failure,
         } => {
+            // Load test profile if specified
+            let prof = profile
+                .as_deref()
+                .and_then(|name| config::lookup_test_profile(&project_root, name));
+            if profile.is_some() && prof.is_none() {
+                eprintln!(
+                    "Warning: test profile '{}' not found in steampipe.toml",
+                    profile.as_deref().unwrap_or("")
+                );
+            }
+
+            // Resolve network mode
+            let resolved_network = network
+                .or_else(|| {
+                    prof.as_ref()
+                        .and_then(|p| p.network.as_deref())
+                        .and_then(|s| match s {
+                            "lan" => Some(NetworkMode::Lan),
+                            "steam" => Some(NetworkMode::Steam),
+                            _ => None,
+                        })
+                })
+                .unwrap_or(NetworkMode::Lan);
+
+            // Resolve display mode
+            let resolved_display = display
+                .or_else(|| {
+                    prof.as_ref()
+                        .and_then(|p| p.display.as_deref())
+                        .and_then(|s| match s {
+                            "headless" => Some(DisplayMode::Headless),
+                            "weston" => Some(DisplayMode::Weston),
+                            "sway" => Some(DisplayMode::Sway),
+                            _ => None,
+                        })
+                })
+                .unwrap_or(DisplayMode::Weston);
+
+            // Resolve output format
+            let resolved_format = output_format
+                .or_else(|| {
+                    prof.as_ref()
+                        .and_then(|p| p.output_format.as_deref())
+                        .and_then(|s| match s {
+                            "junit" => Some(OutputFormat::Junit),
+                            "jsonl" => Some(OutputFormat::Jsonl),
+                            _ => None,
+                        })
+                })
+                .unwrap_or(OutputFormat::Text);
+
+            // Resolve chaos profile
+            let chaos = chaos_profile
+                .as_deref()
+                .or(prof.as_ref().and_then(|p| p.chaos_profile.as_deref()))
+                .and_then(|name| config::lookup_chaos_profile(&project_root, name));
+
+            // Resolve hooks: CLI > profile > config hooks
+            let resolved_on_complete = on_complete
+                .or_else(|| prof.as_ref().and_then(|p| p.on_complete.clone()))
+                .or_else(|| config.hooks.on_complete.clone());
+            let resolved_on_failure = on_failure
+                .or_else(|| prof.as_ref().and_then(|p| p.on_failure.clone()))
+                .or_else(|| config.hooks.on_failure.clone());
+
             test::run(
                 &config,
                 &project_root,
                 test::TestConfig {
+                    network: resolved_network,
+                    players: resolve!(players, prof, players, 8),
+                    vm_args: vm_args.or_else(|| prof.as_ref().and_then(|p| p.vm_args.clone())),
+                    host_args: host_args.or_else(|| prof.as_ref().and_then(|p| p.host_args.clone())),
+                    max_runs: resolve!(max_runs, prof, max_runs, 1),
+                    timeout: std::time::Duration::from_secs(resolve!(timeout, prof, timeout, 300)),
+                    shutdown_timeout: std::time::Duration::from_secs(
+                        resolve!(shutdown_timeout, prof, shutdown_timeout, 5),
+                    ),
+                    stop_on_failure: !no_stop_on_failure
+                        && !prof
+                            .as_ref()
+                            .and_then(|p| p.no_stop_on_failure)
+                            .unwrap_or(false),
+                    deploy: !no_deploy
+                        && !prof
+                            .as_ref()
+                            .and_then(|p| p.no_deploy)
+                            .unwrap_or(false),
+                    build: !no_build
+                        && !prof
+                            .as_ref()
+                            .and_then(|p| p.no_build)
+                            .unwrap_or(false),
+                    filter_pattern: filter_pattern
+                        .or_else(|| prof.as_ref().and_then(|p| p.filter_pattern.clone())),
+                    output_file: output_file.or_else(|| {
+                        prof.as_ref()
+                            .and_then(|p| p.output_file.as_ref())
+                            .map(PathBuf::from)
+                    }),
+                    capture_on_failure: capture_on_failure
+                        || prof
+                            .as_ref()
+                            .and_then(|p| p.capture_on_failure)
+                            .unwrap_or(false),
+                    display: resolved_display,
+                    verbose: true,
+                    chaos,
+                    heartbeat_stall_secs: heartbeat_stall_secs
+                        .or_else(|| prof.as_ref().and_then(|p| p.heartbeat_stall_secs))
+                        .unwrap_or(config.heartbeat_stall_secs),
+                    output_format: resolved_format,
+                    on_complete: resolved_on_complete,
+                    on_failure: resolved_on_failure,
+                    exit_codes: config.exit_codes.clone(),
+                },
+            )
+            .await?;
+        }
+
+        Commands::Bisect {
+            good,
+            bad,
+            network,
+            players,
+            timeout,
+            runs_per_step,
+            pass_threshold,
+            display,
+            vm_args,
+            host_args,
+        } => {
+            bisect::run(
+                &config,
+                &project_root,
+                bisect::BisectConfig {
+                    good_sha: good,
+                    bad_sha: bad,
                     network,
                     players,
+                    timeout: std::time::Duration::from_secs(timeout),
+                    runs_per_step,
+                    pass_threshold,
+                    display,
                     vm_args,
                     host_args,
-                    max_runs,
-                    timeout: std::time::Duration::from_secs(timeout),
-                    shutdown_timeout: std::time::Duration::from_secs(shutdown_timeout),
-                    stop_on_failure: !no_stop_on_failure,
-                    deploy: !no_deploy,
-                    build: !no_build,
-                    filter_pattern,
-                    output_file,
-                    capture_on_failure,
-                    display,
-                    verbose: true,
                 },
             )
             .await?;
         }
 
         // New commands
-        Commands::Doctor { fix } => doctor::run(&config, fix)?,
         Commands::Netem {
             target,
             latency,
             jitter,
             loss,
             rate,
+            chaos_profile,
         } => {
+            // Resolve chaos profile if specified
+            let (lat, jit, los, rat) = if let Some(ref name) = chaos_profile {
+                let profile = config::lookup_chaos_profile(&project_root, name)
+                    .ok_or_else(|| anyhow::anyhow!("Chaos profile '{name}' not found in steampipe.toml"))?;
+                (profile.latency, profile.jitter, profile.loss, profile.rate)
+            } else {
+                (latency, jitter, loss, rate)
+            };
             println!("==> Applying network emulation...");
-            netem::apply(&config, &target, latency, jitter, loss, rate)?;
+            netem::apply(&config, &target, lat, jit, los, rat)?;
             println!("==> Done");
         }
         Commands::NetemShow => netem::show(&config)?,
@@ -285,11 +442,27 @@ async fn main() -> anyhow::Result<()> {
             netem::reset(&config, target.as_deref())?;
             println!("==> Done");
         }
-        Commands::History { last, clear } => {
+        Commands::History {
+            action,
+            last,
+            clear,
+            format,
+            output,
+        } => {
             if clear {
                 history::clear(&config.state_dir)?;
+            } else if let Some(fmt) = format {
+                history::export(&config.state_dir, last, fmt, output.as_deref(), &config.exit_codes)?;
             } else {
-                history::show(&config.state_dir, last)?;
+                match action {
+                    None => history::show(&config.state_dir, last, &config.exit_codes)?,
+                    Some(HistoryAction::Trends { window, last: n }) => {
+                        history::show_trends(&config.state_dir, window, n, &config.exit_codes)?;
+                    }
+                    Some(HistoryAction::Flaky { last: n }) => {
+                        history::show_flakiness(&config.state_dir, n, &config.exit_codes)?;
+                    }
+                }
             }
         }
         Commands::SnapshotSave { name } => snapshot::save(&config, &name)?,

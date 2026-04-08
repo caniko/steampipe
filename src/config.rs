@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use std::collections::HashMap;
+
 use crate::backend::Backend;
 use clap::ValueEnum;
 
@@ -139,6 +141,16 @@ pub struct ProjectConfig {
     pub cluster: Option<ClusterSection>,
     pub docker: Option<DockerConfig>,
     pub local: Option<LocalConfig>,
+    /// Named test profiles: `[profile.smoke]`, `[profile.stress]`, etc.
+    pub profile: Option<HashMap<String, TestProfile>>,
+    /// Named chaos profiles: `[chaos.unstable-wifi]`, etc.
+    pub chaos: Option<HashMap<String, ChaosProfile>>,
+    /// Exit code → label mapping (keys are string integers, e.g. "10" = "PHASE_WATCHDOG").
+    pub exit_codes: Option<HashMap<String, String>>,
+    /// Heartbeat stall threshold in seconds (default: 30).
+    pub heartbeat_stall_secs: Option<u64>,
+    /// Notification hooks.
+    pub hooks: Option<HooksConfig>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -172,6 +184,59 @@ pub struct ClusterSection {
     pub name: Option<String>,
     /// Absolute path override for state directory (share cluster state across projects).
     pub state_dir: Option<String>,
+}
+
+/// A named test profile with all test parameters optional (CLI overrides profile).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct TestProfile {
+    pub players: Option<u8>,
+    pub max_runs: Option<u32>,
+    pub timeout: Option<u64>,
+    pub shutdown_timeout: Option<u64>,
+    pub network: Option<String>,
+    pub display: Option<String>,
+    pub vm_args: Option<String>,
+    pub host_args: Option<String>,
+    pub no_build: Option<bool>,
+    pub no_deploy: Option<bool>,
+    pub no_stop_on_failure: Option<bool>,
+    pub capture_on_failure: Option<bool>,
+    pub filter_pattern: Option<String>,
+    pub output_file: Option<String>,
+    pub chaos_profile: Option<String>,
+    pub heartbeat_stall_secs: Option<u64>,
+    pub output_format: Option<String>,
+    pub on_complete: Option<String>,
+    pub on_failure: Option<String>,
+}
+
+/// Network emulation parameters for chaos testing.
+#[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
+#[serde(default)]
+pub struct ChaosProfile {
+    pub latency: Option<u32>,
+    pub jitter: Option<u32>,
+    pub loss: Option<f32>,
+    pub rate: Option<u32>,
+}
+
+/// Dynamic chaos injection schedule (stretch goal).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+#[allow(dead_code)]
+pub struct ChaosSchedule {
+    pub delay_secs: Option<u64>,
+    pub profiles: Vec<String>,
+    pub interval_secs: Option<u64>,
+}
+
+/// Notification hooks executed after test runs.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct HooksConfig {
+    pub on_complete: Option<String>,
+    pub on_failure: Option<String>,
 }
 
 /// Load project config from a steampipe.toml file.
@@ -244,7 +309,57 @@ remote_dir = "/home/player/game"
 # Local backend settings (used when backend = "local")
 # [local]
 # work_dir = "/tmp/steampipe-local"
+
+# Heartbeat stall threshold (seconds before declaring a test stalled)
+# heartbeat_stall_secs = 30
+
+# Exit code labels (map game exit codes to human-readable names)
+# [exit_codes]
+# 0 = "SUCCESS"
+# 10 = "PHASE_WATCHDOG"
+# 11 = "DAG_VIOLATION"
+
+# Named test profiles (use with --profile <name>)
+# [profile.smoke]
+# players = 2
+# max_runs = 5
+# timeout = 120
+# network = "lan"
+
+# [profile.stress]
+# players = 8
+# max_runs = 100
+# timeout = 600
+
+# Named chaos profiles (use with --chaos-profile <name> on test, or --profile <name> on netem)
+# [chaos.unstable-wifi]
+# latency = 80
+# jitter = 20
+# loss = 2.0
+
+# [chaos.satellite]
+# latency = 600
+# jitter = 50
+# loss = 0.5
+# rate = 1000
+
+# Notification hooks (template vars: {pass_count}, {fail_count}, {pass_rate}, {duration}, {exit_label})
+# [hooks]
+# on_complete = "notify-send 'Tests done: {pass_rate}% pass rate'"
+# on_failure = "curl -X POST https://slack.webhook/... -d '{\"text\": \"Failed: {exit_label}\"}'"
 "#.to_string()
+}
+
+/// Look up a test profile by name from a project config.
+pub fn lookup_test_profile(project_root: &Path, name: &str) -> Option<TestProfile> {
+    let proj = load_project_config(project_root)?;
+    proj.profile?.get(name).cloned()
+}
+
+/// Look up a chaos profile by name from a project config.
+pub fn lookup_chaos_profile(project_root: &Path, name: &str) -> Option<ChaosProfile> {
+    let proj = load_project_config(project_root)?;
+    proj.chaos?.get(name).cloned()
 }
 
 /// Flat struct mirroring yh-mcp's `SteampipeGlobalArgs` for `.yh.cluster.toml` output.
@@ -378,6 +493,12 @@ pub struct ClusterConfig<S = Unchecked> {
     pub ram_per_vm: u64,
     pub host_ram_reserve: u64,
     pub tap_owner: Option<String>,
+    /// Parsed exit code → label mapping from config.
+    pub exit_codes: HashMap<i32, String>,
+    /// Heartbeat stall threshold in seconds.
+    pub heartbeat_stall_secs: u64,
+    /// Notification hooks.
+    pub hooks: HooksConfig,
     _state: PhantomData<S>,
 }
 
@@ -540,6 +661,23 @@ impl ClusterConfig<Unchecked> {
             ram_per_vm,
             host_ram_reserve,
             tap_owner: proj.as_ref().and_then(|p| p.network.as_ref()?.tap_owner.clone()),
+            exit_codes: proj
+                .as_ref()
+                .and_then(|p| p.exit_codes.as_ref())
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| Some((k.parse::<i32>().ok()?, v.clone())))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            heartbeat_stall_secs: proj
+                .as_ref()
+                .and_then(|p| p.heartbeat_stall_secs)
+                .unwrap_or(30),
+            hooks: proj
+                .as_ref()
+                .and_then(|p| p.hooks.clone())
+                .unwrap_or_default(),
             _state: PhantomData,
         })
     }
@@ -592,6 +730,9 @@ impl<S> ClusterConfig<S> {
             ram_per_vm: self.ram_per_vm,
             host_ram_reserve: self.host_ram_reserve,
             tap_owner: self.tap_owner,
+            exit_codes: self.exit_codes,
+            heartbeat_stall_secs: self.heartbeat_stall_secs,
+            hooks: self.hooks,
             _state: PhantomData,
         }
     }
@@ -686,6 +827,9 @@ impl ClusterConfig<Unchecked> {
             ram_per_vm: 2048 * 1024 * 1024,
             host_ram_reserve: 2048 * 1024 * 1024,
             tap_owner: None,
+            exit_codes: HashMap::new(),
+            heartbeat_stall_secs: 30,
+            hooks: HooksConfig::default(),
             _state: PhantomData,
         }
     }
@@ -831,5 +975,402 @@ mod tests {
         let config =
             ClusterConfig::from_parts(&root, proj, 1, Some("cli-cluster"), None, None).unwrap();
         assert_eq!(config.cluster_name, "cli-cluster");
+    }
+
+    // ── New config struct tests ──��──────────────────────────────────────
+
+    #[test]
+    fn test_profile_deserialize() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [profile.smoke]
+            players = 2
+            max_runs = 5
+            timeout = 120
+            network = "lan"
+            display = "headless"
+            chaos_profile = "wifi"
+            heartbeat_stall_secs = 45
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let profiles = proj.profile.unwrap();
+        let smoke = profiles.get("smoke").unwrap();
+        assert_eq!(smoke.players, Some(2));
+        assert_eq!(smoke.max_runs, Some(5));
+        assert_eq!(smoke.timeout, Some(120));
+        assert_eq!(smoke.network.as_deref(), Some("lan"));
+        assert_eq!(smoke.display.as_deref(), Some("headless"));
+        assert_eq!(smoke.chaos_profile.as_deref(), Some("wifi"));
+        assert_eq!(smoke.heartbeat_stall_secs, Some(45));
+    }
+
+    #[test]
+    fn chaos_profile_deserialize() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [chaos.unstable-wifi]
+            latency = 80
+            jitter = 20
+            loss = 2.0
+
+            [chaos.satellite]
+            latency = 600
+            jitter = 50
+            loss = 0.5
+            rate = 1000
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let chaos = proj.chaos.unwrap();
+        let wifi = chaos.get("unstable-wifi").unwrap();
+        assert_eq!(wifi.latency, Some(80));
+        assert_eq!(wifi.jitter, Some(20));
+        assert_eq!(wifi.loss, Some(2.0));
+        assert!(wifi.rate.is_none());
+
+        let sat = chaos.get("satellite").unwrap();
+        assert_eq!(sat.latency, Some(600));
+        assert_eq!(sat.rate, Some(1000));
+    }
+
+    #[test]
+    fn exit_codes_deserialize() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [exit_codes]
+            0 = "SUCCESS"
+            10 = "MY_WATCHDOG"
+            42 = "CUSTOM_ERROR"
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let codes = proj.exit_codes.unwrap();
+        assert_eq!(codes.get("0").unwrap(), "SUCCESS");
+        assert_eq!(codes.get("10").unwrap(), "MY_WATCHDOG");
+        assert_eq!(codes.get("42").unwrap(), "CUSTOM_ERROR");
+    }
+
+    #[test]
+    fn hooks_config_deserialize() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [hooks]
+            on_complete = "echo done {pass_rate}"
+            on_failure = "curl http://hook"
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let hooks = proj.hooks.unwrap();
+        assert_eq!(hooks.on_complete.as_deref(), Some("echo done {pass_rate}"));
+        assert_eq!(hooks.on_failure.as_deref(), Some("curl http://hook"));
+    }
+
+    #[test]
+    fn heartbeat_stall_secs_in_config() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+            heartbeat_stall_secs = 45
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(proj.heartbeat_stall_secs, Some(45));
+    }
+
+    #[test]
+    fn from_parts_exit_codes_parsed() {
+        let root = std::env::temp_dir();
+        let mut exit_codes = HashMap::new();
+        exit_codes.insert("42".into(), "CUSTOM".into());
+        exit_codes.insert("invalid".into(), "IGNORED".into()); // non-numeric key
+        let proj = Some(ProjectConfig {
+            binary_name: Some("g".into()),
+            cargo_package: Some("g".into()),
+            vm_user: Some("u".into()),
+            remote_dir: Some("/r".into()),
+            exit_codes: Some(exit_codes),
+            ..Default::default()
+        });
+        let config = ClusterConfig::from_parts(&root, proj, 1, None, None, None).unwrap();
+        assert_eq!(config.exit_codes.get(&42).unwrap(), "CUSTOM");
+        assert!(!config.exit_codes.contains_key(&0)); // "invalid" key was skipped
+    }
+
+    #[test]
+    fn from_parts_heartbeat_stall_secs_override() {
+        let root = std::env::temp_dir();
+        let proj = Some(ProjectConfig {
+            binary_name: Some("g".into()),
+            cargo_package: Some("g".into()),
+            vm_user: Some("u".into()),
+            remote_dir: Some("/r".into()),
+            heartbeat_stall_secs: Some(60),
+            ..Default::default()
+        });
+        let config = ClusterConfig::from_parts(&root, proj, 1, None, None, None).unwrap();
+        assert_eq!(config.heartbeat_stall_secs, 60);
+    }
+
+    #[test]
+    fn from_parts_heartbeat_stall_secs_default() {
+        let root = std::env::temp_dir();
+        let proj = Some(ProjectConfig {
+            binary_name: Some("g".into()),
+            cargo_package: Some("g".into()),
+            vm_user: Some("u".into()),
+            remote_dir: Some("/r".into()),
+            ..Default::default()
+        });
+        let config = ClusterConfig::from_parts(&root, proj, 1, None, None, None).unwrap();
+        assert_eq!(config.heartbeat_stall_secs, 30);
+    }
+
+    #[test]
+    fn from_parts_hooks_carried_through() {
+        let root = std::env::temp_dir();
+        let proj = Some(ProjectConfig {
+            binary_name: Some("g".into()),
+            cargo_package: Some("g".into()),
+            vm_user: Some("u".into()),
+            remote_dir: Some("/r".into()),
+            hooks: Some(HooksConfig {
+                on_complete: Some("echo done".into()),
+                on_failure: None,
+            }),
+            ..Default::default()
+        });
+        let config = ClusterConfig::from_parts(&root, proj, 1, None, None, None).unwrap();
+        assert_eq!(config.hooks.on_complete.as_deref(), Some("echo done"));
+        assert!(config.hooks.on_failure.is_none());
+    }
+
+    #[test]
+    fn multiple_profiles_deserialize() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [profile.smoke]
+            players = 2
+            max_runs = 5
+
+            [profile.stress]
+            players = 8
+            max_runs = 100
+            timeout = 600
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let profiles = proj.profile.unwrap();
+        assert_eq!(profiles.len(), 2);
+        assert_eq!(profiles.get("smoke").unwrap().max_runs, Some(5));
+        assert_eq!(profiles.get("stress").unwrap().players, Some(8));
+        assert_eq!(profiles.get("stress").unwrap().timeout, Some(600));
+    }
+
+    #[test]
+    fn for_test_has_new_fields() {
+        let config = ClusterConfig::for_test(2);
+        assert_eq!(config.heartbeat_stall_secs, 30);
+        assert!(config.exit_codes.is_empty());
+        assert!(config.hooks.on_complete.is_none());
+    }
+
+    // ── Config template tests ───────────────────────────────────────────
+
+    #[test]
+    fn config_template_includes_new_sections() {
+        let template = generate_config_template();
+        assert!(template.contains("[exit_codes]"), "template missing exit_codes section");
+        assert!(template.contains("[profile.smoke]"), "template missing profile section");
+        assert!(template.contains("[chaos.unstable-wifi]"), "template missing chaos section");
+        assert!(template.contains("[hooks]"), "template missing hooks section");
+        assert!(template.contains("heartbeat_stall_secs"), "template missing heartbeat_stall_secs");
+        assert!(template.contains("on_complete"), "template missing on_complete hook");
+        assert!(template.contains("on_failure"), "template missing on_failure hook");
+    }
+
+    // ── TOML deserialization edge cases ──────────────────────────────────
+
+    #[test]
+    fn empty_profiles_section() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+            [profile]
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(proj.profile.unwrap().is_empty());
+    }
+
+    #[test]
+    fn empty_chaos_section() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+            [chaos]
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        assert!(proj.chaos.unwrap().is_empty());
+    }
+
+    #[test]
+    fn profile_with_all_fields() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [profile.full]
+            players = 4
+            max_runs = 50
+            timeout = 600
+            shutdown_timeout = 10
+            network = "steam"
+            display = "sway"
+            vm_args = "--auto-join --headless"
+            host_args = "--auto-host-steam"
+            no_build = true
+            no_deploy = false
+            no_stop_on_failure = true
+            capture_on_failure = true
+            filter_pattern = "FAIL|PASS"
+            output_file = "/tmp/out.txt"
+            chaos_profile = "satellite"
+            heartbeat_stall_secs = 60
+            output_format = "junit"
+            on_complete = "echo done"
+            on_failure = "echo fail"
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let full = proj.profile.unwrap().get("full").unwrap().clone();
+        assert_eq!(full.players, Some(4));
+        assert_eq!(full.max_runs, Some(50));
+        assert_eq!(full.timeout, Some(600));
+        assert_eq!(full.shutdown_timeout, Some(10));
+        assert_eq!(full.network.as_deref(), Some("steam"));
+        assert_eq!(full.display.as_deref(), Some("sway"));
+        assert_eq!(full.vm_args.as_deref(), Some("--auto-join --headless"));
+        assert_eq!(full.host_args.as_deref(), Some("--auto-host-steam"));
+        assert_eq!(full.no_build, Some(true));
+        assert_eq!(full.no_deploy, Some(false));
+        assert_eq!(full.no_stop_on_failure, Some(true));
+        assert_eq!(full.capture_on_failure, Some(true));
+        assert_eq!(full.filter_pattern.as_deref(), Some("FAIL|PASS"));
+        assert_eq!(full.output_file.as_deref(), Some("/tmp/out.txt"));
+        assert_eq!(full.chaos_profile.as_deref(), Some("satellite"));
+        assert_eq!(full.heartbeat_stall_secs, Some(60));
+        assert_eq!(full.output_format.as_deref(), Some("junit"));
+        assert_eq!(full.on_complete.as_deref(), Some("echo done"));
+        assert_eq!(full.on_failure.as_deref(), Some("echo fail"));
+    }
+
+    #[test]
+    fn chaos_profile_partial_fields() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [chaos.minimal]
+            latency = 50
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let minimal = proj.chaos.unwrap().get("minimal").unwrap().clone();
+        assert_eq!(minimal.latency, Some(50));
+        assert!(minimal.jitter.is_none());
+        assert!(minimal.loss.is_none());
+        assert!(minimal.rate.is_none());
+    }
+
+    #[test]
+    fn exit_codes_with_zero() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [exit_codes]
+            0 = "OK"
+            255 = "CRASH"
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let codes = proj.exit_codes.unwrap();
+        assert_eq!(codes.len(), 2);
+        assert_eq!(codes.get("0").unwrap(), "OK");
+        assert_eq!(codes.get("255").unwrap(), "CRASH");
+    }
+
+    #[test]
+    fn from_parts_exit_codes_empty_when_missing() {
+        let root = std::env::temp_dir();
+        let proj = Some(ProjectConfig {
+            binary_name: Some("g".into()),
+            cargo_package: Some("g".into()),
+            vm_user: Some("u".into()),
+            remote_dir: Some("/r".into()),
+            ..Default::default()
+        });
+        let config = ClusterConfig::from_parts(&root, proj, 1, None, None, None).unwrap();
+        assert!(config.exit_codes.is_empty());
+    }
+
+    #[test]
+    fn into_state_preserves_new_fields() {
+        let root = std::env::temp_dir();
+        let mut exit_codes = HashMap::new();
+        exit_codes.insert("10".into(), "CUSTOM".into());
+        let proj = Some(ProjectConfig {
+            binary_name: Some("g".into()),
+            cargo_package: Some("g".into()),
+            vm_user: Some("u".into()),
+            remote_dir: Some("/r".into()),
+            exit_codes: Some(exit_codes),
+            heartbeat_stall_secs: Some(99),
+            hooks: Some(HooksConfig {
+                on_complete: Some("echo".into()),
+                on_failure: Some("alert".into()),
+            }),
+            ..Default::default()
+        });
+        let unchecked = ClusterConfig::from_parts(&root, proj, 1, None, None, None).unwrap();
+        // Transition to BridgeReady (skip validation for non-microvm)
+        let ready = unchecked.validate_or_skip_bridge().unwrap();
+        assert_eq!(ready.exit_codes.get(&10).unwrap(), "CUSTOM");
+        assert_eq!(ready.heartbeat_stall_secs, 99);
+        assert_eq!(ready.hooks.on_complete.as_deref(), Some("echo"));
+        assert_eq!(ready.hooks.on_failure.as_deref(), Some("alert"));
+    }
+
+    #[test]
+    fn default_project_config_all_none() {
+        let proj = ProjectConfig::default();
+        assert!(proj.profile.is_none());
+        assert!(proj.chaos.is_none());
+        assert!(proj.exit_codes.is_none());
+        assert!(proj.heartbeat_stall_secs.is_none());
+        assert!(proj.hooks.is_none());
     }
 }

@@ -5,6 +5,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
 use crate::config::BackendKind;
+use crate::output::OutputFormat;
 
 /// Network transport layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -197,13 +198,17 @@ pub enum Commands {
 
     /// Run end-to-end tests: deploy -> launch -> monitor -> collect logs -> report
     Test {
+        /// Load a named test profile from steampipe.toml
+        #[arg(long)]
+        profile: Option<String>,
+
         /// Network transport: lan or steam
-        #[arg(long, default_value = "lan")]
-        network: NetworkMode,
+        #[arg(long)]
+        network: Option<NetworkMode>,
 
         /// Number of players (2-8; host + N-1 VMs)
-        #[arg(long, default_value_t = 8)]
-        players: u8,
+        #[arg(long)]
+        players: Option<u8>,
 
         /// Args passed to the game binary on each VM
         #[arg(long)]
@@ -214,16 +219,16 @@ pub enum Commands {
         host_args: Option<String>,
 
         /// Number of test runs
-        #[arg(long, default_value_t = 1)]
-        max_runs: u32,
+        #[arg(long)]
+        max_runs: Option<u32>,
 
         /// Timeout per run in seconds
-        #[arg(long, default_value_t = 300)]
-        timeout: u64,
+        #[arg(long)]
+        timeout: Option<u64>,
 
         /// Grace period (seconds) between SIGTERM and SIGKILL
-        #[arg(long, default_value_t = 5)]
-        shutdown_timeout: u64,
+        #[arg(long)]
+        shutdown_timeout: Option<u64>,
 
         /// Don't stop after first failure
         #[arg(long)]
@@ -250,15 +255,62 @@ pub enum Commands {
         capture_on_failure: bool,
 
         /// VM display mode: headless, weston (default), or sway
-        #[arg(long, default_value = "weston")]
-        display: DisplayMode,
+        #[arg(long)]
+        display: Option<DisplayMode>,
+
+        /// Apply a chaos profile during test runs (from [chaos.*] in steampipe.toml)
+        #[arg(long)]
+        chaos_profile: Option<String>,
+
+        /// Heartbeat stall threshold in seconds (overrides config and default of 30s)
+        #[arg(long)]
+        heartbeat_stall_secs: Option<u64>,
+
+        /// Output format: text (default), junit, jsonl
+        #[arg(long)]
+        output_format: Option<OutputFormat>,
+
+        /// Run shell command when test session completes (template vars: {pass_count}, {fail_count}, etc.)
+        #[arg(long)]
+        on_complete: Option<String>,
+
+        /// Run shell command when any test fails
+        #[arg(long)]
+        on_failure: Option<String>,
     },
 
-    /// Diagnose and repair cluster health issues
-    Doctor {
-        /// Auto-fix problems where possible
+    /// Binary search git history to find the commit that introduced a test failure
+    Bisect {
+        /// Known good commit (tests pass)
         #[arg(long)]
-        fix: bool,
+        good: String,
+        /// Known bad commit (tests fail)
+        #[arg(long)]
+        bad: String,
+        /// Network transport: lan or steam
+        #[arg(long, default_value = "lan")]
+        network: NetworkMode,
+        /// Number of players (2-8)
+        #[arg(long, default_value_t = 2)]
+        players: u8,
+        /// Timeout per run in seconds
+        #[arg(long, default_value_t = 300)]
+        timeout: u64,
+        /// Number of test runs per commit (more = catches flaky tests)
+        #[arg(long, default_value_t = 1)]
+        runs_per_step: u32,
+        /// Fraction of runs that must pass for a commit to be "good" (0.0-1.0)
+        #[arg(long, default_value_t = 1.0)]
+        pass_threshold: f64,
+        /// VM display mode
+        #[arg(long, default_value = "headless")]
+        display: DisplayMode,
+        /// Args passed to the game binary on VMs
+        #[arg(long)]
+        vm_args: Option<String>,
+        /// Args passed to the local (host) game binary
+        #[arg(long)]
+        host_args: Option<String>,
     },
 
     /// Apply network emulation (latency, packet loss, jitter, bandwidth). Requires sudo.
@@ -266,17 +318,20 @@ pub enum Commands {
         /// Target VM: "all", "3", "vm-3"
         target: String,
         /// Latency in milliseconds
-        #[arg(long)]
+        #[arg(long, conflicts_with = "netem_profile")]
         latency: Option<u32>,
         /// Jitter in milliseconds (used with --latency)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "netem_profile")]
         jitter: Option<u32>,
         /// Packet loss percentage (0-100)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "netem_profile")]
         loss: Option<f32>,
         /// Bandwidth limit in kbit/s
-        #[arg(long)]
+        #[arg(long, conflicts_with = "netem_profile")]
         rate: Option<u32>,
+        /// Apply a named chaos profile from steampipe.toml [chaos.*]
+        #[arg(long = "profile", id = "netem_profile")]
+        chaos_profile: Option<String>,
     },
 
     /// Show current network emulation status
@@ -288,14 +343,22 @@ pub enum Commands {
         target: Option<String>,
     },
 
-    /// Show test result history
+    /// Show test result history, trends, and analysis
     History {
-        /// Show only the last N sessions
+        #[command(subcommand)]
+        action: Option<HistoryAction>,
+        /// Show only the last N sessions (for default view)
         #[arg(short = 'n', long)]
         last: Option<usize>,
         /// Clear all test history
         #[arg(long)]
         clear: bool,
+        /// Export format: junit or jsonl
+        #[arg(long, value_enum)]
+        format: Option<OutputFormat>,
+        /// Write export to file instead of stdout
+        #[arg(long)]
+        output: Option<PathBuf>,
     },
 
     /// Save a snapshot of VM state
@@ -353,6 +416,26 @@ pub enum Commands {
     Completions {
         /// Shell to generate completions for
         shell: Shell,
+    },
+}
+
+/// History subcommands for analysis.
+#[derive(Subcommand)]
+pub enum HistoryAction {
+    /// Analyze pass rate trends and detect regressions
+    Trends {
+        /// Comparison window size (number of results)
+        #[arg(short, long, default_value_t = 10)]
+        window: usize,
+        /// Limit analysis to last N sessions
+        #[arg(short = 'n', long)]
+        last: Option<usize>,
+    },
+    /// Show flaky test detection results
+    Flaky {
+        /// Limit analysis to last N sessions
+        #[arg(short = 'n', long)]
+        last: Option<usize>,
     },
 }
 
@@ -605,11 +688,11 @@ mod tests {
                 vm_args,
                 ..
             } => {
-                assert!(matches!(network, NetworkMode::Steam));
-                assert_eq!(players, 4);
-                assert_eq!(max_runs, 10);
-                assert_eq!(timeout, 120);
-                assert_eq!(shutdown_timeout, 3);
+                assert!(matches!(network, Some(NetworkMode::Steam)));
+                assert_eq!(players, Some(4));
+                assert_eq!(max_runs, Some(10));
+                assert_eq!(timeout, Some(120));
+                assert_eq!(shutdown_timeout, Some(3));
                 assert!(no_build);
                 assert!(!no_deploy);
                 assert!(!no_stop_on_failure);
@@ -659,6 +742,406 @@ mod tests {
         assert_eq!(format!("{}", NetworkMode::Lan), "lan");
         assert_eq!(format!("{}", NetworkMode::Steam), "steam");
     }
+
+    // ── New feature: Test command optionalized fields ─────────────────
+
+    #[test]
+    fn test_fields_default_to_none() {
+        let cli = parse(&["--vm-count", "7", "test"]);
+        match cli.command {
+            Commands::Test {
+                profile,
+                network,
+                players,
+                max_runs,
+                timeout,
+                shutdown_timeout,
+                display,
+                chaos_profile,
+                heartbeat_stall_secs,
+                output_format,
+                on_complete,
+                on_failure,
+                ..
+            } => {
+                assert!(profile.is_none());
+                assert!(network.is_none());
+                assert!(players.is_none());
+                assert!(max_runs.is_none());
+                assert!(timeout.is_none());
+                assert!(shutdown_timeout.is_none());
+                assert!(display.is_none());
+                assert!(chaos_profile.is_none());
+                assert!(heartbeat_stall_secs.is_none());
+                assert!(output_format.is_none());
+                assert!(on_complete.is_none());
+                assert!(on_failure.is_none());
+            }
+            _ => panic!("expected Test command"),
+        }
+    }
+
+    #[test]
+    fn test_profile_flag() {
+        let cli = parse(&["--vm-count", "7", "test", "--profile", "smoke"]);
+        match cli.command {
+            Commands::Test { profile, .. } => {
+                assert_eq!(profile.as_deref(), Some("smoke"));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_chaos_profile_flag() {
+        let cli = parse(&[
+            "--vm-count", "7", "test",
+            "--chaos-profile", "unstable-wifi",
+        ]);
+        match cli.command {
+            Commands::Test { chaos_profile, .. } => {
+                assert_eq!(chaos_profile.as_deref(), Some("unstable-wifi"));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_heartbeat_stall_secs_flag() {
+        let cli = parse(&["--vm-count", "7", "test", "--heartbeat-stall-secs", "60"]);
+        match cli.command {
+            Commands::Test { heartbeat_stall_secs, .. } => {
+                assert_eq!(heartbeat_stall_secs, Some(60));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_output_format_junit() {
+        let cli = parse(&["--vm-count", "7", "test", "--output-format", "junit"]);
+        match cli.command {
+            Commands::Test { output_format, .. } => {
+                assert!(matches!(output_format, Some(OutputFormat::Junit)));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_output_format_jsonl() {
+        let cli = parse(&["--vm-count", "7", "test", "--output-format", "jsonl"]);
+        match cli.command {
+            Commands::Test { output_format, .. } => {
+                assert!(matches!(output_format, Some(OutputFormat::Jsonl)));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_hook_flags() {
+        let cli = parse(&[
+            "--vm-count", "7", "test",
+            "--on-complete", "echo done",
+            "--on-failure", "echo fail",
+        ]);
+        match cli.command {
+            Commands::Test { on_complete, on_failure, .. } => {
+                assert_eq!(on_complete.as_deref(), Some("echo done"));
+                assert_eq!(on_failure.as_deref(), Some("echo fail"));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    // ── Bisect command ──────────────────────────────────────────────────
+
+    #[test]
+    fn bisect_defaults() {
+        let cli = parse(&[
+            "--vm-count", "3", "bisect",
+            "--good", "abc123",
+            "--bad", "def456",
+        ]);
+        match cli.command {
+            Commands::Bisect {
+                good,
+                bad,
+                network,
+                players,
+                timeout,
+                runs_per_step,
+                pass_threshold,
+                display,
+                vm_args,
+                host_args,
+            } => {
+                assert_eq!(good, "abc123");
+                assert_eq!(bad, "def456");
+                assert!(matches!(network, NetworkMode::Lan));
+                assert_eq!(players, 2);
+                assert_eq!(timeout, 300);
+                assert_eq!(runs_per_step, 1);
+                assert!((pass_threshold - 1.0).abs() < f64::EPSILON);
+                assert!(matches!(display, DisplayMode::Headless));
+                assert!(vm_args.is_none());
+                assert!(host_args.is_none());
+            }
+            _ => panic!("expected Bisect"),
+        }
+    }
+
+    #[test]
+    fn bisect_with_options() {
+        let cli = parse(&[
+            "--vm-count", "3", "bisect",
+            "--good", "aaa",
+            "--bad", "bbb",
+            "--network", "steam",
+            "--players", "4",
+            "--runs-per-step", "3",
+            "--pass-threshold", "0.67",
+            "--display", "weston",
+        ]);
+        match cli.command {
+            Commands::Bisect {
+                network,
+                players,
+                runs_per_step,
+                pass_threshold,
+                display,
+                ..
+            } => {
+                assert!(matches!(network, NetworkMode::Steam));
+                assert_eq!(players, 4);
+                assert_eq!(runs_per_step, 3);
+                assert!((pass_threshold - 0.67).abs() < 0.01);
+                assert!(matches!(display, DisplayMode::Weston));
+            }
+            _ => panic!("expected Bisect"),
+        }
+    }
+
+    // ── History subcommands ─────────────────────────────────────────────
+
+    #[test]
+    fn history_bare_defaults() {
+        let cli = parse(&["--vm-count", "7", "history"]);
+        match cli.command {
+            Commands::History { action, last, clear, format, output } => {
+                assert!(action.is_none());
+                assert!(last.is_none());
+                assert!(!clear);
+                assert!(format.is_none());
+                assert!(output.is_none());
+            }
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn history_with_last() {
+        let cli = parse(&["--vm-count", "7", "history", "-n", "5"]);
+        match cli.command {
+            Commands::History { last, .. } => assert_eq!(last, Some(5)),
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn history_clear() {
+        let cli = parse(&["--vm-count", "7", "history", "--clear"]);
+        match cli.command {
+            Commands::History { clear, .. } => assert!(clear),
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn history_export_junit() {
+        let cli = parse(&["--vm-count", "7", "history", "--format", "junit"]);
+        match cli.command {
+            Commands::History { format, .. } => {
+                assert!(matches!(format, Some(OutputFormat::Junit)));
+            }
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn history_trends_subcommand() {
+        let cli = parse(&["--vm-count", "7", "history", "trends", "--window", "5"]);
+        match cli.command {
+            Commands::History { action, .. } => match action {
+                Some(HistoryAction::Trends { window, last }) => {
+                    assert_eq!(window, 5);
+                    assert!(last.is_none());
+                }
+                _ => panic!("expected Trends action"),
+            },
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn history_flaky_subcommand() {
+        let cli = parse(&["--vm-count", "7", "history", "flaky", "-n", "20"]);
+        match cli.command {
+            Commands::History { action, .. } => match action {
+                Some(HistoryAction::Flaky { last }) => {
+                    assert_eq!(last, Some(20));
+                }
+                _ => panic!("expected Flaky action"),
+            },
+            _ => panic!("expected History"),
+        }
+    }
+
+    // ── Netem profile flag ──────────────────────────────────────────────
+
+    #[test]
+    fn netem_with_profile() {
+        let cli = parse(&["--vm-count", "7", "netem", "all", "--profile", "wifi"]);
+        match cli.command {
+            Commands::Netem { target, chaos_profile, latency, .. } => {
+                assert_eq!(target, "all");
+                assert_eq!(chaos_profile.as_deref(), Some("wifi"));
+                assert!(latency.is_none());
+            }
+            _ => panic!("expected Netem"),
+        }
+    }
+
+    #[test]
+    fn test_all_new_flags_combined() {
+        let cli = parse(&[
+            "--vm-count", "3", "test",
+            "--profile", "stress",
+            "--network", "steam",
+            "--players", "4",
+            "--chaos-profile", "wifi",
+            "--heartbeat-stall-secs", "45",
+            "--output-format", "jsonl",
+            "--on-complete", "echo {pass_rate}%",
+            "--on-failure", "alert",
+            "--max-runs", "10",
+            "--timeout", "600",
+        ]);
+        match cli.command {
+            Commands::Test {
+                profile,
+                network,
+                players,
+                chaos_profile,
+                heartbeat_stall_secs,
+                output_format,
+                on_complete,
+                on_failure,
+                max_runs,
+                timeout,
+                ..
+            } => {
+                assert_eq!(profile.as_deref(), Some("stress"));
+                assert!(matches!(network, Some(NetworkMode::Steam)));
+                assert_eq!(players, Some(4));
+                assert_eq!(chaos_profile.as_deref(), Some("wifi"));
+                assert_eq!(heartbeat_stall_secs, Some(45));
+                assert!(matches!(output_format, Some(OutputFormat::Jsonl)));
+                assert_eq!(on_complete.as_deref(), Some("echo {pass_rate}%"));
+                assert_eq!(on_failure.as_deref(), Some("alert"));
+                assert_eq!(max_runs, Some(10));
+                assert_eq!(timeout, Some(600));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_output_format_rejected() {
+        let args = vec![
+            "cluster-ctl", "--vm-count", "7", "test",
+            "--output-format", "csv",
+        ];
+        let result = Cli::try_parse_from(args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bisect_missing_good_fails() {
+        let args = vec![
+            "cluster-ctl", "--vm-count", "3", "bisect",
+            "--bad", "def456",
+        ];
+        let result = Cli::try_parse_from(args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn bisect_missing_bad_fails() {
+        let args = vec![
+            "cluster-ctl", "--vm-count", "3", "bisect",
+            "--good", "abc123",
+        ];
+        let result = Cli::try_parse_from(args);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn history_export_with_output_file() {
+        let cli = parse(&[
+            "--vm-count", "7", "history",
+            "--format", "jsonl",
+            "--output", "/tmp/export.jsonl",
+        ]);
+        match cli.command {
+            Commands::History { format, output, .. } => {
+                assert!(matches!(format, Some(OutputFormat::Jsonl)));
+                assert_eq!(output.unwrap().to_str().unwrap(), "/tmp/export.jsonl");
+            }
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn history_trends_default_window() {
+        let cli = parse(&["--vm-count", "7", "history", "trends"]);
+        match cli.command {
+            Commands::History { action, .. } => match action {
+                Some(HistoryAction::Trends { window, .. }) => {
+                    assert_eq!(window, 10); // default
+                }
+                _ => panic!("expected Trends"),
+            },
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn history_flaky_default_no_last() {
+        let cli = parse(&["--vm-count", "7", "history", "flaky"]);
+        match cli.command {
+            Commands::History { action, .. } => match action {
+                Some(HistoryAction::Flaky { last }) => {
+                    assert!(last.is_none());
+                }
+                _ => panic!("expected Flaky"),
+            },
+            _ => panic!("expected History"),
+        }
+    }
+
+    #[test]
+    fn netem_profile_conflicts_with_params() {
+        let args = vec![
+            "cluster-ctl", "--vm-count", "7", "netem", "all",
+            "--profile", "wifi", "--latency", "50",
+        ];
+        let result = Cli::try_parse_from(args);
+        assert!(result.is_err(), "profile should conflict with latency");
+    }
+
+    // ── Original tests ──────────────────────────────────────────────────
 
     #[test]
     fn invalid_network_rejected() {

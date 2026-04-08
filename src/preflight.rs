@@ -1,14 +1,82 @@
-//! Pre-test connectivity check: verify VMs can reach the host, auto-fix if not.
+//! Pre-flight checks: self-healing cleanup and connectivity verification.
 //!
-//! The NixOS host firewall (`inet nixos-fw`) blocks VM→host TCP unless an
-//! explicit accept rule exists for the cluster bridge interface. This rule is
-//! ephemeral — lost on reboot or `nixos-rebuild switch`. This module detects
-//! the problem before the test loop starts and auto-inserts the rule via sudo.
+//! Runs before every MCP tool invocation to ensure a clean state:
+//! - Stale PID files from dead VM processes
+//! - Orphaned microvm processes with no valid lease claim
+//! - Leftover socket files in VM state directories
+//!
+//! Also verifies VM→host connectivity for tests, auto-inserting the nixos-fw
+//! accept rule if needed (the NixOS host firewall blocks VM→host TCP unless
+//! an explicit rule exists for the cluster bridge interface).
 
 use std::time::Duration;
 
 use crate::backend::Backend;
 use crate::config::{ClusterConfig, VmDef};
+use crate::state;
+
+/// Clean up stale state: dead PIDs, orphaned processes, leftover sockets.
+///
+/// Scans all VM slots (1..=7) regardless of which VMs the current config targets,
+/// since orphans may exist on slots outside the current cluster.
+///
+/// Returns a summary of what was cleaned, or `None` if everything was clean.
+pub fn cleanup_stale_state<S>(config: &ClusterConfig<S>) -> Option<String> {
+    let max_vms = 7u8;
+    let mut cleaned = Vec::new();
+
+    for id in 1..=max_vms {
+        let vm_name = format!("vm-{id}");
+
+        // 1. Stale PIDs — PID file exists but process is dead
+        if let Some(pid) = state::read_pid(&config.state_dir, &vm_name) {
+            if !state::is_pid_alive(pid) {
+                state::remove_pid(&config.state_dir, &vm_name);
+                cleaned.push(format!("{vm_name}: removed stale PID {pid}"));
+            }
+        }
+
+        // 2. Orphaned processes — microvm pattern running but no valid claim
+        let pattern = format!("microvm@{vm_name}");
+        if let Ok(out) = std::process::Command::new("pgrep")
+            .args(["-f", &pattern])
+            .output()
+        {
+            if out.status.success() {
+                let has_claim = crate::lease::probe_holder(id, &config.lock_dir).is_some();
+                if !has_claim {
+                    let pids = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    let _ = std::process::Command::new("pkill")
+                        .args(["-f", &pattern])
+                        .status();
+                    cleaned.push(format!("{vm_name}: killed orphan PIDs {pids}"));
+                }
+            }
+        }
+
+        // 3. Stale sockets — leftover .sock/.vsock files in VM state dir
+        let vm_dir = config.state_dir.join(&vm_name);
+        if vm_dir.exists() {
+            if let Ok(entries) = std::fs::read_dir(&vm_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if let Some(fname) = path.file_name().and_then(|n| n.to_str()) {
+                        if state::is_socket_file(fname) {
+                            let _ = std::fs::remove_file(&path);
+                            cleaned.push(format!("{vm_name}: removed {fname}"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if cleaned.is_empty() {
+        None
+    } else {
+        Some(format!("Pre-flight cleanup:\n  {}", cleaned.join("\n  ")))
+    }
+}
 
 /// Verify that at least one VM can TCP-connect back to the host.
 ///
@@ -49,8 +117,7 @@ pub async fn ensure_vm_to_host_connectivity<S>(
         anyhow::bail!(
             "VM→host connectivity failed but nixos-fw rule exists.\n\
              The bridge {br} is up and the firewall rule is present, but TCP\n\
-             from {vm} to {host} is blocked by something else.\n\
-             Run: cluster-ctl doctor",
+             from {vm} to {host} is blocked by something else.",
             br = config.bridge,
             vm = vm.name,
             host = config.host_ip,

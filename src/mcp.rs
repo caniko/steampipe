@@ -64,7 +64,9 @@ pub struct ClusterParams {
 }
 
 /// Build a ClusterConfig from MCP tool parameters.
-fn build_config(params: &ClusterParams) -> Result<ClusterConfig<Unchecked>, ErrorData> {
+/// Also runs pre-flight cleanup (stale PIDs, orphaned processes, leftover sockets).
+/// Returns the config and an optional cleanup summary message.
+fn build_config(params: &ClusterParams) -> Result<(ClusterConfig<Unchecked>, Option<String>), ErrorData> {
     let project_root = detect_project_root()
         .map_err(|e| ErrorData::internal_error(format!("Cannot find project root: {e}"), None))?;
     let vm_count = params.vm_count.unwrap_or(match params.cluster.as_str() {
@@ -76,13 +78,17 @@ fn build_config(params: &ClusterParams) -> Result<ClusterConfig<Unchecked>, Erro
             ErrorData::internal_error(format!("Config error: {e}"), None)
         })?;
 
-    // Prefer leased VMs (those actually running) over the static 1..N list
-    config.vms = config.leased_vms();
-
     state::ensure_state_dir(&config.state_dir)
         .map_err(|e| ErrorData::internal_error(format!("State dir error: {e}"), None))?;
 
-    Ok(config)
+    // Self-heal: clean up stale PIDs, orphaned processes, leftover sockets
+    let cleanup_msg = crate::preflight::cleanup_stale_state(&config);
+
+    // Prefer leased VMs (those actually running) over the static 1..N list
+    // (must happen after cleanup so stale claims are already gone)
+    config.vms = config.leased_vms();
+
+    Ok((config, cleanup_msg))
 }
 
 /// Get project_root, needed by test and deploy tools.
@@ -218,15 +224,6 @@ pub struct ClusterTestInput {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
-pub struct ClusterDoctorInput {
-    #[serde(flatten)]
-    pub cluster: ClusterParams,
-    /// Auto-fix issues where possible (default: false).
-    #[serde(default)]
-    pub fix: Option<bool>,
-}
-
-#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub struct ClusterHistoryInput {
     #[serde(flatten)]
     pub cluster: ClusterParams,
@@ -301,7 +298,7 @@ impl SteampipeMcp {
         &self,
         Parameters(input): Parameters<ClusterStatusInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let config = build_config(&input.cluster)?;
+        let (config, cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
 
         let statuses = crate::status::poll_vm_statuses(
@@ -312,10 +309,15 @@ impl SteampipeMcp {
         )
         .await;
 
-        let mut text = format!(
+        let mut text = String::new();
+        if let Some(msg) = cleanup_msg {
+            text.push_str(&msg);
+            text.push_str("\n\n");
+        }
+        text.push_str(&format!(
             "{:<8} {:<14} {:<16} {:<6} {:<6} {:<8} {:<8}\n",
             "VM", "IP", "Held By", "SSH", "VM", "Steam", "Game"
-        );
+        ));
         text.push_str(&"─".repeat(66));
         text.push('\n');
 
@@ -351,7 +353,7 @@ impl SteampipeMcp {
         &self,
         Parameters(input): Parameters<ClusterLogsInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let config = build_config(&input.cluster)?;
+        let (config, _cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
         let lines = input.max_lines.unwrap_or(100);
         let head = !input.tail.unwrap_or(true);
@@ -386,7 +388,7 @@ impl SteampipeMcp {
         &self,
         Parameters(input): Parameters<ClusterDeployInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let config = build_config(&input.cluster)?;
+        let (config, _cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
         let root = project_root()?;
         let do_build = input.build.unwrap_or(true);
@@ -449,13 +451,18 @@ impl SteampipeMcp {
         &self,
         Parameters(input): Parameters<ClusterStopInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let config = build_config(&input.cluster)?;
+        let (config, cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
         let kill_steam = input.kill_steam.unwrap_or(false);
 
         crate::run::kill_games(&config.backend, &config.vms, &config.binary_name).await;
 
-        let mut text = format!("Game stopped on {} VM(s)", config.vms.len());
+        let mut text = String::new();
+        if let Some(msg) = cleanup_msg {
+            text.push_str(&msg);
+            text.push_str("\n\n");
+        }
+        text.push_str(&format!("Game stopped on {} VM(s)", config.vms.len()));
 
         if kill_steam {
             crate::config::par_each_vm(&config.vms, |vm| {
@@ -484,7 +491,7 @@ impl SteampipeMcp {
         &self,
         Parameters(input): Parameters<ClusterTestInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let config = build_config(&input.cluster)?;
+        let (config, _cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
         let root = project_root()?;
 
@@ -534,6 +541,12 @@ impl SteampipeMcp {
             capture_on_failure: input.capture_on_failure.unwrap_or(false),
             display,
             verbose: false, // suppress println to avoid corrupting MCP transport
+            chaos: None,
+            heartbeat_stall_secs: config.heartbeat_stall_secs,
+            output_format: crate::output::OutputFormat::Text,
+            on_complete: None,
+            on_failure: None,
+            exit_codes: config.exit_codes.clone(),
         };
 
         let result = crate::test::run(&config, &root, test_config).await;
@@ -550,49 +563,13 @@ impl SteampipeMcp {
     }
 
     #[tool(
-        description = "Diagnose and optionally auto-fix cluster health issues. Checks state directory, stale PIDs, orphaned processes, leftover sockets, and network configuration."
-    )]
-    fn cluster_doctor(
-        &self,
-        Parameters(input): Parameters<ClusterDoctorInput>,
-    ) -> Result<CallToolResult, ErrorData> {
-        let config = build_config(&input.cluster)?;
-        let fix = input.fix.unwrap_or(false);
-
-        let checks = crate::doctor::diagnose(&config, fix);
-
-        let mut text = String::from("Cluster health check:\n\n");
-        let mut ok = 0;
-        let mut warn = 0;
-        let mut err = 0;
-        let mut fixed = 0;
-
-        for check in &checks {
-            let icon = check.icon();
-            text.push_str(&format!("  [{icon}] {}: {}\n", check.name, check.detail));
-            match check.status {
-                crate::doctor::CheckStatus::Ok => ok += 1,
-                crate::doctor::CheckStatus::Warning => warn += 1,
-                crate::doctor::CheckStatus::Error => err += 1,
-                crate::doctor::CheckStatus::Fixed => fixed += 1,
-            }
-        }
-
-        text.push_str(&format!(
-            "\nSummary: {ok} ok, {warn} warnings, {err} errors, {fixed} fixed"
-        ));
-
-        Ok(CallToolResult::success(vec![Content::text(text)]))
-    }
-
-    #[tool(
         description = "Show test result history for the cluster. Displays pass/fail rates, failure code breakdown, and trends across test sessions."
     )]
     fn cluster_history(
         &self,
         Parameters(input): Parameters<ClusterHistoryInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let config = build_config(&input.cluster)?;
+        let (config, _cleanup_msg) = build_config(&input.cluster)?;
         let history = crate::history::load(&config.state_dir);
 
         if history.results.is_empty() {
@@ -661,7 +638,7 @@ impl SteampipeMcp {
             for (code, count) in codes {
                 text.push_str(&format!(
                     "\n  exit {code} ({}): {count}x",
-                    crate::test::exit_code_label(code)
+                    crate::test::exit_code_label(code, &config.exit_codes)
                 ));
             }
         }
@@ -700,8 +677,8 @@ impl ServerHandler for SteampipeMcp {
         ServerInfo {
             instructions: Some(
                 "Steampipe: cluster orchestration tools for multiplayer game testing. \
-                 Provides native cluster management (status, logs, deploy, test, stop, doctor, history) \
-                 and a generic Nix flake runner."
+                 Provides native cluster management (status, logs, deploy, test, stop, history) \
+                 with self-healing pre-flight checks, and a generic Nix flake runner."
                     .into(),
             ),
             capabilities: ServerCapabilities::builder().enable_tools().build(),

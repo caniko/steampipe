@@ -5,6 +5,7 @@
 //! and produces a pass/fail summary with failure code breakdown.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -12,7 +13,8 @@ use regex::Regex;
 
 use crate::backend::Backend;
 use crate::cli::NetworkMode;
-use crate::config::{ClusterConfig, IpAddr, VmName};
+use crate::config::{ChaosProfile, ClusterConfig, IpAddr, VmName};
+use crate::output::{OutputFormat, RunResult, RunStatus, TestSession};
 
 /// Configuration for a test run.
 ///
@@ -35,6 +37,18 @@ pub struct TestConfig {
     pub display: crate::cli::DisplayMode,
     /// When false, suppress `println!` output (for MCP tools where stdout is JSON-RPC).
     pub verbose: bool,
+    /// Chaos profile to apply during tests (netem params).
+    pub chaos: Option<ChaosProfile>,
+    /// Heartbeat stall threshold in seconds.
+    pub heartbeat_stall_secs: u64,
+    /// Output format (text, junit, jsonl).
+    pub output_format: OutputFormat,
+    /// Shell command to run when test session completes.
+    pub on_complete: Option<String>,
+    /// Shell command to run when any test fails.
+    pub on_failure: Option<String>,
+    /// Parsed exit code mapping from config.
+    pub exit_codes: HashMap<i32, String>,
 }
 
 // ── Heartbeat trait: static dispatch for local vs. VM heartbeat sources ──
@@ -244,6 +258,22 @@ pub async fn run<S>(
     // Pre-flight: verify VM→host connectivity (catches missing nftables rules after reboot)
     crate::preflight::ensure_vm_to_host_connectivity(config, backend, target_vms).await?;
 
+    // Apply chaos profile if configured
+    if let Some(ref chaos) = test_config.chaos {
+        print_and_push(&mut output, "=== APPLYING CHAOS PROFILE ===", verbose);
+        for vm in target_vms {
+            crate::netem::apply(
+                config,
+                &vm.name,
+                chaos.latency,
+                chaos.jitter,
+                chaos.loss,
+                chaos.rate,
+            )?;
+        }
+        output.push('\n');
+    }
+
     // Step 3: Run loop
     let binary_name = &config.binary_name;
     let binary_path = project_root.join(format!("target/release/{binary_name}"));
@@ -293,8 +323,15 @@ pub async fn run<S>(
     let mut consecutive_fail_code: Option<i32> = None;
     let mut consecutive_fail_count = 0u32;
     const REPEAT_FAILURE_LIMIT: u32 = 3;
+    let session_start = Instant::now();
+    let mut session = TestSession::new(
+        &test_config.network.to_string(),
+        test_config.players,
+        vm_count,
+    );
 
     for run_num in 1..=test_config.max_runs {
+        let run_start = Instant::now();
         print_and_push(
             &mut output,
             &format!("=== RUN {run_num}/{} ===", test_config.max_runs),
@@ -392,6 +429,7 @@ pub async fn run<S>(
         let backend_for_monitor = backend.clone();
         let remote_dir_owned = config.remote_dir.clone();
 
+        let hb_stall = test_config.heartbeat_stall_secs;
         let (combined, exit_code, was_timeout) = tokio::task::spawn_blocking(move || {
             monitor_local_process(
                 &mut child,
@@ -401,6 +439,7 @@ pub async fn run<S>(
                 &vm_ips,
                 &backend_for_monitor,
                 &remote_dir_owned,
+                hb_stall,
             )
         })
         .await??;
@@ -433,7 +472,7 @@ pub async fn run<S>(
             failed += 1;
             failure_code = exit_code;
             let code_str: Cow<'static, str> = exit_code
-                .map(|c| Cow::Owned(format!("{c} ({})", exit_code_label(c))))
+                .map(|c| Cow::Owned(format!("{c} ({})", exit_code_label(c, &test_config.exit_codes))))
                 .unwrap_or(Cow::Borrowed("signal"));
             print_and_push(&mut output, &format!("--- FAIL (exit {code_str}) ---"), verbose);
         }
@@ -471,6 +510,25 @@ pub async fn run<S>(
         // Track exit codes for history
         exit_codes.push(exit_code);
 
+        // Track run result for output formatting
+        let run_status = if was_timeout {
+            RunStatus::Timeout
+        } else if exit_code == Some(0) {
+            RunStatus::Pass
+        } else {
+            RunStatus::Fail
+        };
+        let run_label = exit_code
+            .map(|c| exit_code_label(c, &test_config.exit_codes).into_owned())
+            .unwrap_or_else(|| "SIGNAL".into());
+        session.runs.push(RunResult {
+            run_number: run_num,
+            status: run_status,
+            exit_code,
+            exit_label: run_label,
+            duration: run_start.elapsed(),
+        });
+
         // Track consecutive identical failures
         if let Some(code) = failure_code {
             if consecutive_fail_code == Some(code) {
@@ -483,7 +541,7 @@ pub async fn run<S>(
                 let label: Cow<'static, str> = if code == -1 {
                     Cow::Borrowed("TIMEOUT")
                 } else {
-                    Cow::Owned(format!("{code} ({})", exit_code_label(code)))
+                    Cow::Owned(format!("{code} ({})", exit_code_label(code, &test_config.exit_codes)))
                 };
                 print_and_push(
                     &mut output,
@@ -502,6 +560,13 @@ pub async fn run<S>(
         output.push('\n');
     }
 
+    // Reset chaos if it was applied
+    if test_config.chaos.is_some() {
+        let _ = crate::netem::reset(config, None);
+    }
+
+    session.total_duration = session_start.elapsed();
+
     // Summary
     let total = passed + failed;
     let timeout_info: Cow<'static, str> = if timed_out_count > 0 {
@@ -517,12 +582,72 @@ pub async fn run<S>(
     );
     print_and_push(&mut output, &summary, verbose);
 
-    if let Some(path) = &test_config.output_file {
-        std::fs::write(path, &output)?;
-        if verbose {
-            println!("Output written to {}", path.display());
+    // Inline flaky detection (when multiple runs)
+    if test_config.max_runs > 1 {
+        let flaky = crate::history::compute_flakiness(&exit_codes, &test_config.exit_codes);
+        for entry in &flaky {
+            if matches!(entry.pattern, crate::history::FlakPattern::Intermittent) {
+                print_and_push(
+                    &mut output,
+                    &format!(
+                        "  FLAKY: exit {} ({}) appeared in {}/{} runs (score: {:.0}%)",
+                        entry.exit_code,
+                        entry.label,
+                        entry.occurrences,
+                        entry.total_runs,
+                        entry.flakiness_score * 100.0
+                    ),
+                    verbose,
+                );
+            }
         }
     }
+
+    // Emit formatted output
+    match test_config.output_format {
+        OutputFormat::Text => {
+            if let Some(path) = &test_config.output_file {
+                std::fs::write(path, &output)?;
+                if verbose {
+                    println!("Output written to {}", path.display());
+                }
+            }
+        }
+        OutputFormat::Junit => {
+            let xml = crate::output::emit_junit(&session);
+            if let Some(path) = &test_config.output_file {
+                std::fs::write(path, &xml)?;
+                if verbose {
+                    println!("JUnit XML written to {}", path.display());
+                }
+            } else if verbose {
+                println!("{xml}");
+            }
+        }
+        OutputFormat::Jsonl => {
+            let jsonl = crate::output::emit_jsonl(&session);
+            if let Some(path) = &test_config.output_file {
+                std::fs::write(path, &jsonl)?;
+                if verbose {
+                    println!("JSON Lines written to {}", path.display());
+                }
+            } else if verbose {
+                println!("{jsonl}");
+            }
+        }
+    }
+
+    // Capture git SHA for history
+    let git_sha = std::process::Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(project_root)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string());
+
+    // Compute per-run durations
+    let run_durations: Vec<f64> = session.runs.iter().map(|r| r.duration.as_secs_f64()).collect();
 
     // Save to test history
     let result = crate::history::make_result(
@@ -536,9 +661,41 @@ pub async fn run<S>(
         timed_out_count,
         test_config.timeout.as_secs(),
         exit_codes,
+        git_sha,
+        session.total_duration.as_secs_f64(),
+        run_durations,
     );
     if let Err(e) = crate::history::save_result(&config.state_dir, result) {
         eprintln!("Warning: failed to save test history: {e}");
+    }
+
+    // Run notification hooks
+    let hook_vars = crate::hooks::HookVars {
+        pass_count: passed,
+        fail_count: failed,
+        total_count: total,
+        timeout_count: timed_out_count,
+        pass_rate: if total > 0 { passed * 100 / total } else { 0 },
+        duration: session.total_duration,
+        exit_label: session
+            .runs
+            .iter()
+            .rev()
+            .find(|r| r.status != RunStatus::Pass)
+            .map(|r| r.exit_label.clone())
+            .unwrap_or_default(),
+        network: test_config.network.to_string(),
+        players: test_config.players,
+        cluster_name: config.cluster_name.clone(),
+    };
+
+    if let Some(ref cmd) = test_config.on_complete {
+        crate::hooks::run_hook(cmd, &hook_vars).await;
+    }
+    if failed > 0 {
+        if let Some(ref cmd) = test_config.on_failure {
+            crate::hooks::run_hook(cmd, &hook_vars).await;
+        }
     }
 
     if failed > 0 {
@@ -631,6 +788,7 @@ fn monitor_local_process(
     vm_ips: &[(VmName, IpAddr)],
     backend: &Backend,
     remote_dir: &str,
+    heartbeat_stall_secs: u64,
 ) -> anyhow::Result<(String, Option<i32>, bool)> {
     use std::io::Read as _;
 
@@ -660,8 +818,6 @@ fn monitor_local_process(
     let mut last_heartbeat_check = Instant::now();
     let mut last_vm_check = Instant::now();
 
-    const HEARTBEAT_STALL_SECS: u64 = 30;
-
     let rt = tokio::runtime::Handle::current();
     let local_hb = LocalHeartbeat { dir: project_root };
     let vm_hb = VmHeartbeat {
@@ -686,7 +842,7 @@ fn monitor_local_process(
             Ok(None) => {
                 if last_heartbeat_check.elapsed() > Duration::from_secs(2) {
                     last_heartbeat_check = Instant::now();
-                    if check_stall(&local_hb, &mut last_local_ts, HEARTBEAT_STALL_SECS, now_ms()) {
+                    if check_stall(&local_hb, &mut last_local_ts, heartbeat_stall_secs, now_ms()) {
                         eprintln!("Local heartbeat stall — killing");
                         exit_code = kill_and_reap(child, shutdown_timeout);
                         timed_out = true;
@@ -696,7 +852,7 @@ fn monitor_local_process(
 
                 if last_vm_check.elapsed() > Duration::from_secs(10) {
                     last_vm_check = Instant::now();
-                    if check_stall(&vm_hb, &mut last_vm_ts, HEARTBEAT_STALL_SECS, now_ms()) {
+                    if check_stall(&vm_hb, &mut last_vm_ts, heartbeat_stall_secs, now_ms()) {
                         eprintln!("VM heartbeat stall — killing");
                         exit_code = kill_and_reap(child, shutdown_timeout);
                         timed_out = true;
@@ -753,8 +909,13 @@ fn kill_process_group(child: &mut std::process::Child, shutdown_timeout: Duratio
 }
 
 /// Map a game process exit code to a human-readable failure label.
-pub fn exit_code_label(code: i32) -> &'static str {
-    match code {
+///
+/// Checks the config-driven map first, then falls back to hardcoded defaults.
+pub fn exit_code_label(code: i32, custom: &HashMap<i32, String>) -> Cow<'static, str> {
+    if let Some(label) = custom.get(&code) {
+        return Cow::Owned(label.clone());
+    }
+    Cow::Borrowed(match code {
         0 => "SUCCESS",
         1 => "ERROR",
         10 => "PHASE_WATCHDOG",
@@ -768,7 +929,7 @@ pub fn exit_code_label(code: i32) -> &'static str {
         18 => "PEER_READY_TIMEOUT",
         124 => "TIMEOUT",
         _ => "UNKNOWN",
-    }
+    })
 }
 
 #[cfg(test)]
@@ -799,12 +960,24 @@ mod tests {
     }
 
     #[test]
-    fn exit_code_labels() {
-        assert_eq!(exit_code_label(0), "SUCCESS");
-        assert_eq!(exit_code_label(1), "ERROR");
-        assert_eq!(exit_code_label(10), "PHASE_WATCHDOG");
-        assert_eq!(exit_code_label(124), "TIMEOUT");
-        assert_eq!(exit_code_label(999), "UNKNOWN");
+    fn exit_code_labels_default() {
+        let empty = HashMap::new();
+        assert_eq!(&*exit_code_label(0, &empty), "SUCCESS");
+        assert_eq!(&*exit_code_label(1, &empty), "ERROR");
+        assert_eq!(&*exit_code_label(10, &empty), "PHASE_WATCHDOG");
+        assert_eq!(&*exit_code_label(124, &empty), "TIMEOUT");
+        assert_eq!(&*exit_code_label(999, &empty), "UNKNOWN");
+    }
+
+    #[test]
+    fn exit_code_labels_custom() {
+        let mut custom = HashMap::new();
+        custom.insert(42, "MY_ERROR".to_string());
+        custom.insert(0, "OK".to_string());
+        assert_eq!(&*exit_code_label(42, &custom), "MY_ERROR");
+        assert_eq!(&*exit_code_label(0, &custom), "OK");
+        // Fallback for unconfigured code
+        assert_eq!(&*exit_code_label(10, &custom), "PHASE_WATCHDOG");
     }
 
     struct FakeHeartbeat(Option<u128>);
@@ -850,5 +1023,116 @@ mod tests {
         let mut last = Some(1000);
         // Exactly at boundary (30s) - should NOT stall (uses > not >=)
         assert!(!check_stall(&hb, &mut last, 30, 1000 + 30_000));
+    }
+
+    // ── Custom heartbeat threshold tests ────────────────────────────────
+
+    #[test]
+    fn check_stall_custom_threshold_short() {
+        let hb = FakeHeartbeat(Some(1000));
+        let mut last = Some(1000);
+        // With 5s threshold, stall at 6s
+        assert!(check_stall(&hb, &mut last, 5, 1000 + 6_000));
+    }
+
+    #[test]
+    fn check_stall_custom_threshold_short_no_stall() {
+        let hb = FakeHeartbeat(Some(1000));
+        let mut last = Some(1000);
+        // With 5s threshold, no stall at 4s
+        assert!(!check_stall(&hb, &mut last, 5, 1000 + 4_000));
+    }
+
+    #[test]
+    fn check_stall_custom_threshold_long() {
+        let hb = FakeHeartbeat(Some(1000));
+        let mut last = Some(1000);
+        // With 120s threshold, no stall at 60s
+        assert!(!check_stall(&hb, &mut last, 120, 1000 + 60_000));
+    }
+
+    #[test]
+    fn check_stall_custom_threshold_long_stalls() {
+        let hb = FakeHeartbeat(Some(1000));
+        let mut last = Some(1000);
+        // With 120s threshold, stall at 121s
+        assert!(check_stall(&hb, &mut last, 120, 1000 + 121_000));
+    }
+
+    // ── exit_code_label edge cases ──────────────────────────────────────
+
+    #[test]
+    fn exit_code_label_all_hardcoded() {
+        let empty = HashMap::new();
+        // Verify all hardcoded codes return non-UNKNOWN labels
+        for code in [0, 1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 124] {
+            let label = exit_code_label(code, &empty);
+            assert_ne!(&*label, "UNKNOWN", "Code {code} should have a label");
+        }
+    }
+
+    #[test]
+    fn exit_code_label_negative_code() {
+        let empty = HashMap::new();
+        assert_eq!(&*exit_code_label(-1, &empty), "UNKNOWN");
+    }
+
+    #[test]
+    fn exit_code_label_custom_overrides_hardcoded() {
+        let mut custom = HashMap::new();
+        custom.insert(11, "CUSTOM_DAG".to_string());
+        // Custom map overrides the hardcoded "DAG_VIOLATION"
+        assert_eq!(&*exit_code_label(11, &custom), "CUSTOM_DAG");
+    }
+
+    #[test]
+    fn exit_code_label_custom_empty_string() {
+        let mut custom = HashMap::new();
+        custom.insert(42, String::new());
+        assert_eq!(&*exit_code_label(42, &custom), "");
+    }
+
+    #[test]
+    fn exit_code_label_returns_cow_borrowed_for_defaults() {
+        let empty = HashMap::new();
+        let label = exit_code_label(0, &empty);
+        assert!(matches!(label, Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn exit_code_label_returns_cow_owned_for_custom() {
+        let mut custom = HashMap::new();
+        custom.insert(99, "CUSTOM".to_string());
+        let label = exit_code_label(99, &custom);
+        assert!(matches!(label, Cow::Owned(_)));
+    }
+
+    // ── parse_min_timestamp_ms edge cases ───────────────────────────────
+
+    #[test]
+    fn parse_min_timestamp_ms_whitespace_around_value() {
+        let input = r#"{"timestamp_ms":   1000  }"#;
+        assert_eq!(parse_min_timestamp_ms(input), Some(1000));
+    }
+
+    #[test]
+    fn parse_min_timestamp_ms_zero() {
+        let input = r#"{"timestamp_ms": 0}"#;
+        assert_eq!(parse_min_timestamp_ms(input), Some(0));
+    }
+
+    #[test]
+    fn parse_min_timestamp_ms_large_value() {
+        let input = r#"{"timestamp_ms": 1710000000000}"#;
+        assert_eq!(parse_min_timestamp_ms(input), Some(1710000000000));
+    }
+
+    #[test]
+    fn parse_min_timestamp_ms_concatenated_json() {
+        // Simulates multiple heartbeat files concatenated
+        let input = r#"{"timestamp_ms": 5000}
+{"timestamp_ms": 3000}
+{"timestamp_ms": 7000}"#;
+        assert_eq!(parse_min_timestamp_ms(input), Some(3000));
     }
 }
