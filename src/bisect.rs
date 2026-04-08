@@ -264,8 +264,16 @@ mod tests {
 
     #[test]
     fn git_helper_on_real_repo() {
-        // This test runs on the steampipe repo itself
+        // This test runs on the steampipe repo itself.
+        // In a Nix build sandbox there is no .git directory, so skip gracefully.
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if !root.join(".git").exists() {
+            // Also check parent dirs — Cargo workspaces place .git above CARGO_MANIFEST_DIR
+            let has_git = root.ancestors().any(|p| p.join(".git").exists());
+            if !has_git {
+                return; // no git repo available (e.g. Nix sandbox)
+            }
+        }
         let result = git(&root, &["rev-parse", "HEAD"]);
         assert!(result.is_ok());
         let sha = result.unwrap();
@@ -275,6 +283,12 @@ mod tests {
     #[test]
     fn git_helper_bad_command_errors() {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        // In a Nix build sandbox there is no .git directory; git would fail
+        // for a different reason than a bad ref. Skip gracefully.
+        let has_git = root.ancestors().any(|p| p.join(".git").exists());
+        if !has_git {
+            return;
+        }
         let result = git(&root, &["rev-parse", "--verify", "nonexistent_ref_zzz"]);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();

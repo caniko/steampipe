@@ -1355,7 +1355,9 @@ mod tests {
             }),
             ..Default::default()
         });
-        let unchecked = ClusterConfig::from_parts(&root, proj, 1, None, None, None).unwrap();
+        let unchecked =
+            ClusterConfig::from_parts(&root, proj, 1, None, Some(BackendKind::Local), None)
+                .unwrap();
         // Transition to BridgeReady (skip validation for non-microvm)
         let ready = unchecked.validate_or_skip_bridge().unwrap();
         assert_eq!(ready.exit_codes.get(&10).unwrap(), "CUSTOM");
