@@ -8,6 +8,8 @@
 //! Also verifies VM→host connectivity for tests, auto-inserting the nixos-fw
 //! accept rule if needed (the NixOS host firewall blocks VM→host TCP unless
 //! an explicit rule exists for the cluster bridge interface).
+//!
+//! GPU checks: verifies that VMs have a DRM device when using a GPU display mode.
 
 use std::time::Duration;
 
@@ -190,4 +192,162 @@ fn insert_nixos_fw_rule(bridge: &str) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Shell script that checks for a DRM render device inside a VM.
+///
+/// Returns the script as a string; the caller SSHes it into each VM.
+/// Exits 0 and prints the card path if a DRM device is found,
+/// exits 1 with a diagnostic message otherwise.
+pub fn gpu_check_script() -> &'static str {
+    r#"
+if ls /dev/dri/card* >/dev/null 2>&1; then
+    echo "gpu-ok $(ls /dev/dri/card* | head -1)"
+else
+    echo "gpu-missing"
+    echo "  /dev/dri/ contents:" >&2
+    ls -la /dev/dri/ 2>&1 || echo "  /dev/dri/ does not exist" >&2
+    exit 1
+fi
+"#
+}
+
+/// Verify that VMs have a DRM device available (required for GPU display modes).
+///
+/// SSHes into each target VM and checks for `/dev/dri/card*`. Bails with a
+/// clear error message if any VM lacks a GPU device.
+pub async fn ensure_vm_gpu(
+    backend: &Backend,
+    target_vms: &[VmDef],
+    display: crate::cli::DisplayMode,
+) -> anyhow::Result<()> {
+    if !display.requires_gpu() {
+        return Ok(());
+    }
+
+    let script = gpu_check_script();
+    let mut failures = Vec::new();
+
+    for vm in target_vms {
+        let result = backend
+            .run_cmd_timeout(&vm.ip, script, Duration::from_secs(10))
+            .await;
+        if !result.stdout.contains("gpu-ok") {
+            failures.push(format!(
+                "  {}: no DRM device found (is microvm.graphics.enable = true?)\n    {}",
+                vm.name,
+                result.stderr.trim(),
+            ));
+        }
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "GPU check failed — display mode \"{display}\" requires virtio-gpu but \
+             these VMs have no DRM device:\n{}",
+            failures.join("\n"),
+        );
+    }
+}
+
+/// Parse the output of [`gpu_check_script`] to extract the card device path.
+///
+/// Returns `Some("/dev/dri/card0")` on success, `None` on failure.
+pub fn parse_gpu_check(stdout: &str) -> Option<&str> {
+    stdout
+        .trim()
+        .strip_prefix("gpu-ok ")
+        .map(|s| s.trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── gpu_check_script ────────────────────────────────────────────────
+
+    #[test]
+    fn gpu_check_script_checks_dev_dri() {
+        let script = gpu_check_script();
+        assert!(script.contains("/dev/dri/card*"), "must probe /dev/dri/card*");
+    }
+
+    #[test]
+    fn gpu_check_script_prints_gpu_ok_on_success() {
+        let script = gpu_check_script();
+        assert!(script.contains("gpu-ok"), "must print gpu-ok when device found");
+    }
+
+    #[test]
+    fn gpu_check_script_prints_gpu_missing_on_failure() {
+        let script = gpu_check_script();
+        assert!(script.contains("gpu-missing"), "must print gpu-missing when no device");
+    }
+
+    #[test]
+    fn gpu_check_script_exits_nonzero_on_failure() {
+        let script = gpu_check_script();
+        assert!(script.contains("exit 1"), "must exit 1 when no GPU found");
+    }
+
+    #[test]
+    fn gpu_check_script_prints_diagnostics_on_failure() {
+        let script = gpu_check_script();
+        assert!(
+            script.contains("/dev/dri/"),
+            "must list /dev/dri/ contents for diagnostics"
+        );
+    }
+
+    // ── parse_gpu_check ─────────────────────────────────────────────────
+
+    #[test]
+    fn parse_gpu_check_success() {
+        assert_eq!(
+            parse_gpu_check("gpu-ok /dev/dri/card0\n"),
+            Some("/dev/dri/card0"),
+        );
+    }
+
+    #[test]
+    fn parse_gpu_check_success_with_whitespace() {
+        assert_eq!(
+            parse_gpu_check("  gpu-ok /dev/dri/card1  \n"),
+            Some("/dev/dri/card1"),
+        );
+    }
+
+    #[test]
+    fn parse_gpu_check_failure() {
+        assert_eq!(parse_gpu_check("gpu-missing\n"), None);
+    }
+
+    #[test]
+    fn parse_gpu_check_empty() {
+        assert_eq!(parse_gpu_check(""), None);
+    }
+
+    #[test]
+    fn parse_gpu_check_random_output() {
+        assert_eq!(parse_gpu_check("something unexpected"), None);
+    }
+
+    // ── DisplayMode::requires_gpu ───────────────────────────────────────
+
+    #[test]
+    fn requires_gpu_true_for_gpu_modes() {
+        use crate::cli::DisplayMode;
+        assert!(DisplayMode::WestonGpu.requires_gpu());
+        assert!(DisplayMode::SwayGpu.requires_gpu());
+    }
+
+    #[test]
+    fn requires_gpu_false_for_non_gpu_modes() {
+        use crate::cli::DisplayMode;
+        assert!(!DisplayMode::Headless.requires_gpu());
+        assert!(!DisplayMode::Weston.requires_gpu());
+        assert!(!DisplayMode::Sway.requires_gpu());
+    }
 }

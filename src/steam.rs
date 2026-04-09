@@ -37,12 +37,46 @@ export DISPLAY=:0
     )
 }
 
+/// Shell snippet that ensures weston is running on the virtio-gpu DRM device.
+pub fn weston_gpu_setup(vm_user: &str) -> String {
+    format!(
+        r#"
+export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
+mkdir -p $XDG_RUNTIME_DIR
+if ! pgrep -x weston >/dev/null; then
+    weston --xwayland --no-config >/dev/null 2>&1 &
+    sleep 2
+fi
+export WAYLAND_DISPLAY=wayland-1
+export DISPLAY=:0
+"#
+    )
+}
+
+/// Shell snippet that ensures sway is running on the virtio-gpu DRM device.
+pub fn sway_gpu_setup(vm_user: &str) -> String {
+    format!(
+        r#"
+export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
+mkdir -p $XDG_RUNTIME_DIR
+if ! pgrep -x sway >/dev/null; then
+    WLR_BACKENDS=drm sway >/dev/null 2>&1 &
+    sleep 2
+fi
+export WAYLAND_DISPLAY=wayland-1
+export DISPLAY=:0
+"#
+    )
+}
+
 /// Return the compositor setup snippet for a display mode (empty for Headless).
 pub fn compositor_setup(mode: crate::cli::DisplayMode, vm_user: &str) -> String {
     match mode {
         crate::cli::DisplayMode::Headless => String::new(),
         crate::cli::DisplayMode::Weston => weston_setup(vm_user),
         crate::cli::DisplayMode::Sway => sway_setup(vm_user),
+        crate::cli::DisplayMode::WestonGpu => weston_gpu_setup(vm_user),
+        crate::cli::DisplayMode::SwayGpu => sway_gpu_setup(vm_user),
     }
 }
 
@@ -453,5 +487,120 @@ mod tests {
     #[test]
     fn shell_escape_empty() {
         assert_eq!(shell_escape(""), "");
+    }
+
+    // ── Compositor setup scripts ────────────────────────────────────────
+
+    #[test]
+    fn weston_setup_uses_headless_backend() {
+        let script = weston_setup("testuser");
+        assert!(script.contains("--backend=headless"), "weston_setup must use headless backend");
+        assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("DISPLAY=:0"));
+        assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
+    }
+
+    #[test]
+    fn weston_gpu_setup_no_headless_backend() {
+        let script = weston_gpu_setup("testuser");
+        assert!(!script.contains("--backend=headless"), "weston_gpu_setup must NOT use headless backend");
+        assert!(script.contains("weston"), "must still launch weston");
+        assert!(script.contains("--xwayland"));
+        assert!(script.contains("--no-config"));
+        assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("DISPLAY=:0"));
+        assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
+    }
+
+    #[test]
+    fn sway_setup_script() {
+        let script = sway_setup("testuser");
+        assert!(script.contains("sway"));
+        assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("DISPLAY=:0"));
+        assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
+    }
+
+    #[test]
+    fn sway_gpu_setup_sets_drm_backend() {
+        let script = sway_gpu_setup("testuser");
+        assert!(script.contains("WLR_BACKENDS=drm"), "sway_gpu_setup must set WLR_BACKENDS=drm");
+        assert!(script.contains("sway"));
+        assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("DISPLAY=:0"));
+        assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
+    }
+
+    #[test]
+    fn compositor_setup_headless_returns_empty() {
+        let script = compositor_setup(crate::cli::DisplayMode::Headless, "u");
+        assert!(script.is_empty());
+    }
+
+    #[test]
+    fn compositor_setup_weston_uses_headless() {
+        let script = compositor_setup(crate::cli::DisplayMode::Weston, "u");
+        assert!(script.contains("--backend=headless"));
+    }
+
+    #[test]
+    fn compositor_setup_sway() {
+        let script = compositor_setup(crate::cli::DisplayMode::Sway, "u");
+        assert!(script.contains("sway"));
+        assert!(!script.contains("WLR_BACKENDS"));
+    }
+
+    #[test]
+    fn compositor_setup_weston_gpu_no_headless() {
+        let script = compositor_setup(crate::cli::DisplayMode::WestonGpu, "u");
+        assert!(script.contains("weston"));
+        assert!(!script.contains("--backend=headless"));
+    }
+
+    #[test]
+    fn compositor_setup_sway_gpu_drm() {
+        let script = compositor_setup(crate::cli::DisplayMode::SwayGpu, "u");
+        assert!(script.contains("WLR_BACKENDS=drm"));
+    }
+
+    #[test]
+    fn gpu_setup_uses_correct_user_in_runtime_dir() {
+        let weston = weston_gpu_setup("chessbender");
+        assert!(weston.contains("/tmp/runtime-chessbender"));
+        let sway = sway_gpu_setup("chessbender");
+        assert!(sway.contains("/tmp/runtime-chessbender"));
+    }
+
+    #[test]
+    fn all_compositor_setups_create_runtime_dir() {
+        for mode in [
+            crate::cli::DisplayMode::Weston,
+            crate::cli::DisplayMode::Sway,
+            crate::cli::DisplayMode::WestonGpu,
+            crate::cli::DisplayMode::SwayGpu,
+        ] {
+            let script = compositor_setup(mode, "u");
+            assert!(
+                script.contains("mkdir -p $XDG_RUNTIME_DIR"),
+                "{mode} setup must create runtime dir"
+            );
+        }
+    }
+
+    #[test]
+    fn all_compositor_setups_are_idempotent() {
+        // All non-headless setups check for existing process before starting
+        for mode in [
+            crate::cli::DisplayMode::Weston,
+            crate::cli::DisplayMode::Sway,
+            crate::cli::DisplayMode::WestonGpu,
+            crate::cli::DisplayMode::SwayGpu,
+        ] {
+            let script = compositor_setup(mode, "u");
+            assert!(
+                script.contains("pgrep"),
+                "{mode} setup must check for existing process"
+            );
+        }
     }
 }

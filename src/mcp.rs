@@ -515,10 +515,12 @@ impl SteampipeMcp {
             "headless" => crate::cli::DisplayMode::Headless,
             "weston" => crate::cli::DisplayMode::Weston,
             "sway" => crate::cli::DisplayMode::Sway,
+            "weston-gpu" => crate::cli::DisplayMode::WestonGpu,
+            "sway-gpu" => crate::cli::DisplayMode::SwayGpu,
             other => {
                 return Err(ErrorData::invalid_params(
                     format!(
-                        "display must be \"headless\", \"weston\", or \"sway\", got \"{other}\""
+                        "display must be \"headless\", \"weston\", \"sway\", \"weston-gpu\", or \"sway-gpu\", got \"{other}\""
                     ),
                     None,
                 ));

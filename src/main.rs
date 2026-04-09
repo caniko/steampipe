@@ -297,6 +297,8 @@ async fn main() -> anyhow::Result<()> {
                             "headless" => Some(DisplayMode::Headless),
                             "weston" => Some(DisplayMode::Weston),
                             "sway" => Some(DisplayMode::Sway),
+                            "weston-gpu" => Some(DisplayMode::WestonGpu),
+                            "sway-gpu" => Some(DisplayMode::SwayGpu),
                             _ => None,
                         })
                 })

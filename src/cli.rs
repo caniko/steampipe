@@ -32,6 +32,17 @@ pub enum DisplayMode {
     Weston,
     /// Start Sway compositor
     Sway,
+    /// Start Weston on virtio-gpu DRM device (VM needs microvm.graphics.enable)
+    WestonGpu,
+    /// Start Sway on virtio-gpu DRM device (VM needs microvm.graphics.enable)
+    SwayGpu,
+}
+
+impl DisplayMode {
+    /// Whether this display mode requires a virtio-gpu DRM device on the VM.
+    pub fn requires_gpu(&self) -> bool {
+        matches!(self, Self::WestonGpu | Self::SwayGpu)
+    }
 }
 
 impl fmt::Display for DisplayMode {
@@ -40,6 +51,8 @@ impl fmt::Display for DisplayMode {
             Self::Headless => f.write_str("headless"),
             Self::Weston => f.write_str("weston"),
             Self::Sway => f.write_str("sway"),
+            Self::WestonGpu => f.write_str("weston-gpu"),
+            Self::SwayGpu => f.write_str("sway-gpu"),
         }
     }
 }
@@ -741,6 +754,100 @@ mod tests {
     fn network_mode_display() {
         assert_eq!(format!("{}", NetworkMode::Lan), "lan");
         assert_eq!(format!("{}", NetworkMode::Steam), "steam");
+    }
+
+    // ── Display mode ────────────────────────────────────────────────────
+
+    #[test]
+    fn display_mode_display_all_variants() {
+        assert_eq!(format!("{}", DisplayMode::Headless), "headless");
+        assert_eq!(format!("{}", DisplayMode::Weston), "weston");
+        assert_eq!(format!("{}", DisplayMode::Sway), "sway");
+        assert_eq!(format!("{}", DisplayMode::WestonGpu), "weston-gpu");
+        assert_eq!(format!("{}", DisplayMode::SwayGpu), "sway-gpu");
+    }
+
+    #[test]
+    fn display_mode_equality() {
+        assert_eq!(DisplayMode::WestonGpu, DisplayMode::WestonGpu);
+        assert_eq!(DisplayMode::SwayGpu, DisplayMode::SwayGpu);
+        assert_ne!(DisplayMode::WestonGpu, DisplayMode::Weston);
+        assert_ne!(DisplayMode::SwayGpu, DisplayMode::Sway);
+        assert_ne!(DisplayMode::WestonGpu, DisplayMode::Headless);
+    }
+
+    #[test]
+    fn display_mode_requires_gpu() {
+        assert!(!DisplayMode::Headless.requires_gpu());
+        assert!(!DisplayMode::Weston.requires_gpu());
+        assert!(!DisplayMode::Sway.requires_gpu());
+        assert!(DisplayMode::WestonGpu.requires_gpu());
+        assert!(DisplayMode::SwayGpu.requires_gpu());
+    }
+
+    #[test]
+    fn display_mode_parse_weston_gpu() {
+        let cli = parse(&[
+            "--vm-count", "3", "test", "--display", "weston-gpu",
+        ]);
+        match cli.command {
+            Commands::Test { display, .. } => {
+                assert!(matches!(display, Some(DisplayMode::WestonGpu)));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn display_mode_parse_sway_gpu() {
+        let cli = parse(&[
+            "--vm-count", "3", "test", "--display", "sway-gpu",
+        ]);
+        match cli.command {
+            Commands::Test { display, .. } => {
+                assert!(matches!(display, Some(DisplayMode::SwayGpu)));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn display_mode_parse_rejects_invalid() {
+        let mut args = vec!["cluster-ctl"];
+        args.extend_from_slice(&[
+            "--vm-count", "3", "test", "--display", "opengl",
+        ]);
+        assert!(Cli::try_parse_from(args).is_err());
+    }
+
+    #[test]
+    fn bisect_display_weston_gpu() {
+        let cli = parse(&[
+            "--vm-count", "3", "bisect",
+            "--good", "aaa", "--bad", "bbb",
+            "--display", "weston-gpu",
+        ]);
+        match cli.command {
+            Commands::Bisect { display, .. } => {
+                assert!(matches!(display, DisplayMode::WestonGpu));
+            }
+            _ => panic!("expected Bisect"),
+        }
+    }
+
+    #[test]
+    fn bisect_display_sway_gpu() {
+        let cli = parse(&[
+            "--vm-count", "3", "bisect",
+            "--good", "aaa", "--bad", "bbb",
+            "--display", "sway-gpu",
+        ]);
+        match cli.command {
+            Commands::Bisect { display, .. } => {
+                assert!(matches!(display, DisplayMode::SwayGpu));
+            }
+            _ => panic!("expected Bisect"),
+        }
     }
 
     // ── New feature: Test command optionalized fields ─────────────────

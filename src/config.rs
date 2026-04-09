@@ -1286,6 +1286,38 @@ mod tests {
     }
 
     #[test]
+    fn profile_display_weston_gpu() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [profile.gpu]
+            display = "weston-gpu"
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let gpu = proj.profile.unwrap().get("gpu").unwrap().clone();
+        assert_eq!(gpu.display.as_deref(), Some("weston-gpu"));
+    }
+
+    #[test]
+    fn profile_display_sway_gpu() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [profile.gpu]
+            display = "sway-gpu"
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let gpu = proj.profile.unwrap().get("gpu").unwrap().clone();
+        assert_eq!(gpu.display.as_deref(), Some("sway-gpu"));
+    }
+
+    #[test]
     fn chaos_profile_partial_fields() {
         let toml_str = r#"
             binary_name = "g"

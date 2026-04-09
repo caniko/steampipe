@@ -193,6 +193,14 @@ pub async fn run<S>(
         output.push('\n');
     }
 
+    // Pre-flight: verify VMs have a GPU device if using a GPU display mode
+    if test_config.display.requires_gpu() {
+        print_and_push(&mut output, "=== GPU CHECK ===", verbose);
+        crate::preflight::ensure_vm_gpu(backend, target_vms, test_config.display).await?;
+        print_and_push(&mut output, "  All VMs have a DRM device", verbose);
+        output.push('\n');
+    }
+
     // Step 2a: Start compositor on VMs if display mode requires it
     if test_config.display != crate::cli::DisplayMode::Headless {
         print_and_push(
