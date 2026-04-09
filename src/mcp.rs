@@ -203,7 +203,7 @@ pub struct ClusterTestInput {
     /// Build before deploying (default: true).
     #[serde(default)]
     pub build: Option<bool>,
-    /// VM display mode: "headless", "weston" (default), or "sway".
+    /// VM display mode: "headless", "weston" (default), "sway", "weston-gpu", or "sway-gpu".
     #[serde(default)]
     pub display: Option<String>,
     /// Capture screenshots on failure (default: false).

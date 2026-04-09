@@ -122,12 +122,24 @@ pub async fn ensure_steam(
 }
 
 /// Start weston + Steam on target instances (uses already-running cluster instances).
-pub async fn start<S>(config: &ClusterConfig<S>, target: Option<&str>) -> anyhow::Result<()> {
+pub async fn start<S>(
+    config: &ClusterConfig<S>,
+    target: Option<&str>,
+    display: crate::cli::DisplayMode,
+) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, false)?;
     let backend = config.backend.clone();
 
-    println!("==> Starting Steam on {} VM(s)...", targets.len());
-    let script = format!("{}{STEAM_START_SILENT}", weston_setup(&config.vm_user));
+    if display.requires_gpu() {
+        crate::preflight::ensure_vm_gpu(&backend, &targets, display).await?;
+    }
+
+    println!("==> Starting Steam on {} VM(s) ({display})...", targets.len());
+    let script = format!(
+        "{}{}",
+        compositor_setup(display, &config.vm_user),
+        STEAM_START_SILENT,
+    );
 
     let results = par_each_vm(&targets, |vm| {
         let backend = backend.clone();
@@ -153,6 +165,7 @@ pub async fn check(
     config: &ClusterConfig<BridgeReady>,
     target: Option<&str>,
     runners_dir: &Path,
+    display: crate::cli::DisplayMode,
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, false)?;
     let backend = &config.backend;
@@ -182,7 +195,7 @@ pub async fn check(
         }
         println!("OK");
 
-        let weston = weston_setup(&config.vm_user);
+        let compositor = compositor_setup(display, &config.vm_user);
         let result = backend
             .run_cmd(
                 &vm.ip,
@@ -198,8 +211,8 @@ pub async fn check(
                         PERSONA=""
                         ERRORS="$ERRORS not-logged-in"
                     fi
-                    {weston}
-                    STARTED_WESTON=1
+                    {compositor}
+                    STARTED_COMPOSITOR=1
                     steam -silent -cef-disable-gpu >/dev/null 2>&1 &
                     STEAM_PID=$!
                     sleep 12

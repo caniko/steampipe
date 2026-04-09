@@ -1,4 +1,5 @@
 use crate::backend::Backend;
+use crate::cli::DisplayMode;
 use crate::config::{ClusterConfig, VmDef, par_each_vm};
 use crate::steam;
 
@@ -44,25 +45,34 @@ pub async fn stop_game<S>(config: &ClusterConfig<S>, kill_steam: bool) -> anyhow
     Ok(())
 }
 
-/// Run the `run` subcommand: start weston + Steam + game on all instances.
-pub async fn start_game<S>(config: &ClusterConfig<S>, extra_args: &[String]) -> anyhow::Result<()> {
+/// Run the `run` subcommand: start compositor + Steam + game on all instances.
+pub async fn start_game<S>(
+    config: &ClusterConfig<S>,
+    display: DisplayMode,
+    extra_args: &[String],
+) -> anyhow::Result<()> {
+    // GPU preflight check
+    if display.requires_gpu() {
+        crate::preflight::ensure_vm_gpu(&config.backend, &config.vms, display).await?;
+    }
+
     let backend = config.backend.clone();
     let remote_dir = config.remote_dir.clone();
     let binary_name = config.binary_name.clone();
-    let weston = steam::weston_setup(&config.vm_user);
+    let compositor = steam::compositor_setup(display, &config.vm_user);
     let extra = extra_args.join(" ");
 
-    println!("==> Starting game on {} VMs...", config.vms.len());
+    println!("==> Starting game on {} VMs ({display})...", config.vms.len());
 
     let results = par_each_vm(&config.vms, |vm| {
         let backend = backend.clone();
         let remote_dir = remote_dir.clone();
         let binary_name = binary_name.clone();
-        let weston = weston.clone();
+        let compositor = compositor.clone();
         let extra = extra.clone();
         async move {
             let cmd = format!(
-                "{weston}\
+                "{compositor}\
                  if ! pgrep -x steam >/dev/null; then\n\
                      steam -silent -cef-disable-gpu >/dev/null 2>&1 &\n\
                      sleep 5\n\

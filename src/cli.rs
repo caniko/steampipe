@@ -166,16 +166,25 @@ pub enum Commands {
         /// Path to directory containing VM runners (required for microvm backend)
         #[arg(long)]
         runners_dir: Option<PathBuf>,
+        /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "weston")]
+        display: DisplayMode,
     },
 
-    /// Start weston + Steam on VMs
+    /// Start compositor + Steam on VMs
     SteamStart {
         /// Target VM: "all", "3", "vm-3"
         target: Option<String>,
+        /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "weston")]
+        display: DisplayMode,
     },
 
-    /// Start weston + Steam + game on all VMs
+    /// Start compositor + Steam + game on all VMs
     Run {
+        /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "weston")]
+        display: DisplayMode,
         /// Args passed to the game binary on VMs
         #[arg(trailing_var_arg = true)]
         extra_args: Vec<String>,
@@ -267,7 +276,7 @@ pub enum Commands {
         #[arg(long)]
         capture_on_failure: bool,
 
-        /// VM display mode: headless, weston (default), or sway
+        /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
         #[arg(long)]
         display: Option<DisplayMode>,
 
@@ -546,6 +555,89 @@ mod tests {
                 assert_eq!(target.as_deref(), Some("vm-2"));
             }
             _ => panic!("expected Logs command"),
+        }
+    }
+
+    // ── Run command display mode ──────────────────────────────────────────
+
+    #[test]
+    fn run_display_default_is_weston() {
+        let cli = parse(&["--vm-count", "7", "run"]);
+        match cli.command {
+            Commands::Run { display, .. } => {
+                assert!(matches!(display, DisplayMode::Weston));
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_display_weston_gpu() {
+        let cli = parse(&["--vm-count", "7", "run", "--display", "weston-gpu"]);
+        match cli.command {
+            Commands::Run { display, .. } => {
+                assert!(matches!(display, DisplayMode::WestonGpu));
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_display_sway_gpu() {
+        let cli = parse(&["--vm-count", "7", "run", "--display", "sway-gpu"]);
+        match cli.command {
+            Commands::Run { display, .. } => {
+                assert!(matches!(display, DisplayMode::SwayGpu));
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    // ── SteamStart display mode ─────────────────────────────────────────
+
+    #[test]
+    fn steam_start_display_default_is_weston() {
+        let cli = parse(&["--vm-count", "7", "steam-start"]);
+        match cli.command {
+            Commands::SteamStart { display, .. } => {
+                assert!(matches!(display, DisplayMode::Weston));
+            }
+            _ => panic!("expected SteamStart"),
+        }
+    }
+
+    #[test]
+    fn steam_start_display_weston_gpu() {
+        let cli = parse(&["--vm-count", "7", "steam-start", "--display", "weston-gpu"]);
+        match cli.command {
+            Commands::SteamStart { display, .. } => {
+                assert!(matches!(display, DisplayMode::WestonGpu));
+            }
+            _ => panic!("expected SteamStart"),
+        }
+    }
+
+    // ── SteamCheck display mode ─────────────────────────────────────────
+
+    #[test]
+    fn steam_check_display_default_is_weston() {
+        let cli = parse(&["--vm-count", "7", "steam-check"]);
+        match cli.command {
+            Commands::SteamCheck { display, .. } => {
+                assert!(matches!(display, DisplayMode::Weston));
+            }
+            _ => panic!("expected SteamCheck"),
+        }
+    }
+
+    #[test]
+    fn steam_check_display_sway_gpu() {
+        let cli = parse(&["--vm-count", "7", "steam-check", "--display", "sway-gpu"]);
+        match cli.command {
+            Commands::SteamCheck { display, .. } => {
+                assert!(matches!(display, DisplayMode::SwayGpu));
+            }
+            _ => panic!("expected SteamCheck"),
         }
     }
 

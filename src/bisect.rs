@@ -197,7 +197,15 @@ pub async fn run<S: Send + Sync>(
             };
             match crate::test::run(config, project_root, test_config).await {
                 Ok(_) => pass_count += 1,
-                Err(_) => {}
+                Err(e) => {
+                    let msg = format!("{e}");
+                    if msg.contains("GPU check failed")
+                        || msg.contains("Compositor setup failed")
+                    {
+                        anyhow::bail!("Bisect aborted — infrastructure failure: {e}");
+                    }
+                    // Actual test failure — count as bad
+                }
             }
         }
 

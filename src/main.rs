@@ -185,11 +185,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::SteamCheck {
             target,
             runners_dir,
+            display,
         } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
             net::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
-            steam::check(&validated, target.as_deref(), &runners_dir).await?;
+            steam::check(&validated, target.as_deref(), &runners_dir, display).await?;
         }
         Commands::SteamLogin {
             target,
@@ -236,11 +237,11 @@ async fn main() -> anyhow::Result<()> {
                 logs::print_stdout(&config, target.as_deref(), n, head, pattern.as_deref()).await?;
             }
         }
-        Commands::SteamStart { target } => {
-            steam::start(&config, target.as_deref()).await?;
+        Commands::SteamStart { target, display } => {
+            steam::start(&config, target.as_deref(), display).await?;
         }
-        Commands::Run { extra_args } => {
-            run::start_game(&config, &extra_args).await?;
+        Commands::Run { display, extra_args } => {
+            run::start_game(&config, display, &extra_args).await?;
         }
         Commands::Test {
             profile,
