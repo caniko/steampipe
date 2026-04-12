@@ -1,6 +1,11 @@
 {
   description = "NixOS microVM cluster orchestrator";
 
+  nixConfig = {
+    extra-substituters = ["https://microvm.cachix.org"];
+    extra-trusted-public-keys = ["microvm.cachix.org-1:oXnBc6hRE3eX5rSYdRyMYXnfzcCxC7yKPTbZXALsqys="];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     rust-overlay = {
