@@ -967,3 +967,7 @@ Setup:
   init                     Generate steampipe.toml
   completions <SHELL>      Generate shell completions
 ```
+
+## CI
+
+Woodpecker CI on Codeberg runs `cargo build`, `cargo test`, `cargo clippy`, and `cargo fmt --check` on every push and pull request. End-to-end tests requiring microVMs are excluded from CI and run locally.
