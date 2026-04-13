@@ -352,6 +352,68 @@ async fn login_single_vm(
     Ok(())
 }
 
+/// Auto-login Steam on already-running VMs using credentials.
+/// Called after `vm::up()` to transparently establish Steam sessions.
+pub async fn auto_login<S>(
+    config: &ClusterConfig<S>,
+    vms: &[VmDef],
+    creds: &CredentialsMap,
+) -> anyhow::Result<()> {
+    // Filter to VMs that have credentials
+    let with_creds: Vec<_> = vms
+        .iter()
+        .filter_map(|vm| creds.get::<str>(&vm.name).map(|c| (vm.clone(), c.clone())))
+        .collect();
+
+    if with_creds.is_empty() {
+        return Ok(());
+    }
+
+    println!("==> Auto-login Steam on {} VM(s)...", with_creds.len());
+    let backend = config.backend.clone();
+    let vm_user = config.vm_user.clone();
+
+    let results = par_each_vm(vms, |vm| {
+        let backend = backend.clone();
+        let vm_user = vm_user.clone();
+        let creds = creds.clone();
+        async move {
+            let Some(vm_creds) = creds.get::<str>(&vm.name) else {
+                return (vm.name, None);
+            };
+            match automated_login(&backend, &vm, vm_creds, &vm_user).await {
+                Ok(()) => (vm.name, Some(true)),
+                Err(e) => {
+                    eprintln!("  {}: login failed: {e}", vm.name);
+                    (vm.name, Some(false))
+                }
+            }
+        }
+    })
+    .await?;
+
+    let mut ok = 0;
+    let mut fail = 0;
+    for (name, result) in &results {
+        match result {
+            Some(true) => {
+                println!("  {name}: logged in");
+                ok += 1;
+            }
+            Some(false) => fail += 1,
+            None => {} // no creds for this VM
+        }
+    }
+
+    if fail > 0 {
+        eprintln!("==> {ok}/{} Steam logins succeeded ({fail} failed)", ok + fail);
+    } else {
+        println!("==> All {ok} Steam logins succeeded");
+    }
+
+    Ok(())
+}
+
 /// Automated login: starts weston, runs `steam -login`, waits for login confirmation,
 /// and optionally activates a game key.
 async fn automated_login(

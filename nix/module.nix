@@ -9,6 +9,22 @@ let
   cfg = config.services.steampipe-cluster;
   vmNames = builtins.genList (i: "vm-${toString (i + 1)}") cfg.vmCount;
   tapNames = map (n: "tap-${n}") vmNames;
+  # Script that reads agenix password files at runtime and generates credentials TOML
+  credentialsGenScript = pkgs.writeShellScript "steampipe-gen-credentials" (''
+    set -euo pipefail
+    out="/etc/steampipe/credentials.toml"
+    mkdir -p "$(dirname "$out")"
+  '' + lib.concatStringsSep "" (lib.mapAttrsToList (name: creds: ''
+    pass="$(cat ${lib.escapeShellArg (toString creds.steamPass)})"
+    cat >> "$out" <<'TOML_HEADER'
+    [vm."${name}"]
+    steam_user = "${creds.steamUser}"
+    TOML_HEADER
+    printf 'steam_pass = "%s"\n\n' "$pass" >> "$out"
+  '') cfg.accounts) + ''
+    chmod 0400 "$out"
+    ${lib.optionalString (cfg.tapOwner != null) "chown ${cfg.tapOwner} \"$out\""}
+  '');
 
   tapSetupScript = pkgs.writeShellScript "steampipe-tap-setup" ''
     set -euo pipefail
@@ -86,6 +102,44 @@ in
         hypervisors (e.g. cloud-hypervisor) to open TAP devices.
       '';
     };
+
+    accounts = lib.mkOption {
+      type = lib.types.attrsOf (lib.types.submodule {
+        options = {
+          steamUser = lib.mkOption {
+            type = lib.types.str;
+            description = "Steam account username.";
+          };
+          steamPass = lib.mkOption {
+            type = lib.types.path;
+            description = "Path to file containing the Steam account password (e.g. an agenix secret).";
+          };
+        };
+      });
+      default = {};
+      description = ''
+        Per-VM Steam account credentials, keyed by VM name (e.g. "vm-1").
+        When set, a credentials TOML is generated and login state directories
+        are created under loginStateDir.
+      '';
+      example = lib.literalExpression ''
+        {
+          vm-1 = { steamUser = "testaccount1"; steamPass = "password1"; };
+          vm-2 = { steamUser = "testaccount2"; steamPass = "password2"; };
+        }
+      '';
+    };
+
+    loginStateDir = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/steampipe/logins";
+      description = ''
+        Host directory where Steam login state is persisted.
+        Each VM gets a subdirectory (e.g. vm-1/, vm-2/) containing
+        the Steam config files. Project-level flakes mount these
+        read-only into VMs to reuse login sessions.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -118,6 +172,23 @@ in
         Type = "oneshot";
         RemainAfterExit = true;
         ExecStart = tapSetupScript;
+      };
+    };
+
+    # Create login state directories when accounts are configured
+    systemd.tmpfiles.rules = lib.mkIf (cfg.accounts != {})
+      (map (name: "d ${cfg.loginStateDir}/${name} 0755 ${cfg.tapOwner or "root"} users -") vmNames);
+
+    # Generate credentials TOML at runtime by reading agenix password files
+    systemd.services.steampipe-gen-credentials = lib.mkIf (cfg.accounts != {}) {
+      description = "Generate steampipe credentials TOML from secret files";
+      after = ["agenix.service"];
+      wantedBy = ["multi-user.target"];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        ExecStartPre = "${pkgs.coreutils}/bin/rm -f /etc/steampipe/credentials.toml";
+        ExecStart = credentialsGenScript;
       };
     };
 

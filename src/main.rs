@@ -172,6 +172,11 @@ async fn main() -> anyhow::Result<()> {
             let validated = config.validate_or_skip_bridge()?;
             let started = vm::up(&validated, &runners_dir).await?;
             println!("==> {} VM(s) running", started.len());
+
+            // Auto-login Steam if credentials were provided
+            if let Some(creds) = &creds {
+                steam::auto_login(&validated, &started, creds).await?;
+            }
         }
         Commands::Restart {
             target,
