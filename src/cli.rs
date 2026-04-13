@@ -299,6 +299,10 @@ pub enum Commands {
         /// Run shell command when any test fails
         #[arg(long)]
         on_failure: Option<String>,
+
+        /// Launch the local host process under strace (captures network syscalls)
+        #[arg(long)]
+        strace: bool,
     },
 
     /// Binary search git history to find the commit that introduced a test failure

@@ -264,6 +264,7 @@ async fn main() -> anyhow::Result<()> {
             output_format,
             on_complete,
             on_failure,
+            strace,
         } => {
             // Load test profile if specified
             let prof = profile
@@ -382,6 +383,7 @@ async fn main() -> anyhow::Result<()> {
                     on_complete: resolved_on_complete,
                     on_failure: resolved_on_failure,
                     exit_codes: config.exit_codes.clone(),
+                    strace,
                 },
             )
             .await?;

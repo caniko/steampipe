@@ -221,6 +221,9 @@ pub struct ClusterTestInput {
     /// Extra args for VM game binaries.
     #[serde(default)]
     pub vm_args: Option<String>,
+    /// Launch the local host process under strace (default: false).
+    #[serde(default)]
+    pub strace: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -549,6 +552,7 @@ impl SteampipeMcp {
             on_complete: None,
             on_failure: None,
             exit_codes: config.exit_codes.clone(),
+            strace: input.strace.unwrap_or(false),
         };
 
         let result = crate::test::run(&config, &root, test_config).await;

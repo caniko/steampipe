@@ -194,6 +194,7 @@ pub async fn run<S: Send + Sync>(
                 on_complete: None,
                 on_failure: None,
                 exit_codes: exit_codes.clone(),
+                strace: false,
             };
             match crate::test::run(config, project_root, test_config).await {
                 Ok(_) => pass_count += 1,

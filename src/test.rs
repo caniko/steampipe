@@ -49,6 +49,8 @@ pub struct TestConfig {
     pub on_failure: Option<String>,
     /// Parsed exit code mapping from config.
     pub exit_codes: HashMap<i32, String>,
+    /// Launch the local host process under strace (captures network syscalls).
+    pub strace: bool,
 }
 
 // ── Heartbeat trait: static dispatch for local vs. VM heartbeat sources ──
@@ -352,7 +354,19 @@ pub async fn run<S>(
 
         // Launch local (host) process FIRST so it's listening when VMs connect
         eprintln!("[cluster-ctl] Launching local process...");
-        let mut local_cmd = std::process::Command::new(&binary_path);
+        let strace_output = project_root.join("strace-host.log");
+        let mut local_cmd = if test_config.strace {
+            let mut cmd = std::process::Command::new("strace");
+            cmd.args(["-f", "-e", "trace=network", "-tt", "-o"]);
+            cmd.arg(&strace_output);
+            cmd.arg(&binary_path);
+            cmd
+        } else {
+            std::process::Command::new(&binary_path)
+        };
+        if test_config.strace {
+            println!("  strace enabled → {}", strace_output.display());
+        }
         for arg in host_args.split_whitespace() {
             local_cmd.arg(arg);
         }
