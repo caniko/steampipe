@@ -1,7 +1,7 @@
-use crate::backend::Backend;
-use crate::cli::DisplayMode;
-use crate::config::{ClusterConfig, VmDef, par_each_vm};
-use crate::steam;
+use crate::core::backend::Backend;
+use crate::ui::cli::DisplayMode;
+use crate::core::config::{ClusterConfig, VmDef, par_each_vm};
+use crate::game::steam;
 
 /// Kill game process on a set of instances in parallel.
 pub async fn kill_games(backend: &Backend, vms: &[VmDef], binary_name: &str) {
@@ -53,7 +53,7 @@ pub async fn start_game<S>(
 ) -> anyhow::Result<()> {
     // GPU preflight check
     if display.requires_gpu() {
-        crate::preflight::ensure_vm_gpu(&config.backend, &config.vms, display).await?;
+        crate::vm::preflight::ensure_vm_gpu(&config.backend, &config.vms, display).await?;
     }
 
     let backend = config.backend.clone();

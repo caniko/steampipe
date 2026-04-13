@@ -2,10 +2,10 @@
 
 use std::path::Path;
 
-use crate::config::{BridgeReady, ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
-use crate::lease;
-use crate::resources::{self, RamRequirements};
-use crate::state;
+use crate::core::config::{BridgeReady, ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
+use crate::vm::lease;
+use crate::vm::resources::{self, RamRequirements};
+use crate::core::state;
 
 /// Wait for connectivity on a set of instances in parallel and print results.
 async fn wait_and_report(config: &ClusterConfig<BridgeReady>, vms: &[VmDef]) {

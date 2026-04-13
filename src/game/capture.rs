@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::backend::Backend;
-use crate::config::{ClusterConfig, VmDef, par_each_vm};
+use crate::core::backend::Backend;
+use crate::core::config::{ClusterConfig, VmDef, par_each_vm};
 
 /// Capture a screenshot from an instance using grim (Wayland screenshot tool).
 pub async fn screenshot_vm(

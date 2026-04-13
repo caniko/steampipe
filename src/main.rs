@@ -1,37 +1,23 @@
-mod accounts;
-mod backend;
-mod bisect;
-mod capture;
-mod cli;
-mod config;
-mod credentials;
-mod deploy;
-mod history;
-mod hooks;
-mod lease;
-mod logs;
+mod core;
+mod game;
 mod mcp;
 mod net;
-mod netem;
-mod output;
-mod preflight;
-mod resources;
-mod run;
-mod snapshot;
-mod ssh;
-mod state;
-mod status;
-mod steam;
-mod test;
+mod harness;
+mod ui;
 mod vm;
-mod watch;
 
 use std::path::PathBuf;
 
 use clap::Parser;
-use cli::{Cli, Commands, HistoryAction, NetworkMode, DisplayMode};
-use config::{BackendKind, ClusterConfig, detect_project_root};
-use output::OutputFormat;
+use ui::cli::{self, Cli, Commands, HistoryAction, NetworkMode, DisplayMode};
+use core::config::{self, BackendKind, ClusterConfig, detect_project_root};
+use core::credentials;
+use core::state;
+use game::{accounts, capture, run, steam};
+use net::{bridge, deploy, netem};
+use harness::{bisect, history, output::OutputFormat, runner as test};
+use ui::{logs, watch};
+use vm::{lifecycle, snapshot, status};
 
 /// Require a runners_dir for the microvm backend, or return a dummy path for others.
 fn require_runners_dir(
@@ -68,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
         return mcp::serve().await;
     }
     if let Commands::Completions { shell } = &cli.command {
-        cli::print_completions(*shell);
+        ui::cli::print_completions(*shell);
         return Ok(());
     }
 
@@ -168,9 +154,9 @@ async fn main() -> anyhow::Result<()> {
         // Commands that require a validated bridge (or skip for non-microvm)
         Commands::Up { runners_dir } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-            net::ensure_bridge(&config, &project_root)?;
+            bridge::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
-            let started = vm::up(&validated, &runners_dir).await?;
+            let started = lifecycle::up(&validated, &runners_dir).await?;
             println!("==> {} VM(s) running", started.len());
 
             // Auto-login Steam if credentials were provided
@@ -183,9 +169,9 @@ async fn main() -> anyhow::Result<()> {
             runners_dir,
         } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-            net::ensure_bridge(&config, &project_root)?;
+            bridge::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
-            vm::restart(&validated, target.as_deref(), &runners_dir).await?;
+            lifecycle::restart(&validated, target.as_deref(), &runners_dir).await?;
         }
         Commands::SteamCheck {
             target,
@@ -193,7 +179,7 @@ async fn main() -> anyhow::Result<()> {
             display,
         } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-            net::ensure_bridge(&config, &project_root)?;
+            bridge::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
             steam::check(&validated, target.as_deref(), &runners_dir, display).await?;
         }
@@ -203,7 +189,7 @@ async fn main() -> anyhow::Result<()> {
             login_runners_dir,
         } => {
             let login_runners_dir = require_runners_dir(login_runners_dir, config.backend_kind)?;
-            net::ensure_bridge(&config, &project_root)?;
+            bridge::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
             steam::login(
                 &validated,
@@ -217,9 +203,9 @@ async fn main() -> anyhow::Result<()> {
 
         // Commands that work on any config state
         Commands::Status => status::run(&config).await?,
-        Commands::Down => vm::down(&config),
-        Commands::NetUp { nft } => net::up(&config, &nft)?,
-        Commands::NetDown { nft } => net::down(&config, &nft)?,
+        Commands::Down => lifecycle::down(&config),
+        Commands::NetUp { nft } => bridge::up(&config, &nft)?,
+        Commands::NetDown { nft } => bridge::down(&config, &nft)?,
         Commands::Deploy { no_build, verify } => {
             deploy::run(&config, &project_root, no_build, verify, true).await?
         }

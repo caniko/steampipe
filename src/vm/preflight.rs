@@ -13,9 +13,9 @@
 
 use std::time::Duration;
 
-use crate::backend::Backend;
-use crate::config::{ClusterConfig, VmDef};
-use crate::state;
+use crate::core::backend::Backend;
+use crate::core::config::{ClusterConfig, VmDef};
+use crate::core::state;
 
 /// Clean up stale state: dead PIDs, orphaned processes, leftover sockets.
 ///
@@ -45,7 +45,7 @@ pub fn cleanup_stale_state<S>(config: &ClusterConfig<S>) -> Option<String> {
             .output()
         {
             if out.status.success() {
-                let has_claim = crate::lease::probe_holder(id, &config.lock_dir).is_some();
+                let has_claim = crate::vm::lease::probe_holder(id, &config.lock_dir).is_some();
                 if !has_claim {
                     let pids = String::from_utf8_lossy(&out.stdout).trim().to_string();
                     let _ = std::process::Command::new("pkill")
@@ -338,14 +338,14 @@ mod tests {
 
     #[test]
     fn requires_gpu_true_for_gpu_modes() {
-        use crate::cli::DisplayMode;
+        use crate::ui::cli::DisplayMode;
         assert!(DisplayMode::WestonGpu.requires_gpu());
         assert!(DisplayMode::SwayGpu.requires_gpu());
     }
 
     #[test]
     fn requires_gpu_false_for_non_gpu_modes() {
-        use crate::cli::DisplayMode;
+        use crate::ui::cli::DisplayMode;
         assert!(!DisplayMode::Headless.requires_gpu());
         assert!(!DisplayMode::Weston.requires_gpu());
         assert!(!DisplayMode::Sway.requires_gpu());

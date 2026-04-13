@@ -1,4 +1,4 @@
-use crate::config::ClusterConfig;
+use crate::core::config::ClusterConfig;
 
 pub(crate) fn validate_netem_params(
     latency_ms: Option<u32>,

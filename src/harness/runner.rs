@@ -11,10 +11,10 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 
-use crate::backend::Backend;
-use crate::cli::NetworkMode;
-use crate::config::{ChaosProfile, ClusterConfig, IpAddr, VmName};
-use crate::output::{OutputFormat, RunResult, RunStatus, TestSession};
+use crate::core::backend::Backend;
+use crate::ui::cli::NetworkMode;
+use crate::core::config::{ChaosProfile, ClusterConfig, IpAddr, VmName};
+use crate::harness::output::{OutputFormat, RunResult, RunStatus, TestSession};
 
 /// Configuration for a test run.
 ///
@@ -198,7 +198,7 @@ pub async fn run<S>(
     // Pre-flight: verify VMs have a GPU device if using a GPU display mode
     if test_config.display.requires_gpu() {
         print_and_push(&mut output, "=== GPU CHECK ===", verbose);
-        crate::preflight::ensure_vm_gpu(backend, target_vms, test_config.display).await?;
+        crate::vm::preflight::ensure_vm_gpu(backend, target_vms, test_config.display).await?;
         print_and_push(&mut output, "  All VMs have a DRM device", verbose);
         output.push('\n');
     }
@@ -266,7 +266,7 @@ pub async fn run<S>(
     }
 
     // Pre-flight: verify VM→host connectivity (catches missing nftables rules after reboot)
-    crate::preflight::ensure_vm_to_host_connectivity(config, backend, target_vms).await?;
+    crate::vm::preflight::ensure_vm_to_host_connectivity(config, backend, target_vms).await?;
 
     // Apply chaos profile if configured
     if let Some(ref chaos) = test_config.chaos {
@@ -636,7 +636,7 @@ pub async fn run<S>(
             }
         }
         OutputFormat::Junit => {
-            let xml = crate::output::emit_junit(&session);
+            let xml = crate::harness::output::emit_junit(&session);
             if let Some(path) = &test_config.output_file {
                 std::fs::write(path, &xml)?;
                 if verbose {
@@ -647,7 +647,7 @@ pub async fn run<S>(
             }
         }
         OutputFormat::Jsonl => {
-            let jsonl = crate::output::emit_jsonl(&session);
+            let jsonl = crate::harness::output::emit_jsonl(&session);
             if let Some(path) = &test_config.output_file {
                 std::fs::write(path, &jsonl)?;
                 if verbose {
@@ -692,7 +692,7 @@ pub async fn run<S>(
     }
 
     // Run notification hooks
-    let hook_vars = crate::hooks::HookVars {
+    let hook_vars = crate::ui::hooks::HookVars {
         pass_count: passed,
         fail_count: failed,
         total_count: total,
@@ -712,11 +712,11 @@ pub async fn run<S>(
     };
 
     if let Some(ref cmd) = test_config.on_complete {
-        crate::hooks::run_hook(cmd, &hook_vars).await;
+        crate::ui::hooks::run_hook(cmd, &hook_vars).await;
     }
     if failed > 0 {
         if let Some(ref cmd) = test_config.on_failure {
-            crate::hooks::run_hook(cmd, &hook_vars).await;
+            crate::ui::hooks::run_hook(cmd, &hook_vars).await;
         }
     }
 

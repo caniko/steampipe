@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::ClusterConfig;
-use crate::state;
+use crate::core::config::ClusterConfig;
+use crate::core::state;
 
 fn snapshots_dir(state_dir: &Path) -> PathBuf {
     state_dir.join("snapshots")

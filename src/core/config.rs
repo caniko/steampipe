@@ -13,7 +13,7 @@ use serde::Deserialize;
 
 use std::collections::HashMap;
 
-use crate::backend::Backend;
+use crate::core::backend::Backend;
 use clap::ValueEnum;
 
 /// Which backend to use for running test instances.
@@ -624,7 +624,7 @@ impl ClusterConfig<Unchecked> {
                     .and_then(|p| p.lock_dir.clone())
                     .map(PathBuf::from)
             })
-            .unwrap_or_else(crate::lease::default_lock_dir);
+            .unwrap_or_else(crate::vm::lease::default_lock_dir);
 
         let mb = 1024 * 1024;
         let ram_per_vm = proj.as_ref().and_then(|p| p.ram_per_vm_mb).unwrap_or(2048) * mb;
@@ -749,7 +749,7 @@ impl<S> ClusterConfig<S> {
     /// if no leases are held (backward compat for setups without leasing).
     pub fn leased_vms(&self) -> Vec<VmDef> {
         let max_vms = self.vms.iter().map(|v| v.index).max().unwrap_or(7);
-        let ids = crate::lease::list_cluster_vms(&self.cluster_name, max_vms, &self.lock_dir);
+        let ids = crate::vm::lease::list_cluster_vms(&self.cluster_name, max_vms, &self.lock_dir);
         if ids.is_empty() {
             return self.vms.clone();
         }

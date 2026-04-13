@@ -11,8 +11,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
-use crate::config::ClusterConfig;
-use crate::status::poll_vm_statuses;
+use crate::core::config::ClusterConfig;
+use crate::vm::status::poll_vm_statuses;
 
 /// Run the TUI dashboard.
 pub async fn run<S>(config: &ClusterConfig<S>, interval_secs: u64) -> anyhow::Result<()> {

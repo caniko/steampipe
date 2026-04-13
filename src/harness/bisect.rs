@@ -5,9 +5,9 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::cli::{DisplayMode, NetworkMode};
-use crate::config::ClusterConfig;
-use crate::output::OutputFormat;
+use crate::ui::cli::{DisplayMode, NetworkMode};
+use crate::core::config::ClusterConfig;
+use crate::harness::output::OutputFormat;
 
 /// Configuration for a bisect run.
 pub struct BisectConfig {

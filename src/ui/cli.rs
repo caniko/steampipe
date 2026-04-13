@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::Shell;
 
-use crate::config::BackendKind;
-use crate::output::OutputFormat;
+use crate::core::config::BackendKind;
+use crate::harness::output::OutputFormat;
 
 /// Network transport layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

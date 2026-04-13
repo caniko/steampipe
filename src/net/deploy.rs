@@ -4,8 +4,8 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::backend::Backend;
-use crate::config::{ClusterConfig, VmDef, VmName, par_each_vm};
+use crate::core::backend::Backend;
+use crate::core::config::{ClusterConfig, VmDef, VmName, par_each_vm};
 
 /// Result of deploying to a single VM.
 pub struct DeployVmResult {

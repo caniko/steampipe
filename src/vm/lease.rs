@@ -9,7 +9,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use crate::state;
+use crate::core::state;
 
 /// Information about who holds a VM claim.
 pub struct LeaseInfo {

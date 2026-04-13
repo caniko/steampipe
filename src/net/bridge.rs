@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use crate::backend::Backend;
-use crate::config::{self, ClusterConfig};
+use crate::core::backend::Backend;
+use crate::core::config::{self, ClusterConfig};
 
 /// Run the `net-up` subcommand: set up networking for the active backend.
 pub fn up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {

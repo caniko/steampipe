@@ -1,8 +1,8 @@
 use std::path::Path;
 
-use crate::backend::Backend;
-use crate::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
-use crate::credentials::{CredentialsMap, VmCredentials};
+use crate::core::backend::Backend;
+use crate::core::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
+use crate::core::credentials::{CredentialsMap, VmCredentials};
 
 /// Shell snippet that ensures weston (headless) is running and exports display vars.
 /// Append your own commands after this to run under the compositor.
@@ -131,7 +131,7 @@ pub async fn start<S>(
     let backend = config.backend.clone();
 
     if display.requires_gpu() {
-        crate::preflight::ensure_vm_gpu(&backend, &targets, display).await?;
+        crate::vm::preflight::ensure_vm_gpu(&backend, &targets, display).await?;
     }
 
     println!("==> Starting Steam on {} VM(s) ({display})...", targets.len());

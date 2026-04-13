@@ -2,9 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use crate::config::{BridgeReady, ClusterConfig, VmDef};
-use crate::ssh::SshClient;
-use crate::state;
+use crate::core::config::{BridgeReady, ClusterConfig, VmDef};
+use crate::core::ssh::SshClient;
+use crate::core::state;
 
 /// Backend-agnostic command output.
 ///

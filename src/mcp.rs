@@ -8,9 +8,9 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 
-use crate::cli::NetworkMode;
-use crate::config::{ClusterConfig, Unchecked, detect_project_root};
-use crate::state;
+use crate::ui::cli::NetworkMode;
+use crate::core::config::{ClusterConfig, Unchecked, detect_project_root};
+use crate::core::state;
 
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -82,7 +82,7 @@ fn build_config(params: &ClusterParams) -> Result<(ClusterConfig<Unchecked>, Opt
         .map_err(|e| ErrorData::internal_error(format!("State dir error: {e}"), None))?;
 
     // Self-heal: clean up stale PIDs, orphaned processes, leftover sockets
-    let cleanup_msg = crate::preflight::cleanup_stale_state(&config);
+    let cleanup_msg = crate::vm::preflight::cleanup_stale_state(&config);
 
     // Prefer leased VMs (those actually running) over the static 1..N list
     // (must happen after cleanup so stale claims are already gone)
@@ -330,7 +330,7 @@ impl SteampipeMcp {
                 .strip_prefix("vm-")
                 .and_then(|n| n.parse().ok())
                 .unwrap_or(0);
-            let held_by = match crate::lease::probe_holder(vm_index, &config.lock_dir) {
+            let held_by = match crate::vm::lease::probe_holder(vm_index, &config.lock_dir) {
                 Some(info) => info.cluster,
                 None => "(free)".to_string(),
             };
@@ -548,7 +548,7 @@ impl SteampipeMcp {
             verbose: false, // suppress println to avoid corrupting MCP transport
             chaos: None,
             heartbeat_stall_secs: config.heartbeat_stall_secs,
-            output_format: crate::output::OutputFormat::Text,
+            output_format: crate::harness::output::OutputFormat::Text,
             on_complete: None,
             on_failure: None,
             exit_codes: config.exit_codes.clone(),

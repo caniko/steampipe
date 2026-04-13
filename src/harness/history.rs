@@ -420,7 +420,7 @@ pub fn show_flakiness(state_dir: &Path, last_n: Option<usize>, exit_code_map: &H
 pub fn export(
     state_dir: &Path,
     last_n: Option<usize>,
-    format: crate::output::OutputFormat,
+    format: crate::harness::output::OutputFormat,
     output: Option<&Path>,
     exit_code_map: &HashMap<i32, String>,
 ) -> anyhow::Result<()> {
@@ -433,8 +433,8 @@ pub fn export(
     let results = slice_results(&history.results, last_n);
 
     let content = match format {
-        crate::output::OutputFormat::Junit => crate::output::emit_junit_from_history(results, exit_code_map),
-        crate::output::OutputFormat::Jsonl => {
+        crate::harness::output::OutputFormat::Junit => crate::harness::output::emit_junit_from_history(results, exit_code_map),
+        crate::harness::output::OutputFormat::Jsonl => {
             let mut out = String::new();
             for r in results {
                 if let Ok(json) = serde_json::to_string(r) {
@@ -444,7 +444,7 @@ pub fn export(
             }
             out
         }
-        crate::output::OutputFormat::Text => {
+        crate::harness::output::OutputFormat::Text => {
             show(state_dir, last_n, exit_code_map)?;
             return Ok(());
         }

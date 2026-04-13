@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::{ClusterConfig, VmName, par_each_vm};
+use crate::core::config::{ClusterConfig, VmName, par_each_vm};
 
 /// Run the `logs` subcommand: collect game.log from all instances to files.
 pub async fn run<S>(

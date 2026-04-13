@@ -1,5 +1,5 @@
-use crate::backend::Backend;
-use crate::config::{ClusterConfig, par_each_vm};
+use crate::core::backend::Backend;
+use crate::core::config::{ClusterConfig, par_each_vm};
 
 /// Per-VM account info collected from the instance.
 #[derive(Debug)]
