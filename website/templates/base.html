@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ config.title }}{% endblock %}</title>
+  <meta name="description" content="{{ config.description }}">
+  <link rel="stylesheet" href="{{ get_url(path='style.css') }}">
+</head>
+<body>
+  <nav class="top-nav">
+    <div class="nav-inner">
+      <a href="{{ config.base_url }}" class="nav-brand">steampipe</a>
+      <div class="nav-links">
+        <a href="{{ config.base_url }}/docs/">Documentation</a>
+        <a href="https://codeberg.org/caniko/steampipe">Source</a>
+      </div>
+    </div>
+  </nav>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p>steampipe is open-source software licensed under AGPL-3.0</p>
+      <p><a href="https://codeberg.org/caniko/steampipe">Codeberg</a></p>
+    </div>
+  </footer>
+</body>
+</html>

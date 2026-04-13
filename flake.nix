@@ -14,6 +14,10 @@
     };
     flake-utils.url = "github:numtide/flake-utils";
     microvm.url = "github:astro/microvm.nix";
+    adidoks = {
+      url = "github:ES-Alexander/adidoks";
+      flake = false;
+    };
   };
 
   outputs = {
@@ -22,6 +26,7 @@
     rust-overlay,
     flake-utils,
     microvm,
+    adidoks,
     ...
   }:
     (flake-utils.lib.eachDefaultSystem (system: let
@@ -32,6 +37,54 @@
 
       toolchain = pkgs.rust-bin.nightly.latest.minimal;
 
+      themeName =
+        (builtins.fromTOML (builtins.readFile "${adidoks}/theme.toml")).name;
+
+      docs = pkgs.stdenv.mkDerivation {
+        pname = "steampipe-docs";
+        version = "0.1.0";
+        src = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.maybeMissing ./docs/site;
+        };
+        nativeBuildInputs = [pkgs.zola];
+        configurePhase = ''
+          cd docs/site
+          mkdir -p "themes/${themeName}"
+          cp -r ${adidoks}/* "themes/${themeName}"
+        '';
+        buildPhase = ''
+          zola build
+        '';
+        installPhase = ''
+          cp -r public $out
+        '';
+      };
+
+      website = pkgs.stdenv.mkDerivation {
+        pname = "steampipe-website";
+        version = "0.1.0";
+        src = pkgs.lib.fileset.toSource {
+          root = ./.;
+          fileset = pkgs.lib.fileset.maybeMissing ./website;
+        };
+        nativeBuildInputs = [pkgs.zola];
+        buildPhase = ''
+          cd website
+          zola build
+        '';
+        installPhase = ''
+          cp -r public $out
+        '';
+      };
+
+      site = pkgs.runCommand "steampipe-site" {} ''
+        mkdir -p $out
+        cp -r ${website}/* $out/
+        mkdir -p $out/docs
+        cp -r ${docs}/* $out/docs/
+      '';
+
       cluster-ctl = pkgs.rustPlatform.buildRustPackage {
         pname = "cluster-ctl";
         version = "0.1.0";
@@ -40,7 +93,10 @@
         nativeBuildInputs = [toolchain];
       };
     in {
-      packages.default = cluster-ctl;
+      packages = {
+        default = cluster-ctl;
+        inherit docs website site;
+      };
 
       devShells.default = pkgs.mkShell {
         buildInputs = [
@@ -49,8 +105,16 @@
         ];
         packages = [
           pkgs.just
+          pkgs.zola
           cluster-ctl
         ];
+        shellHook = ''
+          # Set up adidoks theme symlink for local docs development
+          if [ -d docs/site ]; then
+            mkdir -p docs/site/themes
+            ln -sfn "${adidoks}" "docs/site/themes/${themeName}"
+          fi
+        '';
       };
     }))
     // {

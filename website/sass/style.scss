@@ -1,0 +1,242 @@
+// Colors
+$bg: #0d1117;
+$bg-card: #161b22;
+$text: #e6edf3;
+$text-muted: #8b949e;
+$accent: #58a6ff;
+$accent-hover: #79c0ff;
+$border: #30363d;
+
+// Reset
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: $bg;
+  color: $text;
+  line-height: 1.6;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+a {
+  color: $accent;
+  text-decoration: none;
+
+  &:hover {
+    color: $accent-hover;
+  }
+}
+
+// Navigation
+.top-nav {
+  position: sticky;
+  top: 0;
+  background: rgba($bg, 0.95);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid $border;
+  z-index: 100;
+}
+
+.nav-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0.75rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.nav-brand {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: $text;
+  letter-spacing: -0.02em;
+}
+
+.nav-links {
+  display: flex;
+  gap: 1.5rem;
+
+  a {
+    color: $text-muted;
+    font-size: 0.9rem;
+
+    &:hover {
+      color: $text;
+    }
+  }
+}
+
+// Hero
+.hero {
+  text-align: center;
+  padding: 6rem 1.5rem 4rem;
+  max-width: 800px;
+  margin: 0 auto;
+
+  h1 {
+    font-size: 3.5rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    margin-bottom: 1rem;
+  }
+
+  .tagline {
+    font-size: 1.5rem;
+    color: $accent;
+    margin-bottom: 0.75rem;
+  }
+
+  .subtitle {
+    font-size: 1.1rem;
+    color: $text-muted;
+    max-width: 600px;
+    margin: 0 auto 2rem;
+  }
+}
+
+.hero-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.btn {
+  display: inline-block;
+  padding: 0.75rem 1.5rem;
+  border-radius: 6px;
+  font-size: 1rem;
+  font-weight: 600;
+  transition: all 0.15s ease;
+}
+
+.btn-primary {
+  background: $accent;
+  color: $bg;
+
+  &:hover {
+    background: $accent-hover;
+    color: $bg;
+  }
+}
+
+.btn-secondary {
+  background: transparent;
+  color: $text;
+  border: 1px solid $border;
+
+  &:hover {
+    border-color: $text-muted;
+    color: $text;
+  }
+}
+
+// Features
+.features {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 2rem 1.5rem 4rem;
+}
+
+.features-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 1.5rem;
+}
+
+.feature-card {
+  background: $bg-card;
+  border: 1px solid $border;
+  border-radius: 8px;
+  padding: 1.5rem;
+
+  h3 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+  }
+
+  p {
+    color: $text-muted;
+    font-size: 0.95rem;
+    line-height: 1.5;
+  }
+}
+
+// Quick install
+.quick-install {
+  text-align: center;
+  padding: 2rem 1.5rem 6rem;
+  max-width: 600px;
+  margin: 0 auto;
+
+  h2 {
+    font-size: 1.5rem;
+    font-weight: 700;
+    margin-bottom: 1rem;
+  }
+
+  pre {
+    background: $bg-card;
+    border: 1px solid $border;
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    overflow-x: auto;
+
+    code {
+      color: $accent;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 0.95rem;
+    }
+  }
+}
+
+// Footer
+.site-footer {
+  margin-top: auto;
+  border-top: 1px solid $border;
+  padding: 2rem 1.5rem;
+}
+
+.footer-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: $text-muted;
+  font-size: 0.85rem;
+}
+
+// Responsive
+@media (max-width: 640px) {
+  .hero h1 {
+    font-size: 2.5rem;
+  }
+
+  .hero .tagline {
+    font-size: 1.2rem;
+  }
+
+  .features-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .footer-inner {
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: center;
+  }
+}

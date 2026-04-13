@@ -1,0 +1,17 @@
+# steampipe presentation website — Zola (custom templates)
+# Local dev: cd website && zola serve
+# Build: nix build .#website
+
+base_url = "https://caniko.codeberg.page/steampipe"
+title = "steampipe"
+description = "NixOS microVM cluster orchestrator for automated multiplayer game testing"
+default_language = "en"
+
+compile_sass = true
+build_search_index = false
+minify_html = false
+generate_feeds = false
+
+[markdown]
+[markdown.highlighting]
+theme = "nord"

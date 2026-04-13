@@ -1,0 +1,71 @@
+# steampipe Documentation — Zola + AdiDoks
+# Local dev: cd docs/site && zola serve
+# Build: nix build .#docs
+
+base_url = "https://caniko.codeberg.page/steampipe/docs"
+title = "steampipe"
+description = "Documentation for steampipe — NixOS microVM cluster orchestrator for automated multiplayer game testing"
+default_language = "en"
+theme = "adidoks"
+
+compile_sass = true
+build_search_index = true
+minify_html = false
+generate_feeds = false
+
+[markdown]
+[markdown.highlighting]
+theme = "nord"
+
+[search]
+include_title = true
+include_description = true
+include_content = true
+include_path = false
+truncate_content_length = 100
+
+[extra]
+title_separator = "|"
+title_addition = "NixOS microVM cluster orchestrator"
+author = "Can Tartanoglu"
+default_theme = "dark"
+
+[extra.docs]
+section = "docs"
+
+[[extra.menu.main]]
+name = "Docs"
+section = "docs"
+url = "/docs/getting-started/installation/"
+weight = 10
+
+[[extra.menu.main]]
+name = "Configuration"
+section = "docs/configuration"
+url = "/docs/configuration/"
+weight = 20
+
+[[extra.menu.main]]
+name = "Testing"
+section = "docs/testing"
+url = "/docs/testing/"
+weight = 30
+
+[[extra.menu.main]]
+name = "Networking"
+section = "docs/networking"
+url = "/docs/networking/"
+weight = 40
+
+[[extra.menu.social]]
+name = "Codeberg"
+pre = '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 19.5h20L12 2z"/></svg>'
+url = "https://codeberg.org/caniko/steampipe"
+weight = 10
+
+[extra.schema]
+type = "Organization"
+logo = "steampipe-logo.svg"
+
+[extra.footer]
+info = 'Powered by <a href="https://www.getzola.org/">Zola</a> and <a href="https://github.com/ES-Alexander/adidoks">AdiDoks</a>'
