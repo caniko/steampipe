@@ -545,6 +545,64 @@ fn shell_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
 }
 
+/// Default directory where the NixOS module persists Steam login state.
+const DEFAULT_LOGIN_STATE_DIR: &str = "/var/lib/steampipe/logins";
+
+/// Remove persisted Steam login state from the host login state directory.
+///
+/// `target` selects which VMs to clean: `None` or `Some("all")` cleans every
+/// VM subdirectory; a VM name like `"vm-3"` or bare number `"3"` cleans only
+/// that one.
+pub fn clean_logins(
+    vms: &[VmDef],
+    login_state_dir: Option<&Path>,
+    target: Option<&str>,
+) -> anyhow::Result<()> {
+    let dir = login_state_dir
+        .unwrap_or_else(|| Path::new(DEFAULT_LOGIN_STATE_DIR));
+
+    if !dir.exists() {
+        println!("Login state directory does not exist: {}", dir.display());
+        return Ok(());
+    }
+
+    let targets: Vec<&VmDef> = match target {
+        None | Some("all") => vms.iter().collect(),
+        Some(t) => {
+            let name = if t.starts_with("vm-") {
+                t.to_string()
+            } else {
+                format!("vm-{t}")
+            };
+            match vms.iter().find(|v| *v.name == *name) {
+                Some(vm) => vec![vm],
+                None => anyhow::bail!("unknown VM: {name}"),
+            }
+        }
+    };
+
+    let mut cleaned = 0u32;
+    for vm in &targets {
+        let vm_dir = dir.join(&vm.name);
+        if !vm_dir.exists() {
+            println!("  {}: no login state, skipping", vm.name);
+            continue;
+        }
+        std::fs::remove_dir_all(&vm_dir)?;
+        std::fs::create_dir_all(&vm_dir)?;
+        println!("  {}: cleaned", vm.name);
+        cleaned += 1;
+    }
+
+    if cleaned == 0 {
+        println!("Nothing to clean.");
+    } else {
+        println!("==> Cleaned login state for {cleaned} VM(s)");
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

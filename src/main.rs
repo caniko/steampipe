@@ -473,6 +473,16 @@ async fn main() -> anyhow::Result<()> {
             capture::screenshot_all(&config, &output_dir).await?;
         }
         Commands::Accounts => accounts::show(&config).await?,
+        Commands::CleanLogins {
+            target,
+            login_state_dir,
+        } => {
+            steam::clean_logins(
+                &config.vms,
+                login_state_dir.as_deref(),
+                target.as_deref(),
+            )?;
+        }
         Commands::Watch { interval } => watch::run(&config, interval).await?,
         Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } | Commands::Mcp => {
             unreachable!()

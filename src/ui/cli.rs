@@ -418,6 +418,15 @@ pub enum Commands {
     /// Show Steam account status across all VMs
     Accounts,
 
+    /// Remove persisted Steam login state (from loginStateDir)
+    CleanLogins {
+        /// Target VM: "all", "3", "vm-3" (default: all)
+        target: Option<String>,
+        /// Login state directory (default: /var/lib/steampipe/logins)
+        #[arg(long)]
+        login_state_dir: Option<PathBuf>,
+    },
+
     /// Live TUI dashboard showing VM status
     Watch {
         /// Refresh interval in seconds
