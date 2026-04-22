@@ -134,7 +134,10 @@ pub async fn start<S>(
         crate::vm::preflight::ensure_vm_gpu(&backend, &targets, display).await?;
     }
 
-    println!("==> Starting Steam on {} VM(s) ({display})...", targets.len());
+    println!(
+        "==> Starting Steam on {} VM(s) ({display})...",
+        targets.len()
+    );
     let script = format!(
         "{}{}",
         compositor_setup(display, &config.vm_user),
@@ -406,7 +409,10 @@ pub async fn auto_login<S>(
     }
 
     if fail > 0 {
-        eprintln!("==> {ok}/{} Steam logins succeeded ({fail} failed)", ok + fail);
+        eprintln!(
+            "==> {ok}/{} Steam logins succeeded ({fail} failed)",
+            ok + fail
+        );
     } else {
         println!("==> All {ok} Steam logins succeeded");
     }
@@ -558,8 +564,7 @@ pub fn clean_logins(
     login_state_dir: Option<&Path>,
     target: Option<&str>,
 ) -> anyhow::Result<()> {
-    let dir = login_state_dir
-        .unwrap_or_else(|| Path::new(DEFAULT_LOGIN_STATE_DIR));
+    let dir = login_state_dir.unwrap_or_else(|| Path::new(DEFAULT_LOGIN_STATE_DIR));
 
     if !dir.exists() {
         println!("Login state directory does not exist: {}", dir.display());
@@ -627,7 +632,10 @@ mod tests {
     #[test]
     fn weston_setup_uses_headless_backend() {
         let script = weston_setup("testuser");
-        assert!(script.contains("--backend=headless"), "weston_setup must use headless backend");
+        assert!(
+            script.contains("--backend=headless"),
+            "weston_setup must use headless backend"
+        );
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
@@ -636,7 +644,10 @@ mod tests {
     #[test]
     fn weston_gpu_setup_no_headless_backend() {
         let script = weston_gpu_setup("testuser");
-        assert!(!script.contains("--backend=headless"), "weston_gpu_setup must NOT use headless backend");
+        assert!(
+            !script.contains("--backend=headless"),
+            "weston_gpu_setup must NOT use headless backend"
+        );
         assert!(script.contains("weston"), "must still launch weston");
         assert!(script.contains("--xwayland"));
         assert!(script.contains("--no-config"));
@@ -657,7 +668,10 @@ mod tests {
     #[test]
     fn sway_gpu_setup_sets_drm_backend() {
         let script = sway_gpu_setup("testuser");
-        assert!(script.contains("WLR_BACKENDS=drm"), "sway_gpu_setup must set WLR_BACKENDS=drm");
+        assert!(
+            script.contains("WLR_BACKENDS=drm"),
+            "sway_gpu_setup must set WLR_BACKENDS=drm"
+        );
         assert!(script.contains("sway"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("DISPLAY=:0"));

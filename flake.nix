@@ -14,10 +14,6 @@
     };
     flake-utils.url = "github:numtide/flake-utils";
     microvm.url = "github:astro/microvm.nix";
-    adidoks = {
-      url = "github:ES-Alexander/adidoks";
-      flake = false;
-    };
   };
 
   outputs = {
@@ -26,7 +22,6 @@
     rust-overlay,
     flake-utils,
     microvm,
-    adidoks,
     ...
   }:
     (flake-utils.lib.eachDefaultSystem (system: let
@@ -34,43 +29,54 @@
         inherit system;
         overlays = [(import rust-overlay)];
       };
+      inherit (pkgs) lib;
 
       toolchain = pkgs.rust-bin.nightly.latest.minimal;
-
-      themeName =
-        (builtins.fromTOML (builtins.readFile "${adidoks}/theme.toml")).name;
 
       docs = pkgs.stdenv.mkDerivation {
         pname = "steampipe-docs";
         version = "0.1.0";
-        src = pkgs.lib.fileset.toSource {
+        src = lib.fileset.toSource {
           root = ./.;
-          fileset = pkgs.lib.fileset.maybeMissing ./docs/site;
+          fileset = lib.fileset.unions [
+            ./docs/book.toml
+            ./docs/src/SUMMARY.md
+            ./docs/src/introduction.md
+            ./docs/src/getting-started/installation.md
+            ./docs/src/getting-started/quick-start.md
+            ./docs/src/configuration/steampipe-toml.md
+            ./docs/src/configuration/steam-credentials.md
+            ./docs/src/configuration/vm-lifecycle.md
+            ./docs/src/testing/e2e-tests.md
+            ./docs/src/testing/history.md
+            ./docs/src/networking/cluster-network.md
+            ./docs/src/networking/network-simulation.md
+          ];
         };
-        nativeBuildInputs = [pkgs.zola];
-        configurePhase = ''
-          cd docs/site
-          mkdir -p "themes/${themeName}"
-          cp -r ${adidoks}/* "themes/${themeName}"
-        '';
+        nativeBuildInputs = [pkgs.mdbook];
+        phases = ["buildPhase" "installPhase"];
         buildPhase = ''
-          zola build
+          cp -r --no-preserve=mode $src docs
+          cd docs/docs
+          mdbook build
         '';
         installPhase = ''
-          cp -r public $out
+          cp -r book $out
         '';
       };
 
       website = pkgs.stdenv.mkDerivation {
         pname = "steampipe-website";
         version = "0.1.0";
-        src = pkgs.lib.fileset.toSource {
+        src = lib.fileset.toSource {
           root = ./.;
-          fileset = pkgs.lib.fileset.maybeMissing ./website;
+          fileset = lib.fileset.maybeMissing ./website;
         };
         nativeBuildInputs = [pkgs.zola];
+        phases = ["buildPhase" "installPhase"];
         buildPhase = ''
-          cd website
+          cp -r --no-preserve=mode $src/website site
+          cd site
           zola build
         '';
         installPhase = ''
@@ -105,15 +111,13 @@
         ];
         packages = [
           pkgs.just
+          pkgs.mdbook
           pkgs.zola
           cluster-ctl
         ];
         shellHook = ''
-          # Set up adidoks theme symlink for local docs development
-          if [ -d docs/site ]; then
-            mkdir -p docs/site/themes
-            ln -sfn "${adidoks}" "docs/site/themes/${themeName}"
-          fi
+          echo "Website: cd website && zola serve"
+          echo "Documentation: cd docs && mdbook serve"
         '';
       };
     }))

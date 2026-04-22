@@ -244,9 +244,13 @@ pub enum Commands {
         #[arg(long)]
         max_runs: Option<u32>,
 
-        /// Timeout per run in seconds
+        /// No-progress timeout per run in seconds
         #[arg(long)]
         timeout: Option<u64>,
+
+        /// Emergency wall-clock timeout per run in seconds
+        #[arg(long)]
+        hard_timeout: Option<u64>,
 
         /// Grace period (seconds) between SIGTERM and SIGKILL
         #[arg(long)]
@@ -781,6 +785,8 @@ mod tests {
             "10",
             "--timeout",
             "120",
+            "--hard-timeout",
+            "600",
             "--shutdown-timeout",
             "3",
             "--no-build",
@@ -796,6 +802,7 @@ mod tests {
                 players,
                 max_runs,
                 timeout,
+                hard_timeout,
                 shutdown_timeout,
                 no_build,
                 no_deploy,
@@ -810,6 +817,7 @@ mod tests {
                 assert_eq!(players, Some(4));
                 assert_eq!(max_runs, Some(10));
                 assert_eq!(timeout, Some(120));
+                assert_eq!(hard_timeout, Some(600));
                 assert_eq!(shutdown_timeout, Some(3));
                 assert!(no_build);
                 assert!(!no_deploy);
@@ -892,9 +900,7 @@ mod tests {
 
     #[test]
     fn display_mode_parse_weston_gpu() {
-        let cli = parse(&[
-            "--vm-count", "3", "test", "--display", "weston-gpu",
-        ]);
+        let cli = parse(&["--vm-count", "3", "test", "--display", "weston-gpu"]);
         match cli.command {
             Commands::Test { display, .. } => {
                 assert!(matches!(display, Some(DisplayMode::WestonGpu)));
@@ -905,9 +911,7 @@ mod tests {
 
     #[test]
     fn display_mode_parse_sway_gpu() {
-        let cli = parse(&[
-            "--vm-count", "3", "test", "--display", "sway-gpu",
-        ]);
+        let cli = parse(&["--vm-count", "3", "test", "--display", "sway-gpu"]);
         match cli.command {
             Commands::Test { display, .. } => {
                 assert!(matches!(display, Some(DisplayMode::SwayGpu)));
@@ -919,18 +923,22 @@ mod tests {
     #[test]
     fn display_mode_parse_rejects_invalid() {
         let mut args = vec!["cluster-ctl"];
-        args.extend_from_slice(&[
-            "--vm-count", "3", "test", "--display", "opengl",
-        ]);
+        args.extend_from_slice(&["--vm-count", "3", "test", "--display", "opengl"]);
         assert!(Cli::try_parse_from(args).is_err());
     }
 
     #[test]
     fn bisect_display_weston_gpu() {
         let cli = parse(&[
-            "--vm-count", "3", "bisect",
-            "--good", "aaa", "--bad", "bbb",
-            "--display", "weston-gpu",
+            "--vm-count",
+            "3",
+            "bisect",
+            "--good",
+            "aaa",
+            "--bad",
+            "bbb",
+            "--display",
+            "weston-gpu",
         ]);
         match cli.command {
             Commands::Bisect { display, .. } => {
@@ -943,9 +951,15 @@ mod tests {
     #[test]
     fn bisect_display_sway_gpu() {
         let cli = parse(&[
-            "--vm-count", "3", "bisect",
-            "--good", "aaa", "--bad", "bbb",
-            "--display", "sway-gpu",
+            "--vm-count",
+            "3",
+            "bisect",
+            "--good",
+            "aaa",
+            "--bad",
+            "bbb",
+            "--display",
+            "sway-gpu",
         ]);
         match cli.command {
             Commands::Bisect { display, .. } => {
@@ -967,6 +981,7 @@ mod tests {
                 players,
                 max_runs,
                 timeout,
+                hard_timeout,
                 shutdown_timeout,
                 display,
                 chaos_profile,
@@ -981,6 +996,7 @@ mod tests {
                 assert!(players.is_none());
                 assert!(max_runs.is_none());
                 assert!(timeout.is_none());
+                assert!(hard_timeout.is_none());
                 assert!(shutdown_timeout.is_none());
                 assert!(display.is_none());
                 assert!(chaos_profile.is_none());
@@ -1007,8 +1023,11 @@ mod tests {
     #[test]
     fn test_chaos_profile_flag() {
         let cli = parse(&[
-            "--vm-count", "7", "test",
-            "--chaos-profile", "unstable-wifi",
+            "--vm-count",
+            "7",
+            "test",
+            "--chaos-profile",
+            "unstable-wifi",
         ]);
         match cli.command {
             Commands::Test { chaos_profile, .. } => {
@@ -1022,8 +1041,22 @@ mod tests {
     fn test_heartbeat_stall_secs_flag() {
         let cli = parse(&["--vm-count", "7", "test", "--heartbeat-stall-secs", "60"]);
         match cli.command {
-            Commands::Test { heartbeat_stall_secs, .. } => {
+            Commands::Test {
+                heartbeat_stall_secs,
+                ..
+            } => {
                 assert_eq!(heartbeat_stall_secs, Some(60));
+            }
+            _ => panic!("expected Test"),
+        }
+    }
+
+    #[test]
+    fn test_hard_timeout_flag() {
+        let cli = parse(&["--vm-count", "7", "test", "--hard-timeout", "900"]);
+        match cli.command {
+            Commands::Test { hard_timeout, .. } => {
+                assert_eq!(hard_timeout, Some(900));
             }
             _ => panic!("expected Test"),
         }
@@ -1054,12 +1087,20 @@ mod tests {
     #[test]
     fn test_hook_flags() {
         let cli = parse(&[
-            "--vm-count", "7", "test",
-            "--on-complete", "echo done",
-            "--on-failure", "echo fail",
+            "--vm-count",
+            "7",
+            "test",
+            "--on-complete",
+            "echo done",
+            "--on-failure",
+            "echo fail",
         ]);
         match cli.command {
-            Commands::Test { on_complete, on_failure, .. } => {
+            Commands::Test {
+                on_complete,
+                on_failure,
+                ..
+            } => {
                 assert_eq!(on_complete.as_deref(), Some("echo done"));
                 assert_eq!(on_failure.as_deref(), Some("echo fail"));
             }
@@ -1072,9 +1113,13 @@ mod tests {
     #[test]
     fn bisect_defaults() {
         let cli = parse(&[
-            "--vm-count", "3", "bisect",
-            "--good", "abc123",
-            "--bad", "def456",
+            "--vm-count",
+            "3",
+            "bisect",
+            "--good",
+            "abc123",
+            "--bad",
+            "def456",
         ]);
         match cli.command {
             Commands::Bisect {
@@ -1107,14 +1152,23 @@ mod tests {
     #[test]
     fn bisect_with_options() {
         let cli = parse(&[
-            "--vm-count", "3", "bisect",
-            "--good", "aaa",
-            "--bad", "bbb",
-            "--network", "steam",
-            "--players", "4",
-            "--runs-per-step", "3",
-            "--pass-threshold", "0.67",
-            "--display", "weston",
+            "--vm-count",
+            "3",
+            "bisect",
+            "--good",
+            "aaa",
+            "--bad",
+            "bbb",
+            "--network",
+            "steam",
+            "--players",
+            "4",
+            "--runs-per-step",
+            "3",
+            "--pass-threshold",
+            "0.67",
+            "--display",
+            "weston",
         ]);
         match cli.command {
             Commands::Bisect {
@@ -1141,7 +1195,13 @@ mod tests {
     fn history_bare_defaults() {
         let cli = parse(&["--vm-count", "7", "history"]);
         match cli.command {
-            Commands::History { action, last, clear, format, output } => {
+            Commands::History {
+                action,
+                last,
+                clear,
+                format,
+                output,
+            } => {
                 assert!(action.is_none());
                 assert!(last.is_none());
                 assert!(!clear);
@@ -1216,7 +1276,12 @@ mod tests {
     fn netem_with_profile() {
         let cli = parse(&["--vm-count", "7", "netem", "all", "--profile", "wifi"]);
         match cli.command {
-            Commands::Netem { target, chaos_profile, latency, .. } => {
+            Commands::Netem {
+                target,
+                chaos_profile,
+                latency,
+                ..
+            } => {
                 assert_eq!(target, "all");
                 assert_eq!(chaos_profile.as_deref(), Some("wifi"));
                 assert!(latency.is_none());
@@ -1228,17 +1293,31 @@ mod tests {
     #[test]
     fn test_all_new_flags_combined() {
         let cli = parse(&[
-            "--vm-count", "3", "test",
-            "--profile", "stress",
-            "--network", "steam",
-            "--players", "4",
-            "--chaos-profile", "wifi",
-            "--heartbeat-stall-secs", "45",
-            "--output-format", "jsonl",
-            "--on-complete", "echo {pass_rate}%",
-            "--on-failure", "alert",
-            "--max-runs", "10",
-            "--timeout", "600",
+            "--vm-count",
+            "3",
+            "test",
+            "--profile",
+            "stress",
+            "--network",
+            "steam",
+            "--players",
+            "4",
+            "--chaos-profile",
+            "wifi",
+            "--heartbeat-stall-secs",
+            "45",
+            "--output-format",
+            "jsonl",
+            "--on-complete",
+            "echo {pass_rate}%",
+            "--on-failure",
+            "alert",
+            "--max-runs",
+            "10",
+            "--timeout",
+            "600",
+            "--hard-timeout",
+            "1800",
         ]);
         match cli.command {
             Commands::Test {
@@ -1252,6 +1331,7 @@ mod tests {
                 on_failure,
                 max_runs,
                 timeout,
+                hard_timeout,
                 ..
             } => {
                 assert_eq!(profile.as_deref(), Some("stress"));
@@ -1264,6 +1344,7 @@ mod tests {
                 assert_eq!(on_failure.as_deref(), Some("alert"));
                 assert_eq!(max_runs, Some(10));
                 assert_eq!(timeout, Some(600));
+                assert_eq!(hard_timeout, Some(1800));
             }
             _ => panic!("expected Test"),
         }
@@ -1272,8 +1353,12 @@ mod tests {
     #[test]
     fn test_invalid_output_format_rejected() {
         let args = vec![
-            "cluster-ctl", "--vm-count", "7", "test",
-            "--output-format", "csv",
+            "cluster-ctl",
+            "--vm-count",
+            "7",
+            "test",
+            "--output-format",
+            "csv",
         ];
         let result = Cli::try_parse_from(args);
         assert!(result.is_err());
@@ -1282,8 +1367,12 @@ mod tests {
     #[test]
     fn bisect_missing_good_fails() {
         let args = vec![
-            "cluster-ctl", "--vm-count", "3", "bisect",
-            "--bad", "def456",
+            "cluster-ctl",
+            "--vm-count",
+            "3",
+            "bisect",
+            "--bad",
+            "def456",
         ];
         let result = Cli::try_parse_from(args);
         assert!(result.is_err());
@@ -1292,8 +1381,12 @@ mod tests {
     #[test]
     fn bisect_missing_bad_fails() {
         let args = vec![
-            "cluster-ctl", "--vm-count", "3", "bisect",
-            "--good", "abc123",
+            "cluster-ctl",
+            "--vm-count",
+            "3",
+            "bisect",
+            "--good",
+            "abc123",
         ];
         let result = Cli::try_parse_from(args);
         assert!(result.is_err());
@@ -1302,9 +1395,13 @@ mod tests {
     #[test]
     fn history_export_with_output_file() {
         let cli = parse(&[
-            "--vm-count", "7", "history",
-            "--format", "jsonl",
-            "--output", "/tmp/export.jsonl",
+            "--vm-count",
+            "7",
+            "history",
+            "--format",
+            "jsonl",
+            "--output",
+            "/tmp/export.jsonl",
         ]);
         match cli.command {
             Commands::History { format, output, .. } => {
@@ -1346,8 +1443,15 @@ mod tests {
     #[test]
     fn netem_profile_conflicts_with_params() {
         let args = vec![
-            "cluster-ctl", "--vm-count", "7", "netem", "all",
-            "--profile", "wifi", "--latency", "50",
+            "cluster-ctl",
+            "--vm-count",
+            "7",
+            "netem",
+            "all",
+            "--profile",
+            "wifi",
+            "--latency",
+            "50",
         ];
         let result = Cli::try_parse_from(args);
         assert!(result.is_err(), "profile should conflict with latency");

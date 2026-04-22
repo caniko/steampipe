@@ -1,21 +1,5 @@
 {
   "nodes": {
-    "adidoks": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1692441472,
-        "narHash": "sha256-kvVEPN5nkixr0a82PJmeKHdXAldQ54ALX06juyh2McQ=",
-        "owner": "ES-Alexander",
-        "repo": "adidoks",
-        "rev": "602b99430704215a7928991f5c9c8a540bf74336",
-        "type": "github"
-      },
-      "original": {
-        "owner": "ES-Alexander",
-        "repo": "adidoks",
-        "type": "github"
-      }
-    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -87,7 +71,6 @@
     },
     "root": {
       "inputs": {
-        "adidoks": "adidoks",
         "flake-utils": "flake-utils",
         "microvm": "microvm",
         "nixpkgs": "nixpkgs_2",

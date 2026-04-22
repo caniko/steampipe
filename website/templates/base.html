@@ -10,10 +10,10 @@
 <body>
   <nav class="top-nav">
     <div class="nav-inner">
-      <a href="{{ config.base_url }}" class="nav-brand">steampipe</a>
+      <a href="{{ config.base_url }}" class="nav-brand">{{ config.title }}</a>
       <div class="nav-links">
         <a href="{{ config.base_url }}/docs/">Documentation</a>
-        <a href="https://codeberg.org/caniko/steampipe">Source</a>
+        <a href="{{ config.extra.repo_url }}">Source</a>
       </div>
     </div>
   </nav>
@@ -24,8 +24,8 @@
 
   <footer class="site-footer">
     <div class="footer-inner">
-      <p>steampipe is open-source software licensed under AGPL-3.0</p>
-      <p><a href="https://codeberg.org/caniko/steampipe">Codeberg</a></p>
+      <p>{{ config.title }} is open-source software licensed under {{ config.extra.license }}</p>
+      <p><a href="{{ config.extra.repo_url }}">Codeberg</a></p>
     </div>
   </footer>
 </body>

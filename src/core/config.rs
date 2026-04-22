@@ -193,6 +193,7 @@ pub struct TestProfile {
     pub players: Option<u8>,
     pub max_runs: Option<u32>,
     pub timeout: Option<u64>,
+    pub hard_timeout: Option<u64>,
     pub shutdown_timeout: Option<u64>,
     pub network: Option<String>,
     pub display: Option<String>,
@@ -323,13 +324,15 @@ remote_dir = "/home/player/game"
 # [profile.smoke]
 # players = 2
 # max_runs = 5
-# timeout = 120
+# timeout = 120        # no semantic progress for 120s
+# hard_timeout = 600   # optional emergency wall-clock cap
 # network = "lan"
 
 # [profile.stress]
 # players = 8
 # max_runs = 100
 # timeout = 600
+# hard_timeout = 1800
 
 # Named chaos profiles (use with --chaos-profile <name> on test, or --profile <name> on netem)
 # [chaos.unstable-wifi]
@@ -427,13 +430,11 @@ pub fn generate_yh_cluster_config(
         lock_dir: cli_lock_dir
             .map(|p| p.display().to_string())
             .or_else(|| proj.as_ref().and_then(|p| p.lock_dir.clone())),
-        ssh_key: cli_ssh_key
-            .map(|p| p.display().to_string())
-            .or_else(|| {
-                proj.as_ref()
-                    .and_then(|p| p.ssh_key.as_deref())
-                    .map(|k| resolve_path(project_root, k))
-            }),
+        ssh_key: cli_ssh_key.map(|p| p.display().to_string()).or_else(|| {
+            proj.as_ref()
+                .and_then(|p| p.ssh_key.as_deref())
+                .map(|k| resolve_path(project_root, k))
+        }),
         credentials: cli_credentials.map(|p| {
             if p.is_absolute() {
                 p.display().to_string()
@@ -522,7 +523,14 @@ impl ClusterConfig<Unchecked> {
         backend_override: Option<BackendKind>,
     ) -> anyhow::Result<Self> {
         let proj = load_project_config(project_root);
-        Self::from_parts(project_root, proj, vm_count, cluster_name, backend_override, None)
+        Self::from_parts(
+            project_root,
+            proj,
+            vm_count,
+            cluster_name,
+            backend_override,
+            None,
+        )
     }
 
     /// Build config from an already-loaded `ProjectConfig` (no filesystem access).
@@ -991,6 +999,7 @@ mod tests {
             players = 2
             max_runs = 5
             timeout = 120
+            hard_timeout = 600
             network = "lan"
             display = "headless"
             chaos_profile = "wifi"
@@ -1002,6 +1011,7 @@ mod tests {
         assert_eq!(smoke.players, Some(2));
         assert_eq!(smoke.max_runs, Some(5));
         assert_eq!(smoke.timeout, Some(120));
+        assert_eq!(smoke.hard_timeout, Some(600));
         assert_eq!(smoke.network.as_deref(), Some("lan"));
         assert_eq!(smoke.display.as_deref(), Some("headless"));
         assert_eq!(smoke.chaos_profile.as_deref(), Some("wifi"));
@@ -1174,6 +1184,7 @@ mod tests {
             players = 8
             max_runs = 100
             timeout = 600
+            hard_timeout = 1800
         "#;
         let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
         let profiles = proj.profile.unwrap();
@@ -1181,6 +1192,7 @@ mod tests {
         assert_eq!(profiles.get("smoke").unwrap().max_runs, Some(5));
         assert_eq!(profiles.get("stress").unwrap().players, Some(8));
         assert_eq!(profiles.get("stress").unwrap().timeout, Some(600));
+        assert_eq!(profiles.get("stress").unwrap().hard_timeout, Some(1800));
     }
 
     #[test]
@@ -1196,13 +1208,34 @@ mod tests {
     #[test]
     fn config_template_includes_new_sections() {
         let template = generate_config_template();
-        assert!(template.contains("[exit_codes]"), "template missing exit_codes section");
-        assert!(template.contains("[profile.smoke]"), "template missing profile section");
-        assert!(template.contains("[chaos.unstable-wifi]"), "template missing chaos section");
-        assert!(template.contains("[hooks]"), "template missing hooks section");
-        assert!(template.contains("heartbeat_stall_secs"), "template missing heartbeat_stall_secs");
-        assert!(template.contains("on_complete"), "template missing on_complete hook");
-        assert!(template.contains("on_failure"), "template missing on_failure hook");
+        assert!(
+            template.contains("[exit_codes]"),
+            "template missing exit_codes section"
+        );
+        assert!(
+            template.contains("[profile.smoke]"),
+            "template missing profile section"
+        );
+        assert!(
+            template.contains("[chaos.unstable-wifi]"),
+            "template missing chaos section"
+        );
+        assert!(
+            template.contains("[hooks]"),
+            "template missing hooks section"
+        );
+        assert!(
+            template.contains("heartbeat_stall_secs"),
+            "template missing heartbeat_stall_secs"
+        );
+        assert!(
+            template.contains("on_complete"),
+            "template missing on_complete hook"
+        );
+        assert!(
+            template.contains("on_failure"),
+            "template missing on_failure hook"
+        );
     }
 
     // ── TOML deserialization edge cases ──────────────────────────────────
@@ -1245,6 +1278,7 @@ mod tests {
             players = 4
             max_runs = 50
             timeout = 600
+            hard_timeout = 1800
             shutdown_timeout = 10
             network = "steam"
             display = "sway"
@@ -1267,6 +1301,7 @@ mod tests {
         assert_eq!(full.players, Some(4));
         assert_eq!(full.max_runs, Some(50));
         assert_eq!(full.timeout, Some(600));
+        assert_eq!(full.hard_timeout, Some(1800));
         assert_eq!(full.shutdown_timeout, Some(10));
         assert_eq!(full.network.as_deref(), Some("steam"));
         assert_eq!(full.display.as_deref(), Some("sway"));

@@ -10,11 +10,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
+use serde::Deserialize;
 
 use crate::core::backend::Backend;
-use crate::ui::cli::NetworkMode;
 use crate::core::config::{ChaosProfile, ClusterConfig, IpAddr, VmName};
-use crate::harness::output::{OutputFormat, RunResult, RunStatus, TestSession};
+use crate::harness::output::{OutputFormat, RunResult, RunStatus, TestSession, TimeoutKind};
+use crate::ui::cli::NetworkMode;
 
 /// Configuration for a test run.
 ///
@@ -25,7 +26,10 @@ pub struct TestConfig {
     pub vm_args: Option<String>,
     pub host_args: Option<String>,
     pub max_runs: u32,
+    /// Maximum time without semantic progress before the run is declared stuck.
     pub timeout: Duration,
+    /// Emergency wall-clock cap even if semantic progress continues.
+    pub hard_timeout: Duration,
     pub shutdown_timeout: Duration,
     pub stop_on_failure: bool,
     pub deploy: bool,
@@ -53,12 +57,25 @@ pub struct TestConfig {
     pub strace: bool,
 }
 
+const DEFAULT_HARD_TIMEOUT_MIN_SECS: u64 = 1_800;
+const DEFAULT_HARD_TIMEOUT_MULTIPLIER: u64 = 5;
+
+pub fn resolve_hard_timeout(timeout: Duration, explicit: Option<Duration>) -> Duration {
+    explicit.unwrap_or_else(|| {
+        Duration::from_secs(
+            timeout
+                .as_secs()
+                .saturating_mul(DEFAULT_HARD_TIMEOUT_MULTIPLIER)
+                .max(DEFAULT_HARD_TIMEOUT_MIN_SECS),
+        )
+    })
+}
+
 // ── Heartbeat trait: static dispatch for local vs. VM heartbeat sources ──
 
-/// Reads the minimum `timestamp_ms` from a heartbeat source.
-/// Monomorphized at each call site for zero-cost dispatch.
+/// Reads heartbeat snapshots from a source.
 trait HeartbeatSource {
-    fn min_timestamp(&self) -> Option<u128>;
+    fn snapshots(&self) -> Vec<HeartbeatSnapshot>;
 }
 
 struct LocalHeartbeat<'a> {
@@ -72,78 +89,251 @@ struct VmHeartbeat<'a> {
     remote_dir: &'a str,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+struct HeartbeatSnapshot {
+    timestamp_ms: u64,
+    #[serde(default)]
+    phase: String,
+    #[serde(default)]
+    round: u32,
+    #[serde(default)]
+    turn: u32,
+    #[serde(default)]
+    progress_seq: u64,
+}
+
+impl HeartbeatSnapshot {
+    fn semantic_progress(&self) -> SemanticProgress {
+        SemanticProgress {
+            progress_seq: self.progress_seq,
+            phase: self.phase.clone(),
+            round: self.round,
+            turn: self.turn,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SemanticProgress {
+    progress_seq: u64,
+    phase: String,
+    round: u32,
+    turn: u32,
+}
+
+#[derive(Debug, Clone)]
+struct HeartbeatObservation {
+    oldest_timestamp: HeartbeatSnapshot,
+    slowest_progress: HeartbeatSnapshot,
+}
+
+#[derive(Debug, Default, Clone)]
+struct HeartbeatMonitorState {
+    last_timestamp_ms: Option<u64>,
+    last_timestamp_snapshot: Option<HeartbeatSnapshot>,
+    last_progress: Option<SemanticProgress>,
+    last_progress_at_ms: Option<u64>,
+    last_progress_snapshot: Option<HeartbeatSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct MonitorFailure {
+    kind: TimeoutKind,
+    banner: String,
+}
+
+impl MonitorFailure {
+    fn heartbeat_stall(
+        source: &'static str,
+        snapshot: HeartbeatSnapshot,
+        stale_secs: u64,
+        stall_secs: u64,
+    ) -> Self {
+        Self {
+            kind: TimeoutKind::HeartbeatStall,
+            banner: format!(
+                "--- HEARTBEAT_STALL ({source}: {stale_secs}s without a fresh heartbeat > {stall_secs}s, {}) ---",
+                heartbeat_context(&snapshot)
+            ),
+        }
+    }
+
+    fn no_progress_timeout(
+        source: &'static str,
+        snapshot: HeartbeatSnapshot,
+        stalled_secs: u64,
+        timeout_secs: u64,
+    ) -> Self {
+        Self {
+            kind: TimeoutKind::NoProgressTimeout,
+            banner: format!(
+                "--- NO_PROGRESS_TIMEOUT ({source}: {stalled_secs}s without semantic progress > {timeout_secs}s, {}) ---",
+                heartbeat_context(&snapshot)
+            ),
+        }
+    }
+
+    fn hard_timeout(
+        runtime_secs: u64,
+        hard_timeout_secs: u64,
+        source: Option<&'static str>,
+        stalled_secs: Option<u64>,
+        snapshot: Option<HeartbeatSnapshot>,
+    ) -> Self {
+        let detail = match (source, stalled_secs, snapshot) {
+            (Some(source), Some(stalled_secs), Some(snapshot)) => format!(
+                "{source}: last semantic progress {stalled_secs}s ago, {}",
+                heartbeat_context(&snapshot)
+            ),
+            _ => "no heartbeat context available".to_string(),
+        };
+        Self {
+            kind: TimeoutKind::HardTimeout,
+            banner: format!(
+                "--- HARD_TIMEOUT (runtime {runtime_secs}s > {hard_timeout_secs}s, {detail}) ---"
+            ),
+        }
+    }
+}
+
 impl HeartbeatSource for LocalHeartbeat<'_> {
-    fn min_timestamp(&self) -> Option<u128> {
-        let entries = std::fs::read_dir(self.dir).ok()?;
-        let mut min_ts: Option<u128> = None;
+    fn snapshots(&self) -> Vec<HeartbeatSnapshot> {
+        let Ok(entries) = std::fs::read_dir(self.dir) else {
+            return Vec::new();
+        };
+        let mut snapshots = Vec::new();
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with("game_progress_") && name.ends_with(".json") {
-                let content = std::fs::read_to_string(entry.path()).ok();
-                if let Some(ts) = content.and_then(|c| parse_min_timestamp_ms(&c)) {
-                    min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
+                if let Ok(content) = std::fs::read_to_string(entry.path()) {
+                    snapshots.extend(parse_heartbeats(&content));
                 }
             }
         }
-        min_ts
+        snapshots
     }
 }
 
 impl HeartbeatSource for VmHeartbeat<'_> {
-    fn min_timestamp(&self) -> Option<u128> {
+    fn snapshots(&self) -> Vec<HeartbeatSnapshot> {
         let cmd = format!(
             "cat {}/game_progress_*.json 2>/dev/null || true",
             self.remote_dir
         );
-        let mut min_ts: Option<u128> = None;
+        let mut snapshots = Vec::new();
         for (_, ip) in self.vms {
             let result = self.rt.block_on(self.backend.run_cmd_timeout(
                 ip,
                 &cmd,
                 std::time::Duration::from_secs(5),
             ));
-            if let Some(ts) = parse_min_timestamp_ms(&result.stdout) {
-                min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
-            }
+            snapshots.extend(parse_heartbeats(&result.stdout));
         }
-        min_ts
+        snapshots
     }
 }
 
-/// Parse all `"timestamp_ms": <number>` values from a string, returning the minimum.
-fn parse_min_timestamp_ms(content: &str) -> Option<u128> {
-    const MARKER: &str = "\"timestamp_ms\":";
-    let mut min_ts: Option<u128> = None;
-    let mut search_from = 0;
-    while let Some(idx) = content[search_from..].find(MARKER) {
-        let abs_idx = search_from + idx + MARKER.len();
-        let rest = content[abs_idx..].trim_start();
-        if let Some(end) = rest.find(|c: char| !c.is_ascii_digit())
-            && let Ok(ts) = rest[..end].parse::<u128>()
-        {
-            min_ts = Some(min_ts.map_or(ts, |prev| prev.min(ts)));
-        }
-        search_from = abs_idx;
-    }
-    min_ts
+fn parse_heartbeats(content: &str) -> Vec<HeartbeatSnapshot> {
+    serde_json::Deserializer::from_str(content)
+        .into_iter::<HeartbeatSnapshot>()
+        .filter_map(Result::ok)
+        .collect()
 }
 
-/// Check if a heartbeat source has stalled beyond `stall_secs`.
-/// Returns `true` if stalled (caller should kill).
-fn check_stall(source: &impl HeartbeatSource, last_ts: &mut Option<u128>, stall_secs: u64, now: u128) -> bool {
-    if let Some(ts) = source.min_timestamp() {
-        if let Some(prev) = *last_ts
-            && ts <= prev
-        {
-            let stale = now.saturating_sub(ts) / 1000;
-            if stale > stall_secs as u128 {
-                return true;
-            }
+fn observe_heartbeat_source(source: &impl HeartbeatSource) -> Option<HeartbeatObservation> {
+    let snapshots = source.snapshots();
+    let oldest_timestamp = snapshots.iter().min_by_key(|hb| hb.timestamp_ms)?.clone();
+    let slowest_progress = snapshots
+        .iter()
+        .min_by_key(|hb| (hb.progress_seq, hb.timestamp_ms))?
+        .clone();
+
+    Some(HeartbeatObservation {
+        oldest_timestamp,
+        slowest_progress,
+    })
+}
+
+fn check_heartbeat_source(
+    source_name: &'static str,
+    source: &impl HeartbeatSource,
+    state: &mut HeartbeatMonitorState,
+    heartbeat_stall_secs: u64,
+    no_progress_timeout: Duration,
+    now_ms: u64,
+) -> Option<MonitorFailure> {
+    let observation = observe_heartbeat_source(source)?;
+
+    let oldest = observation.oldest_timestamp.clone();
+    if let Some(prev) = state.last_timestamp_ms
+        && oldest.timestamp_ms <= prev
+    {
+        let stale_secs = now_ms.saturating_sub(oldest.timestamp_ms) / 1000;
+        if stale_secs > heartbeat_stall_secs {
+            state.last_timestamp_snapshot = Some(oldest.clone());
+            return Some(MonitorFailure::heartbeat_stall(
+                source_name,
+                oldest,
+                stale_secs,
+                heartbeat_stall_secs,
+            ));
         }
-        *last_ts = Some(ts);
     }
-    false
+    state.last_timestamp_ms = Some(oldest.timestamp_ms);
+    state.last_timestamp_snapshot = Some(oldest);
+
+    let slowest = observation.slowest_progress.clone();
+    let progress = slowest.semantic_progress();
+    if state.last_progress.as_ref() != Some(&progress) {
+        state.last_progress = Some(progress);
+        state.last_progress_at_ms = Some(now_ms);
+    } else if let Some(last_progress_at_ms) = state.last_progress_at_ms {
+        let stalled_secs = now_ms.saturating_sub(last_progress_at_ms) / 1000;
+        if stalled_secs > no_progress_timeout.as_secs() {
+            state.last_progress_snapshot = Some(slowest.clone());
+            return Some(MonitorFailure::no_progress_timeout(
+                source_name,
+                slowest,
+                stalled_secs,
+                no_progress_timeout.as_secs(),
+            ));
+        }
+    }
+    state.last_progress_snapshot = Some(slowest);
+
+    None
+}
+
+fn select_hard_timeout_context(
+    now_ms: u64,
+    local_state: &HeartbeatMonitorState,
+    vm_state: &HeartbeatMonitorState,
+) -> (Option<&'static str>, Option<u64>, Option<HeartbeatSnapshot>) {
+    [("local", local_state), ("vm", vm_state)]
+        .into_iter()
+        .filter_map(|(name, state)| {
+            Some((
+                name,
+                now_ms.saturating_sub(state.last_progress_at_ms?) / 1000,
+                state.last_progress_snapshot.clone()?,
+            ))
+        })
+        .max_by_key(|(_, stalled_secs, _)| *stalled_secs)
+        .map(|(name, stalled_secs, snapshot)| (Some(name), Some(stalled_secs), Some(snapshot)))
+        .unwrap_or((None, None, None))
+}
+
+fn heartbeat_context(snapshot: &HeartbeatSnapshot) -> String {
+    let phase = if snapshot.phase.is_empty() {
+        "unknown"
+    } else {
+        snapshot.phase.as_str()
+    };
+    format!(
+        "phase={phase}, round={}, turn={}, progress_seq={}",
+        snapshot.round, snapshot.turn, snapshot.progress_seq
+    )
 }
 
 // ── Main test orchestration ──
@@ -210,8 +400,7 @@ pub async fn run<S>(
             &format!("=== STARTING {} ON VMs ===", test_config.display),
             verbose,
         );
-        let setup_script =
-            crate::steam::compositor_setup(test_config.display, &config.vm_user);
+        let setup_script = crate::steam::compositor_setup(test_config.display, &config.vm_user);
         for vm in target_vms {
             let result = backend.run_cmd(&vm.ip, &setup_script).await;
             if result.success {
@@ -243,14 +432,9 @@ pub async fn run<S>(
             String::new()
         };
         for vm in target_vms {
-            match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user, &compositor).await
-            {
+            match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user, &compositor).await {
                 Ok(()) => {
-                    print_and_push(
-                        &mut output,
-                        &format!("  {}: Steam ready", vm.name),
-                        verbose,
-                    )
+                    print_and_push(&mut output, &format!("  {}: Steam ready", vm.name), verbose)
                 }
                 Err(e) => {
                     print_and_push(
@@ -315,9 +499,7 @@ pub async fn run<S>(
             let target_flag = crate::accounts::local_steam_id()
                 .map(|id| format!(" --steam-target-id {id}"))
                 .unwrap_or_default();
-            default_vm_args = format!(
-                "--auto-join-steam --auto-play{vm_headless}{target_flag}"
-            );
+            default_vm_args = format!("--auto-join-steam --auto-play{vm_headless}{target_flag}");
         }
     }
     let vm_args = test_config.vm_args.as_deref().unwrap_or(&default_vm_args);
@@ -420,7 +602,11 @@ pub async fn run<S>(
             )
             .await
             {
-                print_and_push(&mut output, &format!("  {}: launch FAILED: {e}", vm.name), verbose);
+                print_and_push(
+                    &mut output,
+                    &format!("  {}: launch FAILED: {e}", vm.name),
+                    verbose,
+                );
                 vm_launch_ok = false;
             }
         }
@@ -452,10 +638,12 @@ pub async fn run<S>(
         let remote_dir_owned = config.remote_dir.clone();
 
         let hb_stall = test_config.heartbeat_stall_secs;
-        let (combined, exit_code, was_timeout) = tokio::task::spawn_blocking(move || {
+        let hard_timeout = test_config.hard_timeout;
+        let (combined, exit_code, monitor_failure) = tokio::task::spawn_blocking(move || {
             monitor_local_process(
                 &mut child,
                 timeout,
+                hard_timeout,
                 shutdown_timeout,
                 &project_root_owned,
                 &vm_ips,
@@ -477,30 +665,49 @@ pub async fn run<S>(
 
         // Classify result
         let failure_code: Option<i32>;
-        if was_timeout {
+        let recorded_exit_code: Option<i32>;
+        let run_status: RunStatus;
+        let run_label: String;
+        if let Some(failure) = monitor_failure.as_ref() {
             timed_out_count += 1;
             failed += 1;
-            failure_code = Some(-1);
-            print_and_push(
-                &mut output,
-                &format!("--- TIMEOUT ({}s limit) ---", timeout.as_secs()),
-                verbose,
-            );
+            failure_code = Some(timeout_failure_code(failure.kind));
+            recorded_exit_code = None;
+            run_status = RunStatus::Timeout(failure.kind);
+            run_label = failure.kind.label().into();
+            print_and_push(&mut output, &failure.banner, verbose);
         } else if exit_code == Some(0) {
             passed += 1;
             failure_code = None;
+            recorded_exit_code = Some(0);
+            run_status = RunStatus::Pass;
+            run_label = "SUCCESS".into();
             print_and_push(&mut output, "--- PASS ---", verbose);
         } else {
             failed += 1;
             failure_code = exit_code;
+            recorded_exit_code = exit_code;
+            run_status = RunStatus::Fail;
             let code_str: Cow<'static, str> = exit_code
-                .map(|c| Cow::Owned(format!("{c} ({})", exit_code_label(c, &test_config.exit_codes))))
+                .map(|c| {
+                    Cow::Owned(format!(
+                        "{c} ({})",
+                        exit_code_label(c, &test_config.exit_codes)
+                    ))
+                })
                 .unwrap_or(Cow::Borrowed("signal"));
-            print_and_push(&mut output, &format!("--- FAIL (exit {code_str}) ---"), verbose);
+            run_label = exit_code
+                .map(|c| exit_code_label(c, &test_config.exit_codes).into_owned())
+                .unwrap_or_else(|| "SIGNAL".into());
+            print_and_push(
+                &mut output,
+                &format!("--- FAIL (exit {code_str}) ---"),
+                verbose,
+            );
         }
 
         // Collect VM logs on failure
-        if was_timeout || exit_code != Some(0) {
+        if monitor_failure.is_some() || exit_code != Some(0) {
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
             for vm in target_vms {
                 output.push_str(&format!("  [{}]:\n", vm.name));
@@ -530,23 +737,12 @@ pub async fn run<S>(
         }
 
         // Track exit codes for history
-        exit_codes.push(exit_code);
+        exit_codes.push(recorded_exit_code);
 
-        // Track run result for output formatting
-        let run_status = if was_timeout {
-            RunStatus::Timeout
-        } else if exit_code == Some(0) {
-            RunStatus::Pass
-        } else {
-            RunStatus::Fail
-        };
-        let run_label = exit_code
-            .map(|c| exit_code_label(c, &test_config.exit_codes).into_owned())
-            .unwrap_or_else(|| "SIGNAL".into());
         session.runs.push(RunResult {
             run_number: run_num,
             status: run_status,
-            exit_code,
+            exit_code: recorded_exit_code,
             exit_label: run_label,
             duration: run_start.elapsed(),
         });
@@ -560,10 +756,13 @@ pub async fn run<S>(
                 consecutive_fail_count = 1;
             }
             if !test_config.stop_on_failure && consecutive_fail_count >= REPEAT_FAILURE_LIMIT {
-                let label: Cow<'static, str> = if code == -1 {
-                    Cow::Borrowed("TIMEOUT")
+                let label: Cow<'static, str> = if code < 0 {
+                    Cow::Borrowed(timeout_failure_label(code))
                 } else {
-                    Cow::Owned(format!("{code} ({})", exit_code_label(code, &test_config.exit_codes)))
+                    Cow::Owned(format!(
+                        "{code} ({})",
+                        exit_code_label(code, &test_config.exit_codes)
+                    ))
                 };
                 print_and_push(
                     &mut output,
@@ -597,10 +796,11 @@ pub async fn run<S>(
         Cow::Borrowed("")
     };
     let summary = format!(
-        "\n=== SUMMARY ===\n{passed}/{total} passed, {failed} failed{timeout_info}\nConfig: network={}, players={}, vms={vm_count}, timeout={}s",
+        "\n=== SUMMARY ===\n{passed}/{total} passed, {failed} failed{timeout_info}\nConfig: network={}, players={}, vms={vm_count}, timeout={}s, hard_timeout={}s",
         test_config.network,
         test_config.players,
         test_config.timeout.as_secs(),
+        test_config.hard_timeout.as_secs(),
     );
     print_and_push(&mut output, &summary, verbose);
 
@@ -669,7 +869,11 @@ pub async fn run<S>(
         .map(|s| s.trim().to_string());
 
     // Compute per-run durations
-    let run_durations: Vec<f64> = session.runs.iter().map(|r| r.duration.as_secs_f64()).collect();
+    let run_durations: Vec<f64> = session
+        .runs
+        .iter()
+        .map(|r| r.duration.as_secs_f64())
+        .collect();
 
     // Save to test history
     let result = crate::history::make_result(
@@ -798,6 +1002,23 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
+fn timeout_failure_code(kind: TimeoutKind) -> i32 {
+    match kind {
+        TimeoutKind::HeartbeatStall => -1,
+        TimeoutKind::NoProgressTimeout => -2,
+        TimeoutKind::HardTimeout => -3,
+    }
+}
+
+fn timeout_failure_label(code: i32) -> &'static str {
+    match code {
+        -1 => TimeoutKind::HeartbeatStall.label(),
+        -2 => TimeoutKind::NoProgressTimeout.label(),
+        -3 => TimeoutKind::HardTimeout.label(),
+        _ => "TIMEOUT",
+    }
+}
+
 // ── Process monitoring ──
 
 /// Monitor the local process with timeout and heartbeat detection.
@@ -805,13 +1026,14 @@ fn now_ms() -> u128 {
 fn monitor_local_process(
     child: &mut std::process::Child,
     timeout: Duration,
+    hard_timeout: Duration,
     shutdown_timeout: Duration,
     project_root: &Path,
     vm_ips: &[(VmName, IpAddr)],
     backend: &Backend,
     remote_dir: &str,
     heartbeat_stall_secs: u64,
-) -> anyhow::Result<(String, Option<i32>, bool)> {
+) -> anyhow::Result<(String, Option<i32>, Option<MonitorFailure>)> {
     use std::io::Read as _;
 
     let stdout_pipe = child.stdout.take();
@@ -834,9 +1056,9 @@ fn monitor_local_process(
 
     let start = Instant::now();
     let exit_code;
-    let timed_out;
-    let mut last_local_ts: Option<u128> = None;
-    let mut last_vm_ts: Option<u128> = None;
+    let mut failure = None;
+    let mut local_state = HeartbeatMonitorState::default();
+    let mut vm_state = HeartbeatMonitorState::default();
     let mut last_heartbeat_check = Instant::now();
     let mut last_vm_check = Instant::now();
 
@@ -853,31 +1075,52 @@ fn monitor_local_process(
         match child.try_wait() {
             Ok(Some(status)) => {
                 exit_code = status.code();
-                timed_out = false;
                 break;
             }
-            Ok(None) if start.elapsed() > timeout => {
+            Ok(None) if start.elapsed() > hard_timeout => {
                 exit_code = kill_and_reap(child, shutdown_timeout);
-                timed_out = true;
+                let now = now_ms() as u64;
+                let runtime_secs = start.elapsed().as_secs();
+                let (source, stalled_secs, snapshot) =
+                    select_hard_timeout_context(now, &local_state, &vm_state);
+                failure = Some(MonitorFailure::hard_timeout(
+                    runtime_secs,
+                    hard_timeout.as_secs(),
+                    source,
+                    stalled_secs,
+                    snapshot,
+                ));
                 break;
             }
             Ok(None) => {
                 if last_heartbeat_check.elapsed() > Duration::from_secs(2) {
                     last_heartbeat_check = Instant::now();
-                    if check_stall(&local_hb, &mut last_local_ts, heartbeat_stall_secs, now_ms()) {
-                        eprintln!("Local heartbeat stall — killing");
+                    if let Some(stall) = check_heartbeat_source(
+                        "local",
+                        &local_hb,
+                        &mut local_state,
+                        heartbeat_stall_secs,
+                        timeout,
+                        now_ms() as u64,
+                    ) {
                         exit_code = kill_and_reap(child, shutdown_timeout);
-                        timed_out = true;
+                        failure = Some(stall);
                         break;
                     }
                 }
 
                 if last_vm_check.elapsed() > Duration::from_secs(10) {
                     last_vm_check = Instant::now();
-                    if check_stall(&vm_hb, &mut last_vm_ts, heartbeat_stall_secs, now_ms()) {
-                        eprintln!("VM heartbeat stall — killing");
+                    if let Some(stall) = check_heartbeat_source(
+                        "vm",
+                        &vm_hb,
+                        &mut vm_state,
+                        heartbeat_stall_secs,
+                        timeout,
+                        now_ms() as u64,
+                    ) {
                         exit_code = kill_and_reap(child, shutdown_timeout);
-                        timed_out = true;
+                        failure = Some(stall);
                         break;
                     }
                 }
@@ -890,7 +1133,7 @@ fn monitor_local_process(
 
     let stdout = stdout_thread.join().unwrap_or_default();
     let stderr = stderr_thread.join().unwrap_or_default();
-    Ok((format!("{stdout}{stderr}"), exit_code, timed_out))
+    Ok((format!("{stdout}{stderr}"), exit_code, failure))
 }
 
 /// Kill the process group and reap the exit code.
@@ -959,26 +1202,175 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_min_timestamp_ms_single() {
-        let input = r#"{"timestamp_ms": 1000}"#;
-        assert_eq!(parse_min_timestamp_ms(input), Some(1000));
+    fn parse_heartbeats_single() {
+        let input = r#"{"timestamp_ms":1000,"phase":"Battle","round":1,"turn":2,"progress_seq":3}"#;
+        let parsed = parse_heartbeats(input);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].timestamp_ms, 1000);
+        assert_eq!(parsed[0].phase, "Battle");
+        assert_eq!(parsed[0].round, 1);
+        assert_eq!(parsed[0].turn, 2);
+        assert_eq!(parsed[0].progress_seq, 3);
     }
 
     #[test]
-    fn parse_min_timestamp_ms_multiple_returns_min() {
-        let input = r#"{"timestamp_ms": 3000}{"timestamp_ms": 1000}{"timestamp_ms": 2000}"#;
-        assert_eq!(parse_min_timestamp_ms(input), Some(1000));
+    fn parse_heartbeats_concatenated_objects() {
+        let input = concat!(
+            "{",
+            "\"timestamp_ms\":3000,\"phase\":\"Battle\",\"round\":2,\"turn\":1,\"progress_seq\":4",
+            "}\n",
+            "{",
+            "\"timestamp_ms\":1000,\"phase\":\"Draft\",\"round\":1,\"turn\":1,\"progress_seq\":1",
+            "}\n",
+        );
+        let parsed = parse_heartbeats(input);
+        assert_eq!(parsed.len(), 2);
+        assert_eq!(parsed[0].progress_seq, 4);
+        assert_eq!(parsed[1].progress_seq, 1);
     }
 
     #[test]
-    fn parse_min_timestamp_ms_empty() {
-        assert_eq!(parse_min_timestamp_ms(""), None);
-        assert_eq!(parse_min_timestamp_ms("no timestamps here"), None);
+    fn parse_heartbeats_empty() {
+        assert!(parse_heartbeats("").is_empty());
+        assert!(parse_heartbeats("not json").is_empty());
+    }
+
+    fn heartbeat(
+        timestamp_ms: u64,
+        phase: &str,
+        round: u32,
+        turn: u32,
+        progress_seq: u64,
+    ) -> HeartbeatSnapshot {
+        HeartbeatSnapshot {
+            timestamp_ms,
+            phase: phase.to_string(),
+            round,
+            turn,
+            progress_seq,
+        }
+    }
+
+    struct FakeHeartbeat(Vec<HeartbeatSnapshot>);
+    impl HeartbeatSource for FakeHeartbeat {
+        fn snapshots(&self) -> Vec<HeartbeatSnapshot> {
+            self.0.clone()
+        }
     }
 
     #[test]
-    fn parse_min_timestamp_ms_no_digits() {
-        assert_eq!(parse_min_timestamp_ms(r#""timestamp_ms": abc"#), None);
+    fn observe_heartbeat_source_tracks_oldest_timestamp_and_slowest_progress() {
+        let hb = FakeHeartbeat(vec![
+            heartbeat(3000, "Battle", 2, 1, 4),
+            heartbeat(1000, "Draft", 1, 1, 2),
+            heartbeat(2000, "Battle", 1, 3, 1),
+        ]);
+        let observation = observe_heartbeat_source(&hb).expect("heartbeat observation");
+        assert_eq!(observation.oldest_timestamp.timestamp_ms, 1000);
+        assert_eq!(observation.slowest_progress.progress_seq, 1);
+        assert_eq!(observation.slowest_progress.turn, 3);
+    }
+
+    #[test]
+    fn check_heartbeat_source_initializes_without_failing() {
+        let hb = FakeHeartbeat(vec![heartbeat(1000, "Draft", 1, 1, 0)]);
+        let mut state = HeartbeatMonitorState::default();
+        let failure =
+            check_heartbeat_source("local", &hb, &mut state, 30, Duration::from_secs(30), 1000);
+        assert!(failure.is_none());
+        assert_eq!(state.last_timestamp_ms, Some(1000));
+        assert_eq!(state.last_progress_at_ms, Some(1000));
+    }
+
+    #[test]
+    fn check_heartbeat_source_detects_heartbeat_stall() {
+        let hb = FakeHeartbeat(vec![heartbeat(1000, "Battle", 1, 1, 5)]);
+        let mut state = HeartbeatMonitorState::default();
+        assert!(
+            check_heartbeat_source("vm", &hb, &mut state, 30, Duration::from_secs(60), 1000)
+                .is_none()
+        );
+
+        let failure =
+            check_heartbeat_source("vm", &hb, &mut state, 30, Duration::from_secs(60), 32_000)
+                .expect("heartbeat stall");
+        assert_eq!(failure.kind, TimeoutKind::HeartbeatStall);
+        assert!(failure.banner.contains("HEARTBEAT_STALL"));
+    }
+
+    #[test]
+    fn check_heartbeat_source_detects_no_progress_timeout() {
+        let hb = FakeHeartbeat(vec![heartbeat(1000, "Battle", 1, 1, 5)]);
+        let mut state = HeartbeatMonitorState::default();
+        assert!(
+            check_heartbeat_source("local", &hb, &mut state, 45, Duration::from_secs(30), 1000)
+                .is_none()
+        );
+
+        let updated_timestamp = FakeHeartbeat(vec![heartbeat(20_000, "Battle", 1, 1, 5)]);
+        let failure = check_heartbeat_source(
+            "local",
+            &updated_timestamp,
+            &mut state,
+            45,
+            Duration::from_secs(30),
+            32_000,
+        )
+        .expect("no progress timeout");
+        assert_eq!(failure.kind, TimeoutKind::NoProgressTimeout);
+        assert!(failure.banner.contains("NO_PROGRESS_TIMEOUT"));
+    }
+
+    #[test]
+    fn check_heartbeat_source_accepts_tuple_change_with_same_progress_seq() {
+        let mut state = HeartbeatMonitorState::default();
+        let initial = FakeHeartbeat(vec![heartbeat(1000, "Draft", 1, 1, 0)]);
+        assert!(
+            check_heartbeat_source(
+                "local",
+                &initial,
+                &mut state,
+                45,
+                Duration::from_secs(30),
+                1000,
+            )
+            .is_none()
+        );
+
+        let phase_changed = FakeHeartbeat(vec![heartbeat(31_000, "Battle", 1, 1, 0)]);
+        assert!(
+            check_heartbeat_source(
+                "local",
+                &phase_changed,
+                &mut state,
+                45,
+                Duration::from_secs(30),
+                31_000,
+            )
+            .is_none()
+        );
+        assert_eq!(state.last_progress_at_ms, Some(31_000));
+    }
+
+    #[test]
+    fn resolve_hard_timeout_uses_explicit_override() {
+        let timeout = Duration::from_secs(120);
+        assert_eq!(
+            resolve_hard_timeout(timeout, Some(Duration::from_secs(900))),
+            Duration::from_secs(900)
+        );
+    }
+
+    #[test]
+    fn resolve_hard_timeout_derives_generous_default() {
+        assert_eq!(
+            resolve_hard_timeout(Duration::from_secs(120), None),
+            Duration::from_secs(1_800)
+        );
+        assert_eq!(
+            resolve_hard_timeout(Duration::from_secs(600), None),
+            Duration::from_secs(3_000)
+        );
     }
 
     #[test]
@@ -998,163 +1390,16 @@ mod tests {
         custom.insert(0, "OK".to_string());
         assert_eq!(&*exit_code_label(42, &custom), "MY_ERROR");
         assert_eq!(&*exit_code_label(0, &custom), "OK");
-        // Fallback for unconfigured code
         assert_eq!(&*exit_code_label(10, &custom), "PHASE_WATCHDOG");
     }
 
-    struct FakeHeartbeat(Option<u128>);
-    impl HeartbeatSource for FakeHeartbeat {
-        fn min_timestamp(&self) -> Option<u128> { self.0 }
-    }
-
     #[test]
-    fn check_stall_no_stall_when_advancing() {
-        let hb = FakeHeartbeat(Some(2000));
-        let mut last = Some(1000);
-        assert!(!check_stall(&hb, &mut last, 30, 2500));
-        assert_eq!(last, Some(2000));
-    }
-
-    #[test]
-    fn check_stall_detected_when_frozen() {
-        let hb = FakeHeartbeat(Some(1000));
-        let mut last = Some(1000);
-        // now is 31 seconds after timestamp
-        assert!(check_stall(&hb, &mut last, 30, 1000 + 31_000));
-    }
-
-    #[test]
-    fn check_stall_no_false_positive_on_first_check() {
-        let hb = FakeHeartbeat(Some(5000));
-        let mut last = None;
-        assert!(!check_stall(&hb, &mut last, 30, 50_000));
-        assert_eq!(last, Some(5000));
-    }
-
-    #[test]
-    fn check_stall_none_heartbeat_no_stall() {
-        let hb = FakeHeartbeat(None);
-        let mut last = Some(1000);
-        assert!(!check_stall(&hb, &mut last, 30, 50_000));
-        assert_eq!(last, Some(1000)); // unchanged
-    }
-
-    #[test]
-    fn check_stall_exact_boundary_no_stall() {
-        let hb = FakeHeartbeat(Some(1000));
-        let mut last = Some(1000);
-        // Exactly at boundary (30s) - should NOT stall (uses > not >=)
-        assert!(!check_stall(&hb, &mut last, 30, 1000 + 30_000));
-    }
-
-    // ── Custom heartbeat threshold tests ────────────────────────────────
-
-    #[test]
-    fn check_stall_custom_threshold_short() {
-        let hb = FakeHeartbeat(Some(1000));
-        let mut last = Some(1000);
-        // With 5s threshold, stall at 6s
-        assert!(check_stall(&hb, &mut last, 5, 1000 + 6_000));
-    }
-
-    #[test]
-    fn check_stall_custom_threshold_short_no_stall() {
-        let hb = FakeHeartbeat(Some(1000));
-        let mut last = Some(1000);
-        // With 5s threshold, no stall at 4s
-        assert!(!check_stall(&hb, &mut last, 5, 1000 + 4_000));
-    }
-
-    #[test]
-    fn check_stall_custom_threshold_long() {
-        let hb = FakeHeartbeat(Some(1000));
-        let mut last = Some(1000);
-        // With 120s threshold, no stall at 60s
-        assert!(!check_stall(&hb, &mut last, 120, 1000 + 60_000));
-    }
-
-    #[test]
-    fn check_stall_custom_threshold_long_stalls() {
-        let hb = FakeHeartbeat(Some(1000));
-        let mut last = Some(1000);
-        // With 120s threshold, stall at 121s
-        assert!(check_stall(&hb, &mut last, 120, 1000 + 121_000));
-    }
-
-    // ── exit_code_label edge cases ──────────────────────────────────────
-
-    #[test]
-    fn exit_code_label_all_hardcoded() {
-        let empty = HashMap::new();
-        // Verify all hardcoded codes return non-UNKNOWN labels
-        for code in [0, 1, 10, 11, 12, 13, 14, 15, 16, 17, 18, 124] {
-            let label = exit_code_label(code, &empty);
-            assert_ne!(&*label, "UNKNOWN", "Code {code} should have a label");
-        }
-    }
-
-    #[test]
-    fn exit_code_label_negative_code() {
-        let empty = HashMap::new();
-        assert_eq!(&*exit_code_label(-1, &empty), "UNKNOWN");
-    }
-
-    #[test]
-    fn exit_code_label_custom_overrides_hardcoded() {
-        let mut custom = HashMap::new();
-        custom.insert(11, "CUSTOM_DAG".to_string());
-        // Custom map overrides the hardcoded "DAG_VIOLATION"
-        assert_eq!(&*exit_code_label(11, &custom), "CUSTOM_DAG");
-    }
-
-    #[test]
-    fn exit_code_label_custom_empty_string() {
-        let mut custom = HashMap::new();
-        custom.insert(42, String::new());
-        assert_eq!(&*exit_code_label(42, &custom), "");
-    }
-
-    #[test]
-    fn exit_code_label_returns_cow_borrowed_for_defaults() {
-        let empty = HashMap::new();
-        let label = exit_code_label(0, &empty);
-        assert!(matches!(label, Cow::Borrowed(_)));
-    }
-
-    #[test]
-    fn exit_code_label_returns_cow_owned_for_custom() {
-        let mut custom = HashMap::new();
-        custom.insert(99, "CUSTOM".to_string());
-        let label = exit_code_label(99, &custom);
-        assert!(matches!(label, Cow::Owned(_)));
-    }
-
-    // ── parse_min_timestamp_ms edge cases ───────────────────────────────
-
-    #[test]
-    fn parse_min_timestamp_ms_whitespace_around_value() {
-        let input = r#"{"timestamp_ms":   1000  }"#;
-        assert_eq!(parse_min_timestamp_ms(input), Some(1000));
-    }
-
-    #[test]
-    fn parse_min_timestamp_ms_zero() {
-        let input = r#"{"timestamp_ms": 0}"#;
-        assert_eq!(parse_min_timestamp_ms(input), Some(0));
-    }
-
-    #[test]
-    fn parse_min_timestamp_ms_large_value() {
-        let input = r#"{"timestamp_ms": 1710000000000}"#;
-        assert_eq!(parse_min_timestamp_ms(input), Some(1710000000000));
-    }
-
-    #[test]
-    fn parse_min_timestamp_ms_concatenated_json() {
-        // Simulates multiple heartbeat files concatenated
-        let input = r#"{"timestamp_ms": 5000}
-{"timestamp_ms": 3000}
-{"timestamp_ms": 7000}"#;
-        assert_eq!(parse_min_timestamp_ms(input), Some(3000));
+    fn timeout_failure_code_labels_are_stable() {
+        assert_eq!(timeout_failure_code(TimeoutKind::HeartbeatStall), -1);
+        assert_eq!(timeout_failure_code(TimeoutKind::NoProgressTimeout), -2);
+        assert_eq!(timeout_failure_code(TimeoutKind::HardTimeout), -3);
+        assert_eq!(timeout_failure_label(-1), "HEARTBEAT_STALL");
+        assert_eq!(timeout_failure_label(-2), "NO_PROGRESS_TIMEOUT");
+        assert_eq!(timeout_failure_label(-3), "HARD_TIMEOUT");
     }
 }

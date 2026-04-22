@@ -18,7 +18,11 @@ pub struct HookVars {
 
 /// Expand template variables in a hook command string.
 pub fn expand_template(template: &str, vars: &HookVars) -> String {
-    let duration_str = format!("{}m{}s", vars.duration.as_secs() / 60, vars.duration.as_secs() % 60);
+    let duration_str = format!(
+        "{}m{}s",
+        vars.duration.as_secs() / 60,
+        vars.duration.as_secs() % 60
+    );
     template
         .replace("{pass_count}", &vars.pass_count.to_string())
         .replace("{fail_count}", &vars.fail_count.to_string())
@@ -135,10 +139,7 @@ mod tests {
             r#"{"text": "Tests: {pass_count}/{total_count} ({pass_rate}%)"}"#,
             &test_vars(),
         );
-        assert_eq!(
-            result,
-            r#"{"text": "Tests: 8/10 (80%)"}"#
-        );
+        assert_eq!(result, r#"{"text": "Tests: 8/10 (80%)"}"#);
     }
 
     #[tokio::test]

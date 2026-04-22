@@ -11,6 +11,11 @@ compile_sass = true
 build_search_index = false
 minify_html = false
 generate_feeds = false
+hard_link_static = true
+
+[extra]
+repo_url = "https://codeberg.org/caniko/steampipe"
+license = "EUPL-1.2"
 
 [markdown]
 [markdown.highlighting]

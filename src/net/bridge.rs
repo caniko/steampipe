@@ -109,7 +109,10 @@ pub(crate) fn plan_net_up(
     let mut cmds = Vec::new();
 
     // Create bridge
-    cmds.push(NetCmd::new("ip", &["link", "add", bridge, "type", "bridge"]));
+    cmds.push(NetCmd::new(
+        "ip",
+        &["link", "add", bridge, "type", "bridge"],
+    ));
     cmds.push(NetCmd::new(
         "ip",
         &["addr", "add", &format!("{host_ip}/{prefix}"), "dev", bridge],
@@ -150,7 +153,15 @@ pub(crate) fn plan_net_up(
     cmds.push(NetCmd::new(
         nft,
         &[
-            "add", "rule", "ip", "cluster", "nat_post", "ip", "saddr", &cidr, &oifname,
+            "add",
+            "rule",
+            "ip",
+            "cluster",
+            "nat_post",
+            "ip",
+            "saddr",
+            &cidr,
+            &oifname,
             "masquerade",
         ],
     ));
@@ -171,7 +182,9 @@ pub(crate) fn plan_net_up(
     ));
     cmds.push(NetCmd::new(
         nft,
-        &["add", "rule", "ip", "cluster", "forward", &iifname, "accept"],
+        &[
+            "add", "rule", "ip", "cluster", "forward", &iifname, "accept",
+        ],
     ));
     cmds.push(NetCmd::new(
         nft,
@@ -192,13 +205,7 @@ pub(crate) fn plan_net_up(
     cmds.push(NetCmd::new(
         nft,
         &[
-            "insert",
-            "rule",
-            "inet",
-            "nixos-fw",
-            "input",
-            &iifname,
-            "accept",
+            "insert", "rule", "inet", "nixos-fw", "input", &iifname, "accept",
         ],
     ));
 
@@ -265,7 +272,10 @@ fn microvm_net_up<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()>
         }
     }
 
-    println!("  Bridge {bridge} created ({}/{}", config.host_ip, config.prefix);
+    println!(
+        "  Bridge {bridge} created ({}/{}",
+        config.host_ip, config.prefix
+    );
     println!("  {} TAP devices created", config.vms.len());
     println!("  NAT + forwarding rules added (via {default_if})");
     println!("==> Network ready");
@@ -280,7 +290,10 @@ fn microvm_net_down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<(
 
     // Best-effort teardown — ignore individual failures
     for cmd in &cmds {
-        let _ = run_cmd(&cmd.program, &cmd.args.iter().map(|s| s.as_str()).collect::<Vec<_>>());
+        let _ = run_cmd(
+            &cmd.program,
+            &cmd.args.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+        );
     }
 
     println!("==> Network torn down");
@@ -379,13 +392,28 @@ mod tests {
 
     #[test]
     fn plan_net_up_bridge_commands_first() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
-        assert_eq!(cmds[0], NetCmd::new("ip", &["link", "add", "br-test", "type", "bridge"]));
+        let cmds = plan_net_up(
+            "br-test",
+            "10.0.100.254",
+            24,
+            "10.0.100",
+            &["vm-1"],
+            "eth0",
+            "nft",
+            None,
+        );
+        assert_eq!(
+            cmds[0],
+            NetCmd::new("ip", &["link", "add", "br-test", "type", "bridge"])
+        );
         assert_eq!(
             cmds[1],
             NetCmd::new("ip", &["addr", "add", "10.0.100.254/24", "dev", "br-test"])
         );
-        assert_eq!(cmds[2], NetCmd::new("ip", &["link", "set", "br-test", "up"]));
+        assert_eq!(
+            cmds[2],
+            NetCmd::new("ip", &["link", "set", "br-test", "up"])
+        );
     }
 
     #[test]
@@ -413,7 +441,16 @@ mod tests {
 
     #[test]
     fn plan_net_up_nft_masquerade_uses_subnet() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
+        let cmds = plan_net_up(
+            "br-test",
+            "10.0.100.254",
+            24,
+            "10.0.100",
+            &["vm-1"],
+            "eth0",
+            "nft",
+            None,
+        );
         let masq = cmds
             .iter()
             .find(|c| c.args.iter().any(|a| a == "masquerade"))
@@ -424,49 +461,110 @@ mod tests {
 
     #[test]
     fn plan_net_up_forward_chain_in_cluster_table() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
-        let fwd_chain = cmds.iter().find(|c| {
-            c.args.contains(&"chain".into())
-                && c.args.contains(&"forward".into())
-        });
+        let cmds = plan_net_up(
+            "br-test",
+            "10.0.100.254",
+            24,
+            "10.0.100",
+            &["vm-1"],
+            "eth0",
+            "nft",
+            None,
+        );
+        let fwd_chain = cmds
+            .iter()
+            .find(|c| c.args.contains(&"chain".into()) && c.args.contains(&"forward".into()));
         assert!(fwd_chain.is_some(), "forward chain creation missing");
         let fwd = fwd_chain.unwrap();
-        assert!(fwd.args.contains(&"cluster".into()), "forward chain must be in cluster table");
+        assert!(
+            fwd.args.contains(&"cluster".into()),
+            "forward chain must be in cluster table"
+        );
     }
 
     #[test]
     fn plan_net_up_forward_rules_reference_bridge() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
+        let cmds = plan_net_up(
+            "br-test",
+            "10.0.100.254",
+            24,
+            "10.0.100",
+            &["vm-1"],
+            "eth0",
+            "nft",
+            None,
+        );
         let fwd_rules: Vec<_> = cmds
             .iter()
-            .filter(|c| {
-                c.args.contains(&"rule".into())
-                    && c.args.contains(&"forward".into())
-            })
+            .filter(|c| c.args.contains(&"rule".into()) && c.args.contains(&"forward".into()))
             .collect();
         assert_eq!(fwd_rules.len(), 2);
-        assert!(fwd_rules.iter().any(|c| c.args.iter().any(|a| a.contains("iifname"))));
-        assert!(fwd_rules.iter().any(|c| c.args.iter().any(|a| a.contains("oifname"))));
+        assert!(
+            fwd_rules
+                .iter()
+                .any(|c| c.args.iter().any(|a| a.contains("iifname")))
+        );
+        assert!(
+            fwd_rules
+                .iter()
+                .any(|c| c.args.iter().any(|a| a.contains("oifname")))
+        );
     }
 
     #[test]
     fn plan_net_up_uses_custom_nft_path() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "/usr/bin/nft", None);
-        let nft_cmds: Vec<_> = cmds.iter().filter(|c| c.program == "/usr/bin/nft").collect();
+        let cmds = plan_net_up(
+            "br-test",
+            "10.0.100.254",
+            24,
+            "10.0.100",
+            &["vm-1"],
+            "eth0",
+            "/usr/bin/nft",
+            None,
+        );
+        let nft_cmds: Vec<_> = cmds
+            .iter()
+            .filter(|c| c.program == "/usr/bin/nft")
+            .collect();
         assert!(nft_cmds.len() >= 5); // table + nat_post chain + nat rule + fwd chain + 2 fwd rules
     }
 
     #[test]
     fn plan_net_up_tap_has_vnet_hdr() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", None);
-        let tap_create = cmds.iter().find(|c| c.args.contains(&"tuntap".into())).unwrap();
+        let cmds = plan_net_up(
+            "br-test",
+            "10.0.100.254",
+            24,
+            "10.0.100",
+            &["vm-1"],
+            "eth0",
+            "nft",
+            None,
+        );
+        let tap_create = cmds
+            .iter()
+            .find(|c| c.args.contains(&"tuntap".into()))
+            .unwrap();
         assert!(tap_create.args.contains(&"vnet_hdr".into()));
     }
 
     #[test]
     fn plan_net_up_tap_owner() {
-        let cmds = plan_net_up("br-test", "10.0.100.254", 24, "10.0.100", &["vm-1"], "eth0", "nft", Some("can"));
-        let tap_create = cmds.iter().find(|c| c.args.contains(&"tuntap".into())).unwrap();
+        let cmds = plan_net_up(
+            "br-test",
+            "10.0.100.254",
+            24,
+            "10.0.100",
+            &["vm-1"],
+            "eth0",
+            "nft",
+            Some("can"),
+        );
+        let tap_create = cmds
+            .iter()
+            .find(|c| c.args.contains(&"tuntap".into()))
+            .unwrap();
         assert!(tap_create.args.contains(&"user".into()));
         assert!(tap_create.args.contains(&"can".into()));
         assert!(tap_create.args.contains(&"vnet_hdr".into()));
@@ -475,7 +573,10 @@ mod tests {
     #[test]
     fn plan_net_down_removes_table_first() {
         let cmds = plan_net_down("br-test", &["vm-1", "vm-2"], "nft");
-        assert_eq!(cmds[0], NetCmd::new("nft", &["delete", "table", "ip", "cluster"]));
+        assert_eq!(
+            cmds[0],
+            NetCmd::new("nft", &["delete", "table", "ip", "cluster"])
+        );
     }
 
     #[test]

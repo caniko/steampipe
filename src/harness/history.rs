@@ -89,7 +89,11 @@ pub fn make_result(
 }
 
 /// Display test history.
-pub fn show(state_dir: &Path, last_n: Option<usize>, exit_code_map: &HashMap<i32, String>) -> anyhow::Result<()> {
+pub fn show(
+    state_dir: &Path,
+    last_n: Option<usize>,
+    exit_code_map: &HashMap<i32, String>,
+) -> anyhow::Result<()> {
     let history = load(state_dir);
 
     if history.results.is_empty() {
@@ -199,7 +203,12 @@ pub struct RegressionAlert {
 }
 
 /// Show trend analysis comparing recent vs previous windows.
-pub fn show_trends(state_dir: &Path, window: usize, last_n: Option<usize>, exit_code_map: &HashMap<i32, String>) -> anyhow::Result<()> {
+pub fn show_trends(
+    state_dir: &Path,
+    window: usize,
+    last_n: Option<usize>,
+    exit_code_map: &HashMap<i32, String>,
+) -> anyhow::Result<()> {
     let history = load(state_dir);
     if history.results.is_empty() {
         println!("No test history found.");
@@ -219,7 +228,10 @@ pub fn show_trends(state_dir: &Path, window: usize, last_n: Option<usize>, exit_
     println!("Overall: {total_passed}/{total_runs} passed ({overall_pass_rate:.1}% pass rate)\n");
 
     if results.len() < window {
-        println!("Not enough history for window comparison (have {}, need {window}).", results.len());
+        println!(
+            "Not enough history for window comparison (have {}, need {window}).",
+            results.len()
+        );
         print_failure_breakdown(results, exit_code_map);
         return Ok(());
     }
@@ -231,11 +243,19 @@ pub fn show_trends(state_dir: &Path, window: usize, last_n: Option<usize>, exit_
 
     let recent_runs: u32 = recent.iter().map(|r| r.passed + r.failed).sum();
     let recent_passed: u32 = recent.iter().map(|r| r.passed).sum();
-    let recent_rate = if recent_runs > 0 { recent_passed as f64 / recent_runs as f64 * 100.0 } else { 0.0 };
+    let recent_rate = if recent_runs > 0 {
+        recent_passed as f64 / recent_runs as f64 * 100.0
+    } else {
+        0.0
+    };
 
     let prev_runs: u32 = previous.iter().map(|r| r.passed + r.failed).sum();
     let prev_passed: u32 = previous.iter().map(|r| r.passed).sum();
-    let prev_rate = if prev_runs > 0 { prev_passed as f64 / prev_runs as f64 * 100.0 } else { 0.0 };
+    let prev_rate = if prev_runs > 0 {
+        prev_passed as f64 / prev_runs as f64 * 100.0
+    } else {
+        0.0
+    };
 
     let trend = if recent_rate > prev_rate + 5.0 {
         "IMPROVING"
@@ -275,7 +295,11 @@ pub fn show_trends(state_dir: &Path, window: usize, last_n: Option<usize>, exit_
     if regressions.is_empty() {
         println!("No regressions detected.");
     } else {
-        regressions.sort_by(|a, b| b.multiplier.partial_cmp(&a.multiplier).unwrap_or(std::cmp::Ordering::Equal));
+        regressions.sort_by(|a, b| {
+            b.multiplier
+                .partial_cmp(&a.multiplier)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         println!("Regressions:");
         for r in &regressions {
             let mult = if r.multiplier.is_infinite() {
@@ -329,7 +353,10 @@ pub struct FlakEntry {
 }
 
 /// Compute flakiness from a set of exit codes (e.g., from a single test session).
-pub fn compute_flakiness(exit_codes: &[Option<i32>], exit_code_map: &HashMap<i32, String>) -> Vec<FlakEntry> {
+pub fn compute_flakiness(
+    exit_codes: &[Option<i32>],
+    exit_code_map: &HashMap<i32, String>,
+) -> Vec<FlakEntry> {
     let total = exit_codes.len() as u32;
     if total == 0 {
         return Vec::new();
@@ -366,7 +393,11 @@ pub fn compute_flakiness(exit_codes: &[Option<i32>], exit_code_map: &HashMap<i32
 }
 
 /// Show flaky test detection from history.
-pub fn show_flakiness(state_dir: &Path, last_n: Option<usize>, exit_code_map: &HashMap<i32, String>) -> anyhow::Result<()> {
+pub fn show_flakiness(
+    state_dir: &Path,
+    last_n: Option<usize>,
+    exit_code_map: &HashMap<i32, String>,
+) -> anyhow::Result<()> {
     let history = load(state_dir);
     if history.results.is_empty() {
         println!("No test history found.");
@@ -376,7 +407,10 @@ pub fn show_flakiness(state_dir: &Path, last_n: Option<usize>, exit_code_map: &H
     let results = slice_results(&history.results, last_n);
 
     // Collect all exit codes across results
-    let all_codes: Vec<Option<i32>> = results.iter().flat_map(|r| r.exit_codes.iter().copied()).collect();
+    let all_codes: Vec<Option<i32>> = results
+        .iter()
+        .flat_map(|r| r.exit_codes.iter().copied())
+        .collect();
     let entries = compute_flakiness(&all_codes, exit_code_map);
 
     if entries.is_empty() {
@@ -392,7 +426,11 @@ pub fn show_flakiness(state_dir: &Path, last_n: Option<usize>, exit_code_map: &H
     println!("{}", "─".repeat(66));
 
     let mut sorted = entries;
-    sorted.sort_by(|a, b| b.flakiness_score.partial_cmp(&a.flakiness_score).unwrap_or(std::cmp::Ordering::Equal));
+    sorted.sort_by(|a, b| {
+        b.flakiness_score
+            .partial_cmp(&a.flakiness_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     for e in &sorted {
         let pattern_str = match e.pattern {
@@ -433,7 +471,9 @@ pub fn export(
     let results = slice_results(&history.results, last_n);
 
     let content = match format {
-        crate::harness::output::OutputFormat::Junit => crate::harness::output::emit_junit_from_history(results, exit_code_map),
+        crate::harness::output::OutputFormat::Junit => {
+            crate::harness::output::emit_junit_from_history(results, exit_code_map)
+        }
         crate::harness::output::OutputFormat::Jsonl => {
             let mut out = String::new();
             for r in results {
@@ -512,7 +552,9 @@ mod tests {
 
     #[test]
     fn flakiness_rare() {
-        let codes: Vec<Option<i32>> = (0..10).map(|i| if i == 0 { Some(11) } else { Some(0) }).collect();
+        let codes: Vec<Option<i32>> = (0..10)
+            .map(|i| if i == 0 { Some(11) } else { Some(0) })
+            .collect();
         let empty = HashMap::new();
         let entries = compute_flakiness(&codes, &empty);
         assert_eq!(entries.len(), 1);
@@ -623,7 +665,15 @@ mod tests {
     #[test]
     fn make_result_includes_new_fields() {
         let result = make_result(
-            "lan", 2, 1, 1, 1, 1, 0, 0, 300,
+            "lan",
+            2,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            300,
             vec![Some(0)],
             Some("abc1234".into()),
             15.5,
@@ -687,9 +737,16 @@ mod tests {
     fn flakiness_multiple_codes_mixed() {
         // 10 runs: 5x code 11, 3x code 12, 2x code 0
         let codes = vec![
-            Some(11), Some(11), Some(11), Some(11), Some(11),
-            Some(12), Some(12), Some(12),
-            Some(0), Some(0),
+            Some(11),
+            Some(11),
+            Some(11),
+            Some(11),
+            Some(11),
+            Some(12),
+            Some(12),
+            Some(12),
+            Some(0),
+            Some(0),
         ];
         let empty = HashMap::new();
         let mut entries = compute_flakiness(&codes, &empty);
@@ -750,7 +807,15 @@ mod tests {
     #[test]
     fn test_result_serialization_roundtrip() {
         let result = make_result(
-            "steam", 4, 3, 5, 10, 3, 2, 1, 600,
+            "steam",
+            4,
+            3,
+            5,
+            10,
+            3,
+            2,
+            1,
+            600,
             vec![Some(0), Some(11), None],
             Some("deadbeef".into()),
             120.5,
@@ -778,7 +843,15 @@ mod tests {
         let _ = std::fs::remove_file(dir.join("test_history.json"));
 
         let result = make_result(
-            "lan", 2, 1, 1, 1, 1, 0, 0, 300,
+            "lan",
+            2,
+            1,
+            1,
+            1,
+            1,
+            0,
+            0,
+            300,
             vec![Some(0)],
             Some("deadbeef".into()),
             42.0,

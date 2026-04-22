@@ -98,11 +98,13 @@ pub async fn ensure_vm_to_host_connectivity<S>(
     };
 
     // Bind an ephemeral listener on the host bridge IP to probe against.
-    let listener = std::net::TcpListener::bind(format!("{}:0", config.host_ip))
-        .map_err(|e| anyhow::anyhow!(
+    let listener = std::net::TcpListener::bind(format!("{}:0", config.host_ip)).map_err(|e| {
+        anyhow::anyhow!(
             "Cannot bind to {} — is the bridge up? ({})\n  Run: just cluster-net-up",
-            config.host_ip, e
-        ))?;
+            config.host_ip,
+            e
+        )
+    })?;
     let port = listener.local_addr()?.port();
 
     if probe_vm_to_host(backend, &vm.ip, &config.host_ip, port).await {
@@ -172,8 +174,7 @@ fn has_nixos_fw_bridge_rule(bridge: &str) -> bool {
         Ok(out) if out.status.success() => {
             let text = String::from_utf8_lossy(&out.stdout);
             // Look for: iifname "br-cluster" accept
-            text.contains(&format!("iifname \"{bridge}\""))
-                && text.contains("accept")
+            text.contains(&format!("iifname \"{bridge}\"")) && text.contains("accept")
         }
         _ => false,
     }
@@ -183,7 +184,9 @@ fn has_nixos_fw_bridge_rule(bridge: &str) -> bool {
 fn insert_nixos_fw_rule(bridge: &str) -> anyhow::Result<()> {
     let iifname = format!("iifname \"{bridge}\"");
     let status = std::process::Command::new("sudo")
-        .args(["nft", "insert", "rule", "inet", "nixos-fw", "input", &iifname, "accept"])
+        .args([
+            "nft", "insert", "rule", "inet", "nixos-fw", "input", &iifname, "accept",
+        ])
         .status()?;
     if !status.success() {
         anyhow::bail!(
@@ -256,10 +259,7 @@ pub async fn ensure_vm_gpu(
 ///
 /// Returns `Some("/dev/dri/card0")` on success, `None` on failure.
 pub fn parse_gpu_check(stdout: &str) -> Option<&str> {
-    stdout
-        .trim()
-        .strip_prefix("gpu-ok ")
-        .map(|s| s.trim())
+    stdout.trim().strip_prefix("gpu-ok ").map(|s| s.trim())
 }
 
 #[cfg(test)]
@@ -271,19 +271,28 @@ mod tests {
     #[test]
     fn gpu_check_script_checks_dev_dri() {
         let script = gpu_check_script();
-        assert!(script.contains("/dev/dri/card*"), "must probe /dev/dri/card*");
+        assert!(
+            script.contains("/dev/dri/card*"),
+            "must probe /dev/dri/card*"
+        );
     }
 
     #[test]
     fn gpu_check_script_prints_gpu_ok_on_success() {
         let script = gpu_check_script();
-        assert!(script.contains("gpu-ok"), "must print gpu-ok when device found");
+        assert!(
+            script.contains("gpu-ok"),
+            "must print gpu-ok when device found"
+        );
     }
 
     #[test]
     fn gpu_check_script_prints_gpu_missing_on_failure() {
         let script = gpu_check_script();
-        assert!(script.contains("gpu-missing"), "must print gpu-missing when no device");
+        assert!(
+            script.contains("gpu-missing"),
+            "must print gpu-missing when no device"
+        );
     }
 
     #[test]

@@ -5,9 +5,9 @@ use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::ui::cli::{DisplayMode, NetworkMode};
 use crate::core::config::ClusterConfig;
 use crate::harness::output::OutputFormat;
+use crate::ui::cli::{DisplayMode, NetworkMode};
 
 /// Configuration for a bisect run.
 pub struct BisectConfig {
@@ -33,7 +33,10 @@ struct CheckoutGuard {
 impl Drop for CheckoutGuard {
     fn drop(&mut self) {
         if self.active {
-            eprintln!("[bisect] Restoring original checkout: {}", self.original_ref);
+            eprintln!(
+                "[bisect] Restoring original checkout: {}",
+                self.original_ref
+            );
             let _ = Command::new("git")
                 .args(["checkout", &self.original_ref])
                 .current_dir(&self.project_root)
@@ -60,12 +63,16 @@ fn is_working_tree_clean(project_root: &Path) -> bool {
     Command::new("git")
         .args(["diff", "--quiet"])
         .current_dir(project_root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
         && Command::new("git")
             .args(["diff", "--cached", "--quiet"])
             .current_dir(project_root)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
@@ -78,8 +85,14 @@ pub async fn run<S: Send + Sync>(
     bisect_config: BisectConfig,
 ) -> anyhow::Result<()> {
     // Validate SHAs exist
-    let good = git(project_root, &["rev-parse", "--verify", &bisect_config.good_sha])?;
-    let bad = git(project_root, &["rev-parse", "--verify", &bisect_config.bad_sha])?;
+    let good = git(
+        project_root,
+        &["rev-parse", "--verify", &bisect_config.good_sha],
+    )?;
+    let bad = git(
+        project_root,
+        &["rev-parse", "--verify", &bisect_config.bad_sha],
+    )?;
 
     // Check working tree is clean
     if !is_working_tree_clean(project_root) {
@@ -154,14 +167,9 @@ pub async fn run<S: Send + Sync>(
 
         // Deploy
         println!("[bisect] Deploying...");
-        let deploy_result = crate::deploy::deploy_to_vms(
-            &config.backend,
-            &config.vms,
-            config,
-            project_root,
-            false,
-        )
-        .await;
+        let deploy_result =
+            crate::deploy::deploy_to_vms(&config.backend, &config.vms, config, project_root, false)
+                .await;
         if let Err(e) = deploy_result {
             println!("[bisect] Deploy FAILED at {short_sha}: {e}");
             hi = mid;
@@ -179,6 +187,7 @@ pub async fn run<S: Send + Sync>(
                 host_args: bisect_config.host_args.clone(),
                 max_runs: 1,
                 timeout: bisect_config.timeout,
+                hard_timeout: crate::test::resolve_hard_timeout(bisect_config.timeout, None),
                 shutdown_timeout: Duration::from_secs(5),
                 stop_on_failure: true,
                 deploy: false, // already deployed
@@ -200,9 +209,7 @@ pub async fn run<S: Send + Sync>(
                 Ok(_) => pass_count += 1,
                 Err(e) => {
                     let msg = format!("{e}");
-                    if msg.contains("GPU check failed")
-                        || msg.contains("Compositor setup failed")
-                    {
+                    if msg.contains("GPU check failed") || msg.contains("Compositor setup failed") {
                         anyhow::bail!("Bisect aborted — infrastructure failure: {e}");
                     }
                     // Actual test failure — count as bad
@@ -229,7 +236,8 @@ pub async fn run<S: Send + Sync>(
 
     // Result
     let first_bad = commits[hi.min(commits.len() - 1)];
-    let first_bad_msg = git(project_root, &["log", "--oneline", "-1", first_bad]).unwrap_or_default();
+    let first_bad_msg =
+        git(project_root, &["log", "--oneline", "-1", first_bad]).unwrap_or_default();
 
     println!("\n=== BISECT RESULT ===");
     println!("First bad commit: {first_bad_msg}");
@@ -248,6 +256,25 @@ pub async fn run<S: Send + Sync>(
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn git_repo_root() -> Option<PathBuf> {
+        let start = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let output = Command::new("git")
+            .args(["rev-parse", "--show-toplevel"])
+            .current_dir(&start)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+
+        let root = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if root.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(root))
+        }
+    }
 
     #[test]
     fn checkout_guard_inactive_does_not_run() {
@@ -273,16 +300,9 @@ mod tests {
 
     #[test]
     fn git_helper_on_real_repo() {
-        // This test runs on the steampipe repo itself.
-        // In a Nix build sandbox there is no .git directory, so skip gracefully.
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        if !root.join(".git").exists() {
-            // Also check parent dirs — Cargo workspaces place .git above CARGO_MANIFEST_DIR
-            let has_git = root.ancestors().any(|p| p.join(".git").exists());
-            if !has_git {
-                return; // no git repo available (e.g. Nix sandbox)
-            }
-        }
+        let Some(root) = git_repo_root() else {
+            return;
+        };
         let result = git(&root, &["rev-parse", "HEAD"]);
         assert!(result.is_ok());
         let sha = result.unwrap();
@@ -291,13 +311,9 @@ mod tests {
 
     #[test]
     fn git_helper_bad_command_errors() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        // In a Nix build sandbox there is no .git directory; git would fail
-        // for a different reason than a bad ref. Skip gracefully.
-        let has_git = root.ancestors().any(|p| p.join(".git").exists());
-        if !has_git {
+        let Some(root) = git_repo_root() else {
             return;
-        }
+        };
         let result = git(&root, &["rev-parse", "--verify", "nonexistent_ref_zzz"]);
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -312,10 +328,10 @@ mod tests {
 
     #[test]
     fn is_working_tree_clean_on_real_repo() {
-        // This is informational — the test passes regardless of dirty state
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let _clean = is_working_tree_clean(&root);
-        // Just assert it doesn't panic
+        if let Some(root) = git_repo_root() {
+            let _clean = is_working_tree_clean(&root);
+            // Just assert it doesn't panic
+        }
     }
 
     #[test]

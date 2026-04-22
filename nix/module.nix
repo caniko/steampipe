@@ -179,6 +179,15 @@ in
     systemd.tmpfiles.rules = lib.mkIf (cfg.accounts != {})
       (map (name: "d ${cfg.loginStateDir}/${name} 0755 ${cfg.tapOwner or "root"} users -") vmNames);
 
+    # Write module config so project-level flakes can discover NixOS-level settings
+    environment.etc."steampipe/module.json" = lib.mkIf (cfg.accounts != {}) {
+      text = builtins.toJSON {
+        loginStateDir = toString cfg.loginStateDir;
+        credentialsPath = "/etc/steampipe/credentials.toml";
+        vmCount = cfg.vmCount;
+      };
+    };
+
     # Generate credentials TOML at runtime by reading agenix password files
     systemd.services.steampipe-gen-credentials = lib.mkIf (cfg.accounts != {}) {
       description = "Generate steampipe credentials TOML from secret files";

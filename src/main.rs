@@ -1,21 +1,21 @@
 mod core;
 mod game;
+mod harness;
 mod mcp;
 mod net;
-mod harness;
 mod ui;
 mod vm;
 
 use std::path::PathBuf;
 
 use clap::Parser;
-use ui::cli::{self, Cli, Commands, HistoryAction, NetworkMode, DisplayMode};
 use core::config::{self, BackendKind, ClusterConfig, detect_project_root};
 use core::credentials;
 use core::state;
 use game::{accounts, capture, run, steam};
-use net::{bridge, deploy, netem};
 use harness::{bisect, history, output::OutputFormat, runner as test};
+use net::{bridge, deploy, netem};
+use ui::cli::{self, Cli, Commands, DisplayMode, HistoryAction, NetworkMode};
 use ui::{logs, watch};
 use vm::{lifecycle, snapshot, status};
 
@@ -231,7 +231,10 @@ async fn main() -> anyhow::Result<()> {
         Commands::SteamStart { target, display } => {
             steam::start(&config, target.as_deref(), display).await?;
         }
-        Commands::Run { display, extra_args } => {
+        Commands::Run {
+            display,
+            extra_args,
+        } => {
             run::start_game(&config, display, &extra_args).await?;
         }
         Commands::Test {
@@ -242,6 +245,7 @@ async fn main() -> anyhow::Result<()> {
             host_args,
             max_runs,
             timeout,
+            hard_timeout,
             shutdown_timeout,
             no_stop_on_failure,
             no_deploy,
@@ -324,34 +328,35 @@ async fn main() -> anyhow::Result<()> {
                 .or_else(|| prof.as_ref().and_then(|p| p.on_failure.clone()))
                 .or_else(|| config.hooks.on_failure.clone());
 
-            test::run(
-                &config,
-                &project_root,
+            test::run(&config, &project_root, {
+                let resolved_timeout_secs = resolve!(timeout, prof, timeout, 300);
                 test::TestConfig {
                     network: resolved_network,
                     players: resolve!(players, prof, players, 8),
                     vm_args: vm_args.or_else(|| prof.as_ref().and_then(|p| p.vm_args.clone())),
-                    host_args: host_args.or_else(|| prof.as_ref().and_then(|p| p.host_args.clone())),
+                    host_args: host_args
+                        .or_else(|| prof.as_ref().and_then(|p| p.host_args.clone())),
                     max_runs: resolve!(max_runs, prof, max_runs, 1),
-                    timeout: std::time::Duration::from_secs(resolve!(timeout, prof, timeout, 300)),
-                    shutdown_timeout: std::time::Duration::from_secs(
-                        resolve!(shutdown_timeout, prof, shutdown_timeout, 5),
+                    timeout: std::time::Duration::from_secs(resolved_timeout_secs),
+                    hard_timeout: test::resolve_hard_timeout(
+                        std::time::Duration::from_secs(resolved_timeout_secs),
+                        hard_timeout
+                            .or_else(|| prof.as_ref().and_then(|p| p.hard_timeout))
+                            .map(std::time::Duration::from_secs),
                     ),
+                    shutdown_timeout: std::time::Duration::from_secs(resolve!(
+                        shutdown_timeout,
+                        prof,
+                        shutdown_timeout,
+                        5
+                    )),
                     stop_on_failure: !no_stop_on_failure
                         && !prof
                             .as_ref()
                             .and_then(|p| p.no_stop_on_failure)
                             .unwrap_or(false),
-                    deploy: !no_deploy
-                        && !prof
-                            .as_ref()
-                            .and_then(|p| p.no_deploy)
-                            .unwrap_or(false),
-                    build: !no_build
-                        && !prof
-                            .as_ref()
-                            .and_then(|p| p.no_build)
-                            .unwrap_or(false),
+                    deploy: !no_deploy && !prof.as_ref().and_then(|p| p.no_deploy).unwrap_or(false),
+                    build: !no_build && !prof.as_ref().and_then(|p| p.no_build).unwrap_or(false),
                     filter_pattern: filter_pattern
                         .or_else(|| prof.as_ref().and_then(|p| p.filter_pattern.clone())),
                     output_file: output_file.or_else(|| {
@@ -375,8 +380,8 @@ async fn main() -> anyhow::Result<()> {
                     on_failure: resolved_on_failure,
                     exit_codes: config.exit_codes.clone(),
                     strace,
-                },
-            )
+                }
+            })
             .await?;
         }
 
@@ -422,8 +427,10 @@ async fn main() -> anyhow::Result<()> {
         } => {
             // Resolve chaos profile if specified
             let (lat, jit, los, rat) = if let Some(ref name) = chaos_profile {
-                let profile = config::lookup_chaos_profile(&project_root, name)
-                    .ok_or_else(|| anyhow::anyhow!("Chaos profile '{name}' not found in steampipe.toml"))?;
+                let profile =
+                    config::lookup_chaos_profile(&project_root, name).ok_or_else(|| {
+                        anyhow::anyhow!("Chaos profile '{name}' not found in steampipe.toml")
+                    })?;
                 (profile.latency, profile.jitter, profile.loss, profile.rate)
             } else {
                 (latency, jitter, loss, rate)
@@ -448,7 +455,13 @@ async fn main() -> anyhow::Result<()> {
             if clear {
                 history::clear(&config.state_dir)?;
             } else if let Some(fmt) = format {
-                history::export(&config.state_dir, last, fmt, output.as_deref(), &config.exit_codes)?;
+                history::export(
+                    &config.state_dir,
+                    last,
+                    fmt,
+                    output.as_deref(),
+                    &config.exit_codes,
+                )?;
             } else {
                 match action {
                     None => history::show(&config.state_dir, last, &config.exit_codes)?,
@@ -477,14 +490,13 @@ async fn main() -> anyhow::Result<()> {
             target,
             login_state_dir,
         } => {
-            steam::clean_logins(
-                &config.vms,
-                login_state_dir.as_deref(),
-                target.as_deref(),
-            )?;
+            steam::clean_logins(&config.vms, login_state_dir.as_deref(), target.as_deref())?;
         }
         Commands::Watch { interval } => watch::run(&config, interval).await?,
-        Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } | Commands::Mcp => {
+        Commands::Init
+        | Commands::YhConfig { .. }
+        | Commands::Completions { .. }
+        | Commands::Mcp => {
             unreachable!()
         }
     }

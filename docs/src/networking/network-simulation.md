@@ -1,10 +1,7 @@
-+++
-title = "Network Simulation"
-description = "Simulate real-world network conditions with tc netem"
-weight = 20
-+++
+# Network Simulation
 
-Simulate real-world network conditions on VM TAP devices using `tc netem`. Requires sudo.
+Simulate real-world network conditions on VM TAP devices using `tc netem`.
+Requires sudo.
 
 ## Usage
 
@@ -33,10 +30,10 @@ sudo cluster-ctl --vm-count 7 netem-reset
 
 Network simulation is useful for testing:
 
-- **Packet loss** — how your netcode handles dropped packets
-- **High latency** — behavior under intercontinental-scale delays
-- **Bandwidth limits** — constrained mobile or satellite connections
-- **Combined degradation** — realistic worst-case conditions
+- **Packet loss** - how your netcode handles dropped packets
+- **High latency** - behavior under intercontinental-scale delays
+- **Bandwidth limits** - constrained mobile or satellite connections
+- **Combined degradation** - realistic worst-case conditions
 
 ## Parameters
 

@@ -1,8 +1,4 @@
-+++
-title = "VM Lifecycle"
-description = "Starting, stopping, and managing VMs"
-weight = 30
-+++
+# VM Lifecycle
 
 ## Starting VMs
 
@@ -11,6 +7,7 @@ cluster-ctl --vm-count 7 up --runners-dir ./result
 ```
 
 For each VM:
+
 1. Stops any existing instance (PID file + orphan cleanup)
 2. Launches `<runners-dir>/vm-N/bin/microvm-run`
 3. Records PID in `$XDG_STATE_HOME/steampipe/vm-N.pid`
@@ -22,7 +19,8 @@ For each VM:
 cluster-ctl --vm-count 7 down
 ```
 
-Kills each VM by PID, cleans up orphaned `microvm@vm-N` processes, removes leftover socket files.
+Kills each VM by PID, cleans up orphaned `microvm@vm-N` processes, removes
+leftover socket files.
 
 ## Restarting
 
@@ -42,10 +40,10 @@ cluster-ctl --vm-count 7 status
 
 ```
 VM       IP             VM     SSH    Steam  Game
-────────────────────────────────────────────────────────
+--------------------------------------------------------
 vm-1     10.0.100.1     UP     OK     OK     OK
-vm-2     10.0.100.2     UP     OK     OK     ─
-vm-3     10.0.100.3     ─      ─      ─      ─
+vm-2     10.0.100.2     UP     OK     OK     -
+vm-3     10.0.100.3     -      -      -      -
 ```
 
 All checks run in parallel.
@@ -69,7 +67,8 @@ cluster-ctl --vm-count 7 snapshot-restore after-login
 cluster-ctl --vm-count 7 snapshot-delete old-snapshot
 ```
 
-> **Warning:** Snapshots of running VMs may be inconsistent. Always stop VMs before restoring.
+> **Warning:** Snapshots of running VMs may be inconsistent. Always stop VMs
+> before restoring.
 
 ## Diagnostics
 
@@ -81,4 +80,5 @@ cluster-ctl --vm-count 7 doctor
 cluster-ctl --vm-count 7 doctor --fix
 ```
 
-Checks state directory, PID files, orphaned processes, socket files, bridge interface, TAP devices, SSH key, and nftables rules.
+Checks state directory, PID files, orphaned processes, socket files, bridge
+interface, TAP devices, SSH key, and nftables rules.

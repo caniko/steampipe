@@ -1,7 +1,7 @@
 use crate::core::backend::Backend;
-use crate::ui::cli::DisplayMode;
 use crate::core::config::{ClusterConfig, VmDef, par_each_vm};
 use crate::game::steam;
+use crate::ui::cli::DisplayMode;
 
 /// Kill game process on a set of instances in parallel.
 pub async fn kill_games(backend: &Backend, vms: &[VmDef], binary_name: &str) {
@@ -62,7 +62,10 @@ pub async fn start_game<S>(
     let compositor = steam::compositor_setup(display, &config.vm_user);
     let extra = extra_args.join(" ");
 
-    println!("==> Starting game on {} VMs ({display})...", config.vms.len());
+    println!(
+        "==> Starting game on {} VMs ({display})...",
+        config.vms.len()
+    );
 
     let results = par_each_vm(&config.vms, |vm| {
         let backend = backend.clone();

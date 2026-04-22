@@ -38,10 +38,35 @@ pub struct RunResult {
 
 /// Run outcome.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeoutKind {
+    HeartbeatStall,
+    NoProgressTimeout,
+    HardTimeout,
+}
+
+impl TimeoutKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::HeartbeatStall => "HEARTBEAT_STALL",
+            Self::NoProgressTimeout => "NO_PROGRESS_TIMEOUT",
+            Self::HardTimeout => "HARD_TIMEOUT",
+        }
+    }
+
+    fn json_status(self) -> &'static str {
+        match self {
+            Self::HeartbeatStall => "heartbeat_stall",
+            Self::NoProgressTimeout => "no_progress_timeout",
+            Self::HardTimeout => "hard_timeout",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunStatus {
     Pass,
     Fail,
-    Timeout,
+    Timeout(TimeoutKind),
 }
 
 impl TestSession {
@@ -57,7 +82,10 @@ impl TestSession {
     }
 
     pub fn failed(&self) -> u32 {
-        self.runs.iter().filter(|r| r.status != RunStatus::Pass).count() as u32
+        self.runs
+            .iter()
+            .filter(|r| r.status != RunStatus::Pass)
+            .count() as u32
     }
 }
 
@@ -98,9 +126,9 @@ pub fn emit_junit(session: &TestSession) -> String {
                 ));
                 xml.push_str("  </testcase>\n");
             }
-            RunStatus::Timeout => {
+            RunStatus::Timeout(kind) => {
                 xml.push_str(">\n");
-                xml.push_str("    <failure message=\"TIMEOUT\" />\n");
+                xml.push_str(&format!("    <failure message=\"{}\" />\n", kind.label()));
                 xml.push_str("  </testcase>\n");
             }
         }
@@ -131,7 +159,7 @@ pub fn emit_jsonl(session: &TestSession) -> String {
             status: match run.status {
                 RunStatus::Pass => "pass",
                 RunStatus::Fail => "fail",
-                RunStatus::Timeout => "timeout",
+                RunStatus::Timeout(kind) => kind.json_status(),
             },
             exit_code: run.exit_code,
             exit_label: run.exit_label.clone(),
@@ -149,7 +177,10 @@ pub fn emit_jsonl(session: &TestSession) -> String {
 }
 
 /// Emit JUnit XML from history results (durations unavailable, set to 0).
-pub fn emit_junit_from_history(results: &[crate::history::TestResult], exit_code_map: &std::collections::HashMap<i32, String>) -> String {
+pub fn emit_junit_from_history(
+    results: &[crate::history::TestResult],
+    exit_code_map: &std::collections::HashMap<i32, String>,
+) -> String {
     let total_runs: u32 = results.iter().map(|r| r.passed + r.failed).sum();
     let total_failures: u32 = results.iter().map(|r| r.failed).sum();
 
@@ -244,7 +275,10 @@ mod tests {
 
     #[test]
     fn xml_escape_special_chars() {
-        assert_eq!(xml_escape("a<b>c&d\"e'f"), "a&lt;b&gt;c&amp;d&quot;e&apos;f");
+        assert_eq!(
+            xml_escape("a<b>c&d\"e'f"),
+            "a&lt;b&gt;c&amp;d&quot;e&apos;f"
+        );
     }
 
     #[test]
@@ -270,16 +304,16 @@ mod tests {
         let mut session = TestSession::new("lan", 2, 1);
         session.runs.push(RunResult {
             run_number: 1,
-            status: RunStatus::Timeout,
+            status: RunStatus::Timeout(TimeoutKind::HardTimeout),
             exit_code: None,
-            exit_label: "TIMEOUT".into(),
+            exit_label: "HARD_TIMEOUT".into(),
             duration: Duration::from_secs(300),
         });
         session.total_duration = Duration::from_secs(300);
 
         let xml = emit_junit(&session);
         assert!(xml.contains("failures=\"1\""));
-        assert!(xml.contains("message=\"TIMEOUT\""));
+        assert!(xml.contains("message=\"HARD_TIMEOUT\""));
     }
 
     #[test]
@@ -304,9 +338,18 @@ mod tests {
         for i in 1..=5 {
             session.runs.push(RunResult {
                 run_number: i,
-                status: if i % 2 == 0 { RunStatus::Fail } else { RunStatus::Pass },
+                status: if i % 2 == 0 {
+                    RunStatus::Fail
+                } else {
+                    RunStatus::Pass
+                },
                 exit_code: Some(if i % 2 == 0 { 11 } else { 0 }),
-                exit_label: if i % 2 == 0 { "DAG_VIOLATION" } else { "SUCCESS" }.into(),
+                exit_label: if i % 2 == 0 {
+                    "DAG_VIOLATION"
+                } else {
+                    "SUCCESS"
+                }
+                .into(),
                 duration: Duration::from_secs(i as u64 * 10),
             });
         }
@@ -339,9 +382,9 @@ mod tests {
         });
         session.runs.push(RunResult {
             run_number: 3,
-            status: RunStatus::Timeout,
+            status: RunStatus::Timeout(TimeoutKind::NoProgressTimeout),
             exit_code: None,
-            exit_label: "TIMEOUT".into(),
+            exit_label: "NO_PROGRESS_TIMEOUT".into(),
             duration: Duration::from_secs(300),
         });
 
@@ -351,13 +394,16 @@ mod tests {
 
         // Verify each line is valid JSON
         for line in &lines {
-            assert!(serde_json::from_str::<serde_json::Value>(line).is_ok(), "Invalid JSON: {line}");
+            assert!(
+                serde_json::from_str::<serde_json::Value>(line).is_ok(),
+                "Invalid JSON: {line}"
+            );
         }
 
         assert!(lines[0].contains("\"status\":\"pass\""));
         assert!(lines[1].contains("\"status\":\"fail\""));
         assert!(lines[1].contains("\"exit_code\":12"));
-        assert!(lines[2].contains("\"status\":\"timeout\""));
+        assert!(lines[2].contains("\"status\":\"no_progress_timeout\""));
     }
 
     #[test]
@@ -382,16 +428,25 @@ mod tests {
     fn session_failed_count() {
         let mut session = TestSession::new("lan", 2, 1);
         session.runs.push(RunResult {
-            run_number: 1, status: RunStatus::Pass,
-            exit_code: Some(0), exit_label: "SUCCESS".into(), duration: Duration::from_secs(1),
+            run_number: 1,
+            status: RunStatus::Pass,
+            exit_code: Some(0),
+            exit_label: "SUCCESS".into(),
+            duration: Duration::from_secs(1),
         });
         session.runs.push(RunResult {
-            run_number: 2, status: RunStatus::Fail,
-            exit_code: Some(11), exit_label: "DAG".into(), duration: Duration::from_secs(1),
+            run_number: 2,
+            status: RunStatus::Fail,
+            exit_code: Some(11),
+            exit_label: "DAG".into(),
+            duration: Duration::from_secs(1),
         });
         session.runs.push(RunResult {
-            run_number: 3, status: RunStatus::Timeout,
-            exit_code: None, exit_label: "TO".into(), duration: Duration::from_secs(1),
+            run_number: 3,
+            status: RunStatus::Timeout(TimeoutKind::HeartbeatStall),
+            exit_code: None,
+            exit_label: "TO".into(),
+            duration: Duration::from_secs(1),
         });
         assert_eq!(session.failed(), 2); // Fail + Timeout
     }
@@ -506,15 +561,15 @@ mod tests {
         let mut session = TestSession::new("lan", 2, 1);
         session.runs.push(RunResult {
             run_number: 1,
-            status: RunStatus::Timeout,
+            status: RunStatus::Timeout(TimeoutKind::HardTimeout),
             exit_code: None,
-            exit_label: "TIMEOUT".into(),
+            exit_label: "HARD_TIMEOUT".into(),
             duration: Duration::from_secs(300),
         });
         let jsonl = emit_jsonl(&session);
         let parsed: serde_json::Value = serde_json::from_str(jsonl.trim()).unwrap();
         assert!(parsed["exit_code"].is_null());
-        assert_eq!(parsed["status"], "timeout");
+        assert_eq!(parsed["status"], "hard_timeout");
     }
 
     #[test]
@@ -625,18 +680,34 @@ mod tests {
             crate::history::TestResult {
                 timestamp: "2024-01-01T00:00:00".into(),
                 network: "lan".into(),
-                players: 2, vm_count: 1, run_number: 1, max_runs: 1,
-                passed: 1, failed: 0, timed_out: 0, timeout_secs: 300,
+                players: 2,
+                vm_count: 1,
+                run_number: 1,
+                max_runs: 1,
+                passed: 1,
+                failed: 0,
+                timed_out: 0,
+                timeout_secs: 300,
                 exit_codes: vec![Some(0)],
-                git_sha: None, duration_secs: None, run_durations: None,
+                git_sha: None,
+                duration_secs: None,
+                run_durations: None,
             },
             crate::history::TestResult {
                 timestamp: "2024-01-02T00:00:00".into(),
                 network: "steam".into(),
-                players: 4, vm_count: 3, run_number: 1, max_runs: 2,
-                passed: 1, failed: 1, timed_out: 0, timeout_secs: 300,
+                players: 4,
+                vm_count: 3,
+                run_number: 1,
+                max_runs: 2,
+                passed: 1,
+                failed: 1,
+                timed_out: 0,
+                timeout_secs: 300,
                 exit_codes: vec![Some(0), Some(11)],
-                git_sha: None, duration_secs: None, run_durations: None,
+                git_sha: None,
+                duration_secs: None,
+                run_durations: None,
             },
         ];
         let empty = HashMap::new();

@@ -8,9 +8,9 @@ use rmcp::{
     tool, tool_handler, tool_router,
 };
 
-use crate::ui::cli::NetworkMode;
 use crate::core::config::{ClusterConfig, Unchecked, detect_project_root};
 use crate::core::state;
+use crate::ui::cli::NetworkMode;
 
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -66,17 +66,17 @@ pub struct ClusterParams {
 /// Build a ClusterConfig from MCP tool parameters.
 /// Also runs pre-flight cleanup (stale PIDs, orphaned processes, leftover sockets).
 /// Returns the config and an optional cleanup summary message.
-fn build_config(params: &ClusterParams) -> Result<(ClusterConfig<Unchecked>, Option<String>), ErrorData> {
+fn build_config(
+    params: &ClusterParams,
+) -> Result<(ClusterConfig<Unchecked>, Option<String>), ErrorData> {
     let project_root = detect_project_root()
         .map_err(|e| ErrorData::internal_error(format!("Cannot find project root: {e}"), None))?;
     let vm_count = params.vm_count.unwrap_or(match params.cluster.as_str() {
         "1v1" => 1,
         _ => 7,
     });
-    let mut config =
-        ClusterConfig::new(&project_root, vm_count, Some(&params.cluster), None).map_err(|e| {
-            ErrorData::internal_error(format!("Config error: {e}"), None)
-        })?;
+    let mut config = ClusterConfig::new(&project_root, vm_count, Some(&params.cluster), None)
+        .map_err(|e| ErrorData::internal_error(format!("Config error: {e}"), None))?;
 
     state::ensure_state_dir(&config.state_dir)
         .map_err(|e| ErrorData::internal_error(format!("State dir error: {e}"), None))?;
@@ -188,9 +188,12 @@ pub struct ClusterTestInput {
     /// Number of test runs (default: 1, max: 50).
     #[serde(default)]
     pub max_runs: Option<u32>,
-    /// Timeout per run in seconds (default: 300).
+    /// No-progress timeout per run in seconds (default: 300).
     #[serde(default)]
     pub timeout: Option<u64>,
+    /// Emergency wall-clock timeout per run in seconds. When omitted, a generous default is derived from `timeout`.
+    #[serde(default)]
+    pub hard_timeout: Option<u64>,
     /// Grace period (seconds) between SIGTERM and SIGKILL (default: 5).
     #[serde(default)]
     pub shutdown_timeout: Option<u64>,
@@ -267,9 +270,8 @@ impl SteampipeMcp {
             ErrorData::internal_error(format!("Failed to spawn nix run: {e}"), None)
         })?;
 
-        let output = wait_with_timeout(child, Duration::from_secs(timeout_secs)).map_err(|e| {
-            ErrorData::internal_error(format!("nix run failed: {e}"), None)
-        })?;
+        let output = wait_with_timeout(child, Duration::from_secs(timeout_secs))
+            .map_err(|e| ErrorData::internal_error(format!("nix run failed: {e}"), None))?;
 
         let combined = format!(
             "{}{}",
@@ -405,15 +407,10 @@ impl SteampipeMcp {
         }
 
         // Deploy (verbose=false to avoid stdout corruption)
-        let results = crate::deploy::deploy_to_vms(
-            &config.backend,
-            &config.vms,
-            &config,
-            &root,
-            false,
-        )
-        .await
-        .map_err(|e| ErrorData::internal_error(format!("Deploy failed: {e}"), None))?;
+        let results =
+            crate::deploy::deploy_to_vms(&config.backend, &config.vms, &config, &root, false)
+                .await
+                .map_err(|e| ErrorData::internal_error(format!("Deploy failed: {e}"), None))?;
 
         let mut text = String::new();
         let mut failed = 0;
@@ -434,7 +431,10 @@ impl SteampipeMcp {
         if failed > 0 {
             text.push_str(&format!("\n{failed} VM(s) failed deployment"));
         } else {
-            text.push_str(&format!("\nAll {} VM(s) deployed successfully", results.len()));
+            text.push_str(&format!(
+                "\nAll {} VM(s) deployed successfully",
+                results.len()
+            ));
         }
 
         // Verify
@@ -505,7 +505,7 @@ impl SteampipeMcp {
                 return Err(ErrorData::invalid_params(
                     format!("network must be \"lan\" or \"steam\", got \"{other}\""),
                     None,
-                ))
+                ));
             }
         };
 
@@ -537,6 +537,10 @@ impl SteampipeMcp {
             host_args: input.host_args,
             max_runs: input.max_runs.unwrap_or(1).min(50),
             timeout: Duration::from_secs(input.timeout.unwrap_or(300)),
+            hard_timeout: crate::test::resolve_hard_timeout(
+                Duration::from_secs(input.timeout.unwrap_or(300)),
+                input.hard_timeout.map(Duration::from_secs),
+            ),
             shutdown_timeout: Duration::from_secs(input.shutdown_timeout.unwrap_or(5)),
             stop_on_failure: input.stop_on_failure.unwrap_or(true),
             deploy: input.deploy.unwrap_or(true),
@@ -561,9 +565,7 @@ impl SteampipeMcp {
             Ok(output) => Ok(CallToolResult::success(vec![Content::text(output)])),
             Err(e) => {
                 // test::run returns Err with the output embedded in the error message
-                Ok(CallToolResult::success(vec![Content::text(format!(
-                    "{e}"
-                ))]))
+                Ok(CallToolResult::success(vec![Content::text(format!("{e}"))]))
             }
         }
     }
@@ -669,10 +671,9 @@ fn wait_with_timeout(
 
     match rx.recv_timeout(timeout) {
         Ok(result) => result.map_err(|e| format!("IO error: {e}")),
-        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
-            "timed out after {}s",
-            timeout.as_secs()
-        )),
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            Err(format!("timed out after {}s", timeout.as_secs()))
+        }
         Err(mpsc::RecvTimeoutError::Disconnected) => Err("child process thread panicked".into()),
     }
 }

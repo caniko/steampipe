@@ -1,10 +1,6 @@
-+++
-title = "Quick Start"
-description = "From zero to running an 8-player test"
-weight = 20
-+++
+# Quick Start
 
-This walks through a complete session — from zero to running an 8-player test.
+This walks through a complete session - from zero to running an 8-player test.
 
 ## 1. Generate a config file
 
@@ -39,7 +35,8 @@ udp_port = 27100
 sudo cluster-ctl --vm-count 7 net-up
 ```
 
-This creates a bridge interface, TAP devices for each VM, and nftables NAT rules.
+This creates a bridge interface, TAP devices for each VM, and nftables NAT
+rules.
 
 ## 3. Start VMs
 
@@ -52,7 +49,7 @@ Each VM boots and `cluster-ctl` waits for SSH to become reachable.
 ## 4. Log into Steam
 
 ```bash
-# Interactive mode — VNC into each VM to complete login + Steam Guard
+# Interactive mode - VNC into each VM to complete login + Steam Guard
 cluster-ctl --vm-count 7 steam-login --login-runners-dir ./result-login
 
 # Or automated mode with a credentials file

@@ -1,8 +1,4 @@
-+++
-title = "Test History"
-description = "Viewing and managing test results"
-weight = 20
-+++
+# Test History
 
 Results are automatically saved to `$XDG_STATE_HOME/steampipe/test_history.json`.
 
@@ -23,7 +19,7 @@ cluster-ctl --vm-count 7 history --clear
 
 ```
 Timestamp            Net     P    VMs  Pass   Fail   T/O    Result
-──────────────────────────────────────────────────────────────────────
+----------------------------------------------------------------------
 2026-03-17T14:30:00  lan     8    7    5      0      0      PASS
 2026-03-17T15:00:00  steam   4    3    3      2      1      FAIL
 
@@ -42,7 +38,8 @@ Timestamp            Net     P    VMs  Pass   Fail   T/O    Result
 cluster-ctl --vm-count 7 watch
 ```
 
-Full-screen terminal UI showing real-time status of all VMs. Controls: `q` quit, `r` refresh.
+Full-screen terminal UI showing real-time status of all VMs. Controls: `q`
+quit, `r` refresh.
 
 ### Live log streaming
 

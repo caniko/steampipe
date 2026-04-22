@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use crate::core::backend::Backend;
 use crate::core::config::{ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
-use crate::vm::lease;
 use crate::core::state;
+use crate::vm::lease;
 
 /// Status of a single instance: process, connectivity, Steam, game.
 pub struct VmStatus {

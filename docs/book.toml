@@ -1,0 +1,14 @@
+[book]
+title = "steampipe Documentation"
+authors = ["Can Tartanoglu"]
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+site-url = "/steampipe/docs/"
+default-theme = "coal"
+preferred-dark-theme = "coal"
+git-repository-url = "https://codeberg.org/caniko/steampipe"

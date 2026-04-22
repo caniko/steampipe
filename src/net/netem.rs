@@ -195,8 +195,7 @@ mod tests {
 
     #[test]
     fn netem_args_combined() {
-        let args =
-            build_netem_args("tap-vm0", Some(50), Some(10), Some(1.5), Some(1000)).unwrap();
+        let args = build_netem_args("tap-vm0", Some(50), Some(10), Some(1.5), Some(1000)).unwrap();
         // Verify all params present in correct order: delay 50ms 10ms loss 1.5% rate 1000kbit
         let delay_pos = args.iter().position(|a| a == "delay").unwrap();
         assert_eq!(args[delay_pos + 1], "50ms");
@@ -223,7 +222,10 @@ mod tests {
     #[test]
     fn validate_loss_out_of_range_fails() {
         let err = validate_netem_params(None, None, Some(101.0)).unwrap_err();
-        assert!(err.to_string().contains("loss percentage must be between 0 and 100"));
+        assert!(
+            err.to_string()
+                .contains("loss percentage must be between 0 and 100")
+        );
     }
 
     #[test]
