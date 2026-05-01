@@ -450,12 +450,16 @@ async fn automated_login(
 
     let log_dir = format!("/home/{vm_user}/.local/share/Steam/logs");
     let log = format!("{log_dir}/connection_log.txt");
+    let bootstrap_log = format!("{log_dir}/bootstrap_log.txt");
+    let cef_log = format!("{log_dir}/cef_log.txt");
     let stdout_log = format!("{log_dir}/steampipe_login_stdout.log");
     let weston = weston_setup(vm_user);
     let cmd = format!(
         r#"{weston}
 mkdir -p {log_dir}
 : > {log} 2>/dev/null
+: > {bootstrap_log} 2>/dev/null
+: > {cef_log} 2>/dev/null
 : > {stdout_log} 2>/dev/null
 steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
 for i in $(seq 1 180); do
@@ -465,11 +469,12 @@ for i in $(seq 1 180); do
     fi
     sleep 1
 done
-if grep -q 'Update complete, launching' {log_dir}/bootstrap_log.txt 2>/dev/null; then
+if grep -q 'Update complete, launching' {bootstrap_log} 2>/dev/null; then
     echo STEAM_LOGIN_RETRY_AFTER_UPDATE
     pkill -x steam 2>/dev/null || true
     sleep 5
     : > {log} 2>/dev/null
+    : > {cef_log} 2>/dev/null
     : > {stdout_log} 2>/dev/null
     steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
     for i in $(seq 1 180); do
@@ -481,12 +486,16 @@ if grep -q 'Update complete, launching' {log_dir}/bootstrap_log.txt 2>/dev/null;
     done
 fi
 echo STEAM_LOGIN_TIMEOUT
+echo "--- steam processes ---"
+pgrep -af steam 2>/dev/null || true
+echo "--- log directory ---"
+ls -la {log_dir} 2>/dev/null || true
 echo "--- connection_log.txt tail ---"
 tail -n 80 {log} 2>/dev/null || true
 echo "--- bootstrap_log.txt tail ---"
-tail -n 80 {log_dir}/bootstrap_log.txt 2>/dev/null || true
+tail -n 80 {bootstrap_log} 2>/dev/null || true
 echo "--- cef_log.txt tail ---"
-tail -n 80 {log_dir}/cef_log.txt 2>/dev/null || true
+tail -n 80 {cef_log} 2>/dev/null || true
 echo "--- steam stdout/stderr tail ---"
 tail -n 80 {stdout_log} 2>/dev/null || true"#,
     );
