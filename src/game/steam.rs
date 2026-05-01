@@ -576,17 +576,17 @@ async fn interactive_login(
         export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
         mkdir -p $XDG_RUNTIME_DIR
         if ! pgrep -x sway >/dev/null; then
-            sway >/dev/null 2>&1 &
+            nohup env WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 sway >$XDG_RUNTIME_DIR/sway.log 2>&1 &
             sleep 2
         fi
         export WAYLAND_DISPLAY=wayland-1
         if ! pgrep -x wayvnc >/dev/null; then
-            wayvnc 0.0.0.0 5900 >/dev/null 2>&1 &
+            nohup wayvnc 0.0.0.0 5900 >$XDG_RUNTIME_DIR/wayvnc.log 2>&1 &
             sleep 1
         fi
         export DISPLAY=:0
         if ! pgrep -x steam >/dev/null; then
-            steam -cef-disable-gpu >/dev/null 2>&1 &
+            nohup steam -cef-disable-gpu >$XDG_RUNTIME_DIR/steam.log 2>&1 &
         fi
         "#
             ),
