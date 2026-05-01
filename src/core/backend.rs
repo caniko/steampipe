@@ -277,6 +277,7 @@ fn microvm_start(
     let mut command = std::process::Command::new(&runner);
     command
         .current_dir(&vm_dir)
+        .stdin(Stdio::null())
         .stdout(log_file.try_clone()?)
         .stderr(log_file);
     #[cfg(unix)]
