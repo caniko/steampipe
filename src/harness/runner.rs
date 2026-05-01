@@ -6,7 +6,9 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use regex::Regex;
@@ -87,6 +89,155 @@ struct VmHeartbeat<'a> {
     backend: &'a Backend,
     vms: &'a [(VmName, IpAddr)],
     remote_dir: &'a str,
+}
+
+struct LocalDisplay {
+    child: Child,
+    display: String,
+    xdg_runtime_dir: PathBuf,
+    extra_ld_library_path: Option<String>,
+}
+
+impl LocalDisplay {
+    fn maybe_start(host_args: &str) -> anyhow::Result<Option<Self>> {
+        if !should_auto_start_local_display(host_args, local_display_exists()) {
+            return Ok(None);
+        }
+
+        Self::start()
+            .map(Some)
+            .map_err(|err| anyhow::anyhow!("failed to start local Weston/Xwayland display: {err}"))
+    }
+
+    fn start() -> anyhow::Result<Self> {
+        let runtime =
+            std::env::temp_dir().join(format!("steampipe-xwayland-{}", std::process::id()));
+        std::fs::create_dir_all(&runtime)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700))?;
+        }
+
+        let mut child = Command::new("weston")
+            .args([
+                "--backend=headless",
+                "--renderer=gl",
+                "--xwayland",
+                "--width=1280",
+                "--height=720",
+                "--idle-time=0",
+                "--no-config",
+            ])
+            .env("XDG_RUNTIME_DIR", &runtime)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("Weston stderr was not captured"))?;
+        let mut reader = BufReader::new(stderr);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut line = String::new();
+        let mut log_excerpt = String::new();
+        let display = loop {
+            line.clear();
+            let bytes = reader.read_line(&mut line)?;
+            if bytes == 0 {
+                anyhow::bail!("Weston exited before Xwayland display was ready: {log_excerpt}");
+            }
+            log_excerpt.push_str(&line);
+            if let Some(display) = parse_xwayland_display(&line) {
+                break display.to_string();
+            }
+            if Instant::now() > deadline {
+                anyhow::bail!("timed out waiting for Xwayland display: {log_excerpt}");
+            }
+        };
+
+        let _stderr_drain = std::thread::spawn(move || {
+            let mut sink = String::new();
+            for line in reader.lines().map_while(Result::ok) {
+                sink.push_str(&line);
+                if sink.len() > 8192 {
+                    sink.clear();
+                }
+            }
+        });
+
+        Ok(Self {
+            child,
+            display,
+            xdg_runtime_dir: runtime,
+            extra_ld_library_path: std::env::var("STEAMPIPE_XWAYLAND_LD_LIBRARY_PATH").ok(),
+        })
+    }
+
+    fn apply_to(&self, command: &mut Command) {
+        command.env("DISPLAY", &self.display);
+        command.env("XDG_RUNTIME_DIR", &self.xdg_runtime_dir);
+        command.env("WINIT_UNIX_BACKEND", "x11");
+    }
+
+    fn extra_ld_library_path(&self) -> Option<&str> {
+        self.extra_ld_library_path.as_deref()
+    }
+}
+
+impl Drop for LocalDisplay {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        let _ = std::fs::remove_dir_all(&self.xdg_runtime_dir);
+    }
+}
+
+fn local_display_exists() -> bool {
+    std::env::var_os("DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_DISPLAY").is_some()
+        || std::env::var_os("WAYLAND_SOCKET").is_some()
+}
+
+fn should_auto_start_local_display(host_args: &str, has_display: bool) -> bool {
+    !has_display && !host_args.split_whitespace().any(|arg| arg == "--headless")
+}
+
+fn parse_xwayland_display(line: &str) -> Option<&str> {
+    let marker = "xserver listening on display ";
+    let start = line.find(marker)? + marker.len();
+    line[start..].split_whitespace().next()
+}
+
+fn fatal_output_marker(output: &str) -> Option<&'static str> {
+    const MARKERS: [(&str, &str); 7] = [
+        ("panicked at", "PANIC"),
+        ("thread '", "PANIC"),
+        ("[FATAL]", "FATAL"),
+        ("STEAM_UNAVAILABLE", "STEAM_UNAVAILABLE"),
+        ("DAG_VIOLATION", "DAG_VIOLATION"),
+        ("DAG.VIOLATION", "DAG_VIOLATION"),
+        ("DESYNC", "DESYNC"),
+    ];
+
+    for (needle, label) in MARKERS {
+        if output.contains(needle) {
+            return Some(label);
+        }
+    }
+
+    for line in output.lines() {
+        if line.contains("Graceful shutdown: exit_code=")
+            && !line.contains("Graceful shutdown: exit_code=0")
+        {
+            return Some("GRACEFUL_SHUTDOWN_ERROR");
+        }
+    }
+
+    None
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
@@ -507,6 +658,15 @@ pub async fn run<S>(
         .host_args
         .as_deref()
         .unwrap_or(&default_host_args);
+    let local_display = LocalDisplay::maybe_start(host_args)?;
+    if let Some(display) = &local_display {
+        print_and_push(
+            &mut output,
+            &format!("=== LOCAL XWAYLAND DISPLAY {} ===", display.display),
+            verbose,
+        );
+        output.push('\n');
+    }
 
     let mut passed = 0u32;
     let mut failed = 0u32;
@@ -554,14 +714,25 @@ pub async fn run<S>(
         }
         local_cmd.current_dir(project_root);
         local_cmd.env("BEVY_ASSET_ROOT", project_root);
+        if let Some(display) = &local_display {
+            display.apply_to(&mut local_cmd);
+        }
+        let mut ld_paths = Vec::new();
         if let Some(lib_dir) = config.steam_api_lib.parent() {
-            let ld_path = std::env::var("LD_LIBRARY_PATH").unwrap_or_default();
-            let new_ld_path = if ld_path.is_empty() {
-                lib_dir.to_string_lossy().into_owned()
-            } else {
-                format!("{}:{}", lib_dir.display(), ld_path)
-            };
-            local_cmd.env("LD_LIBRARY_PATH", new_ld_path);
+            ld_paths.push(lib_dir.to_string_lossy().into_owned());
+        }
+        if let Some(display) = &local_display
+            && let Some(extra) = display.extra_ld_library_path()
+        {
+            ld_paths.push(extra.to_string());
+        }
+        if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
+            && !existing.is_empty()
+        {
+            ld_paths.push(existing);
+        }
+        if !ld_paths.is_empty() {
+            local_cmd.env("LD_LIBRARY_PATH", ld_paths.join(":"));
         }
         if verbose {
             local_cmd.stdout(std::process::Stdio::inherit());
@@ -663,11 +834,30 @@ pub async fn run<S>(
             output.push('\n');
         }
 
+        let local_fatal = fatal_output_marker(&combined);
+        let mut vm_logs_for_report: Option<Vec<(String, String)>> = None;
+        let mut vm_fatal = None;
+        if monitor_failure.is_none() && exit_code == Some(0) && local_fatal.is_none() {
+            let mut logs = Vec::new();
+            for vm in target_vms {
+                let log =
+                    collect_vm_log(backend, &vm.ip, &config.remote_dir, &config.log_file, 50).await;
+                if vm_fatal.is_none()
+                    && let Some(label) = fatal_output_marker(&log)
+                {
+                    vm_fatal = Some(label);
+                }
+                logs.push((vm.name.to_string(), log));
+            }
+            vm_logs_for_report = Some(logs);
+        }
+
         // Classify result
         let failure_code: Option<i32>;
         let recorded_exit_code: Option<i32>;
         let run_status: RunStatus;
         let run_label: String;
+        let fatal_marker = local_fatal.or(vm_fatal);
         if let Some(failure) = monitor_failure.as_ref() {
             timed_out_count += 1;
             failed += 1;
@@ -676,6 +866,17 @@ pub async fn run<S>(
             run_status = RunStatus::Timeout(failure.kind);
             run_label = failure.kind.label().into();
             print_and_push(&mut output, &failure.banner, verbose);
+        } else if let Some(label) = fatal_marker {
+            failed += 1;
+            failure_code = Some(1);
+            recorded_exit_code = Some(1);
+            run_status = RunStatus::Fail;
+            run_label = label.into();
+            print_and_push(
+                &mut output,
+                &format!("--- FAIL (fatal marker: {label}) ---"),
+                verbose,
+            );
         } else if exit_code == Some(0) {
             passed += 1;
             failure_code = None;
@@ -707,12 +908,20 @@ pub async fn run<S>(
         }
 
         // Collect VM logs on failure
-        if monitor_failure.is_some() || exit_code != Some(0) {
+        if monitor_failure.is_some() || exit_code != Some(0) || fatal_marker.is_some() {
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
-            for vm in target_vms {
-                output.push_str(&format!("  [{}]:\n", vm.name));
-                let log =
-                    collect_vm_log(backend, &vm.ip, &config.remote_dir, &config.log_file, 30).await;
+            if vm_logs_for_report.is_none() {
+                let mut logs = Vec::new();
+                for vm in target_vms {
+                    let log =
+                        collect_vm_log(backend, &vm.ip, &config.remote_dir, &config.log_file, 30)
+                            .await;
+                    logs.push((vm.name.to_string(), log));
+                }
+                vm_logs_for_report = Some(logs);
+            }
+            for (name, log) in vm_logs_for_report.as_ref().into_iter().flatten() {
+                output.push_str(&format!("  [{name}]:\n"));
                 for line in log.lines() {
                     output.push_str(&format!("    {line}\n"));
                 }
@@ -1214,6 +1423,44 @@ mod tests {
         assert_eq!(parsed[0].round, 1);
         assert_eq!(parsed[0].turn, 2);
         assert_eq!(parsed[0].progress_seq, 3);
+    }
+
+    #[test]
+    fn xwayland_display_line_parses_display() {
+        assert_eq!(
+            parse_xwayland_display("[15:12:08.235] xserver listening on display :2\n"),
+            Some(":2")
+        );
+    }
+
+    #[test]
+    fn local_display_auto_start_gates_on_headless_and_existing_display() {
+        assert!(should_auto_start_local_display("--auto-host-steam", false));
+        assert!(!should_auto_start_local_display(
+            "--auto-host-steam --headless",
+            false
+        ));
+        assert!(!should_auto_start_local_display("--auto-host-steam", true));
+    }
+
+    #[test]
+    fn fatal_output_marker_detects_false_pass_signals() {
+        assert_eq!(
+            fatal_output_marker("thread 'main' panicked at src/main.rs:1"),
+            Some("PANIC")
+        );
+        assert_eq!(
+            fatal_output_marker("[FATAL] Steam client unavailable"),
+            Some("FATAL")
+        );
+        assert_eq!(
+            fatal_output_marker("Graceful shutdown: exit_code=19 (STEAM_UNAVAILABLE)"),
+            Some("STEAM_UNAVAILABLE")
+        );
+        assert_eq!(
+            fatal_output_marker("Graceful shutdown: exit_code=0 (SUCCESS)"),
+            None
+        );
     }
 
     #[test]

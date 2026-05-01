@@ -94,6 +94,51 @@ else
 fi
 "#;
 
+fn ensure_steam_script(vm_user: &str, compositor: &str) -> String {
+    let log = format!("/home/{vm_user}/.local/share/Steam/logs/connection_log.txt");
+    format!(
+        r#"{compositor}
+log="{log}"
+mkdir -p "$(dirname "$log")"
+wait_for_steam_ready() {{
+    for i in $(seq 1 60); do
+        if grep -q 'Logged On.*processing complete' "$log" 2>/dev/null; then
+            echo STEAM_READY
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}}
+
+if pgrep -x steam >/dev/null; then
+    if wait_for_steam_ready; then
+        exit 0
+    fi
+    echo "STALE_STEAM_RESTARTING"
+    pkill -TERM -x steam 2>/dev/null || true
+    sleep 3
+    pkill -KILL -x steam 2>/dev/null || true
+fi
+
+: > "$log" 2>/dev/null || true
+nohup steam -silent -cef-disable-gpu >/tmp/steampipe-steam-start.log 2>&1 &
+if wait_for_steam_ready; then
+    exit 0
+fi
+
+echo STEAM_TIMEOUT
+echo "--- steam processes ---"
+pgrep -af steam || true
+echo "--- connection log tail ---"
+tail -n 80 "$log" 2>/dev/null || true
+echo "--- steam start log tail ---"
+tail -n 80 /tmp/steampipe-steam-start.log 2>/dev/null || true
+exit 1
+"#
+    )
+}
+
 /// Ensure compositor + Steam are running on an instance, waiting for Steam's connection log.
 ///
 /// `compositor` is a shell snippet that starts the compositor (from [`compositor_setup`]).
@@ -104,23 +149,14 @@ pub async fn ensure_steam(
     vm_user: &str,
     compositor: &str,
 ) -> anyhow::Result<()> {
-    let log = format!("/home/{vm_user}/.local/share/Steam/logs/connection_log.txt");
-    let cmd = format!(
-        "{compositor}\
-         if pgrep -x steam >/dev/null; then \
-         echo STEAM_READY; exit 0; \
-         fi; \
-         : > {log} 2>/dev/null; \
-         nohup steam -silent >/dev/null 2>&1 & \
-         for i in $(seq 1 60); do \
-         if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then \
-         echo STEAM_READY; exit 0; \
-         fi; sleep 1; done; \
-         echo STEAM_TIMEOUT"
-    );
+    let cmd = ensure_steam_script(vm_user, compositor);
     let result = backend.run_cmd(ip, &cmd).await;
     if !result.success || !result.stdout.contains("STEAM_READY") {
-        anyhow::bail!("Steam failed on {ip}: {}", result.stderr);
+        anyhow::bail!(
+            "Steam failed on {ip}: stdout:\n{}\nstderr:\n{}",
+            result.stdout,
+            result.stderr
+        );
     }
     Ok(())
 }
@@ -1400,6 +1436,20 @@ mod tests {
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
+    }
+
+    #[test]
+    fn ensure_steam_script_restarts_stale_steam_before_ready() {
+        let script = ensure_steam_script("testuser", "export DISPLAY=:0\n");
+        assert!(script.contains("wait_for_steam_ready"));
+        assert!(script.contains("STALE_STEAM_RESTARTING"));
+        assert!(script.contains("pkill -TERM -x steam"));
+        assert!(script.contains("Logged On.*processing complete"));
+        assert!(script.contains("connection log tail"));
+        assert!(
+            !script.contains("pgrep -x steam >/dev/null; then          echo STEAM_READY"),
+            "must not accept a running Steam process as ready without log verification"
+        );
     }
 
     #[test]

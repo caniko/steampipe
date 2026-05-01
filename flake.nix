@@ -101,7 +101,20 @@
         version = "0.1.0";
         src = ./.;
         cargoHash = "sha256-nCQmInUswiHYEXNPSU7eOU43xmw9jgbm+WlB7IM9cmI=";
-        nativeBuildInputs = [toolchain];
+        nativeBuildInputs = [toolchain pkgs.makeWrapper];
+        postInstall = ''
+          wrapProgram $out/bin/cluster-ctl \
+            --prefix PATH : ${lib.makeBinPath [pkgs.weston pkgs.xwayland]} \
+            --set-default STEAMPIPE_XWAYLAND_LD_LIBRARY_PATH ${
+              lib.makeLibraryPath [
+                pkgs.libx11
+                pkgs.libxcursor
+                pkgs.libXi
+                pkgs.libXrandr
+                pkgs.libglvnd
+              ]
+            }
+        '';
       };
     in {
       packages = {
