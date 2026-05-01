@@ -577,7 +577,7 @@ async fn automated_login(
             vm.name
         );
         println!(
-            "  Or use the project wrapper: nix run .#cluster-steam-guard -- {} --code <CODE>",
+            "  Or use the project wrapper: nix run .#cluster-steam-guard -- {} --credentials <credentials.toml> --code <CODE>",
             vm.name
         );
         return Ok(LoginOutcome::LeftRunning);
@@ -596,6 +596,7 @@ fn steamcmd_bootstrap_command(vm_user: &str, steam_user: &str, steam_pass: &str)
 SESSION="steampipe-steamcmd-login"
 LOG="$HOME/.local/share/Steam/logs/steampipe_steamcmd_login.log"
 STATUS="$HOME/.local/share/Steam/logs/steampipe_steamcmd_status"
+RUNNER="$HOME/.local/share/Steam/logs/steampipe_steamcmd_login.sh"
 mkdir -p "$HOME/.steam/steamcmd" "$HOME/.local/share/Steam/config" "$(dirname "$LOG")"
 if ! command -v tmux >/dev/null 2>&1; then
     echo STEAMCMD_TMUX_MISSING
@@ -604,7 +605,17 @@ fi
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 : > "$LOG"
 rm -f "$STATUS"
-tmux new-session -d -s "$SESSION" "export HOME='{home}'; steamcmd +login '{user}' '{pass}' +quit; code=\$?; echo \$code > '$STATUS'; echo STEAMCMD_EXIT:\$code"
+cat > "$RUNNER" <<'STEAMPIPE_STEAMCMD_LOGIN'
+#!/bin/sh
+export HOME='{home}'
+steamcmd +login '{user}' '{pass}' +quit
+code=$?
+echo "$code" > '{home}/.local/share/Steam/logs/steampipe_steamcmd_status'
+echo "STEAMCMD_EXIT:$code"
+exit "$code"
+STEAMPIPE_STEAMCMD_LOGIN
+chmod 700 "$RUNNER"
+tmux new-session -d -s "$SESSION" "$RUNNER"
 tmux pipe-pane -o -t "$SESSION" "cat >> '$LOG'"
 echo STEAMCMD_STARTED"#
     )
@@ -1113,12 +1124,15 @@ mod tests {
 
     #[test]
     fn steamcmd_command_is_redacted_in_diagnostics() {
-        let command = steamcmd_bootstrap_command("chessbender", "account", "pa'ss guard");
+        let command = steamcmd_bootstrap_command("chessbender", "account", "pa'ss guard $TOKEN");
         assert!(command.contains("steamcmd +login"));
-        assert!(command.contains("'pa'\\''ss guard'"));
+        assert!(command.contains("'pa'\\''ss guard $TOKEN'"));
 
-        let diagnostic = redact_sensitive(&format!("failed command: {command}"), &["pa'ss guard"]);
-        assert!(!diagnostic.contains("pa'ss guard"));
+        let diagnostic = redact_sensitive(
+            &format!("failed command: {command}"),
+            &["pa'ss guard $TOKEN"],
+        );
+        assert!(!diagnostic.contains("pa'ss guard $TOKEN"));
         assert!(diagnostic.contains("[REDACTED]"));
     }
 
@@ -1130,6 +1144,15 @@ mod tests {
         assert!(script.contains("tmux pipe-pane"));
         assert!(script.contains("steampipe_steamcmd_status"));
         assert!(script.contains("STEAMCMD_STARTED"));
+    }
+
+    #[test]
+    fn steamcmd_command_runs_credentials_from_script_not_tmux_shell_string() {
+        let script = steamcmd_bootstrap_command("chessbender", "account", "pa$`ss");
+        assert!(script.contains("cat > \"$RUNNER\" <<'STEAMPIPE_STEAMCMD_LOGIN'"));
+        assert!(script.contains("steamcmd +login 'account' 'pa$`ss' +quit"));
+        assert!(script.contains("tmux new-session -d -s \"$SESSION\" \"$RUNNER\""));
+        assert!(!script.contains("tmux new-session -d -s \"$SESSION\" \"export HOME"));
     }
 
     #[test]
