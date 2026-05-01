@@ -564,6 +564,34 @@ mod tests {
     }
 
     #[test]
+    fn steam_login_target_accepts_global_credentials_after_subcommand() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam-login",
+            "vm-1",
+            "--credentials",
+            "/etc/steampipe/credentials.toml",
+        ]);
+        assert_eq!(
+            cli.credentials.as_deref(),
+            Some(std::path::Path::new("/etc/steampipe/credentials.toml"))
+        );
+        match cli.command {
+            Commands::SteamLogin {
+                target,
+                continue_from,
+                login_runners_dir,
+            } => {
+                assert_eq!(target.as_deref(), Some("vm-1"));
+                assert!(!continue_from);
+                assert!(login_runners_dir.is_none());
+            }
+            _ => panic!("expected SteamLogin command"),
+        }
+    }
+
+    #[test]
     fn logs_follow_with_target() {
         let cli = parse(&["--vm-count", "7", "logs", "--follow", "vm-2"]);
         match cli.command {

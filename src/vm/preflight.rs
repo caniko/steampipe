@@ -258,6 +258,7 @@ pub async fn ensure_vm_gpu(
 /// Parse the output of [`gpu_check_script`] to extract the card device path.
 ///
 /// Returns `Some("/dev/dri/card0")` on success, `None` on failure.
+#[cfg(test)]
 pub fn parse_gpu_check(stdout: &str) -> Option<&str> {
     stdout.trim().strip_prefix("gpu-ok ").map(|s| s.trim())
 }

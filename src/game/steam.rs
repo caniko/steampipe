@@ -1,3 +1,4 @@
+use std::io::{self, BufRead, ErrorKind};
 use std::path::Path;
 
 use crate::core::backend::Backend;
@@ -333,12 +334,20 @@ async fn login_single_vm(
     }
     println!("ready");
 
-    if let Some(creds) = creds {
+    let outcome = if let Some(creds) = creds {
         // Automated login via `steam -login`
         automated_login(backend, vm, creds, &config.vm_user).await?;
+        LoginOutcome::Completed
     } else {
         // Interactive VNC-based login (original flow)
-        interactive_login(backend, vm, &config.vm_user).await?;
+        interactive_login(backend, vm, &config.vm_user).await?
+    };
+
+    if outcome == LoginOutcome::LeftRunning {
+        println!("  {} left running for manual VNC login.", vm.name);
+        println!("  After completing Steam login, validate with `cluster-ctl accounts`.");
+        println!("  Stop the login VM with `cluster-ctl down` when you are done.");
+        return Ok(());
     }
 
     println!("  Shutting down Steam and VM...");
@@ -420,6 +429,12 @@ pub async fn auto_login<S>(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginOutcome {
+    Completed,
+    LeftRunning,
+}
+
 /// Automated login: starts weston, runs `steam -login`, waits for login confirmation,
 /// and optionally activates a game key.
 async fn automated_login(
@@ -433,26 +448,38 @@ async fn automated_login(
 
     println!("  Logging in as {}...", creds.steam_user);
 
-    let log = format!("/home/{vm_user}/.local/share/Steam/logs/connection_log.txt");
+    let log_dir = format!("/home/{vm_user}/.local/share/Steam/logs");
+    let log = format!("{log_dir}/connection_log.txt");
+    let stdout_log = format!("{log_dir}/steampipe_login_stdout.log");
     let weston = weston_setup(vm_user);
     let cmd = format!(
         r#"{weston}
+mkdir -p {log_dir}
 : > {log} 2>/dev/null
-steam -login '{user}' '{pass}' -silent -cef-disable-gpu >/dev/null 2>&1 &
-for i in $(seq 1 90); do
+: > {stdout_log} 2>/dev/null
+steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+for i in $(seq 1 180); do
     if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then
         echo STEAM_LOGIN_OK
         exit 0
     fi
     sleep 1
 done
-echo STEAM_LOGIN_TIMEOUT"#,
+echo STEAM_LOGIN_TIMEOUT
+echo "--- connection_log.txt tail ---"
+tail -n 80 {log} 2>/dev/null || true
+echo "--- bootstrap_log.txt tail ---"
+tail -n 80 {log_dir}/bootstrap_log.txt 2>/dev/null || true
+echo "--- cef_log.txt tail ---"
+tail -n 80 {log_dir}/cef_log.txt 2>/dev/null || true
+echo "--- steam stdout/stderr tail ---"
+tail -n 80 {stdout_log} 2>/dev/null || true"#,
     );
 
     let result = backend.run_cmd(&vm.ip, &cmd).await;
     let output = result.stdout.trim();
 
-    if !output.contains("STEAM_LOGIN_OK") {
+    if !steam_login_succeeded(output) {
         anyhow::bail!(
             "{}: Steam login failed ({}). stderr: {}",
             vm.name,
@@ -482,7 +509,11 @@ echo KEY_SUBMITTED"#,
 }
 
 /// Interactive VNC-based login (original flow).
-async fn interactive_login(backend: &Backend, vm: &VmDef, vm_user: &str) -> anyhow::Result<()> {
+async fn interactive_login(
+    backend: &Backend,
+    vm: &VmDef,
+    vm_user: &str,
+) -> anyhow::Result<LoginOutcome> {
     println!("  Starting sway + wayvnc + Steam...");
     backend
         .run_cmd(
@@ -517,17 +548,28 @@ async fn interactive_login(backend: &Backend, vm: &VmDef, vm_user: &str) -> anyh
     println!();
 
     let stdin = std::io::stdin();
+    let mut stdin = stdin.lock();
     loop {
-        let mut input = String::new();
-        stdin.read_line(&mut input)?;
+        let Some(input) = read_stdin_line(&mut stdin)? else {
+            println!("  stdin is nonblocking; leaving the VM running for manual VNC login.");
+            println!(
+                "  VNC into {}:5900, complete Steam login, then run `cluster-ctl accounts`.",
+                vm.ip
+            );
+            println!("  Stop the login VM with `cluster-ctl down` when finished.");
+            return Ok(LoginOutcome::LeftRunning);
+        };
         let input = input.trim();
 
         if input.is_empty() {
             break;
         } else if input == "p" {
             println!("  Paste text (will be typed into focused VM window):");
-            let mut text = String::new();
-            stdin.read_line(&mut text)?;
+            let Some(text) = read_stdin_line(&mut stdin)? else {
+                println!("  stdin is nonblocking; paste was not sent.");
+                println!("  Continue in VNC, then run `cluster-ctl accounts` to validate.");
+                return Ok(LoginOutcome::LeftRunning);
+            };
             let text = text.trim_end_matches('\n');
             if !text.is_empty() {
                 let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
@@ -543,7 +585,28 @@ async fn interactive_login(backend: &Backend, vm: &VmDef, vm_user: &str) -> anyh
         }
     }
 
-    Ok(())
+    Ok(LoginOutcome::Completed)
+}
+
+fn read_stdin_line<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
+    let mut input = String::new();
+    match reader.read_line(&mut input) {
+        Ok(_) => Ok(Some(input)),
+        Err(error) if is_nonblocking_stdin_error(&error) => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_nonblocking_stdin_error(error: &io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::WouldBlock)
+        || error.raw_os_error() == Some(11)
+        || error
+            .to_string()
+            .contains("Resource temporarily unavailable")
+}
+
+fn steam_login_succeeded(output: &str) -> bool {
+    output.lines().any(|line| line.trim() == "STEAM_LOGIN_OK")
 }
 
 /// Escape single quotes for safe shell interpolation inside single-quoted strings.
@@ -625,6 +688,25 @@ mod tests {
     #[test]
     fn shell_escape_empty() {
         assert_eq!(shell_escape(""), "");
+    }
+
+    #[test]
+    fn steam_login_succeeded_requires_exact_marker_line() {
+        assert!(steam_login_succeeded("noise\nSTEAM_LOGIN_OK\nmore noise"));
+        assert!(!steam_login_succeeded("STEAM_LOGIN_TIMEOUT"));
+        assert!(!steam_login_succeeded("NOT_STEAM_LOGIN_OK"));
+    }
+
+    #[test]
+    fn nonblocking_stdin_error_is_detected() {
+        let error = io::Error::from_raw_os_error(11);
+        assert!(is_nonblocking_stdin_error(&error));
+    }
+
+    #[test]
+    fn read_stdin_line_reads_normal_input() {
+        let mut input = io::Cursor::new("p\n");
+        assert_eq!(read_stdin_line(&mut input).unwrap().as_deref(), Some("p\n"));
     }
 
     // ── Compositor setup scripts ────────────────────────────────────────

@@ -642,7 +642,7 @@ impl SteampipeMcp {
         if !code_counts.is_empty() {
             text.push_str("\n\nFailure breakdown:");
             let mut codes: Vec<_> = code_counts.into_iter().collect();
-            codes.sort_by(|a, b| b.1.cmp(&a.1));
+            codes.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
             for (code, count) in codes {
                 text.push_str(&format!(
                     "\n  exit {code} ({}): {count}x",

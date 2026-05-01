@@ -34,6 +34,22 @@ pub fn available_ram() -> anyhow::Result<u64> {
     parse_mem_available(&contents)
 }
 
+/// Check whether there is enough RAM to start one more VM.
+/// Returns the current available RAM on success, or an error describing the shortfall.
+pub fn check_ram(req: &RamRequirements) -> anyhow::Result<u64> {
+    let avail = available_ram()?;
+    let needed = req.per_vm + req.host_reserve;
+    if avail < needed {
+        anyhow::bail!(
+            "insufficient RAM: {:.1} GB available, need {:.1} GB per VM + {:.1} GB host reserve",
+            avail as f64 / 1e9,
+            req.per_vm as f64 / 1e9,
+            req.host_reserve as f64 / 1e9,
+        );
+    }
+    Ok(avail)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,20 +74,4 @@ mod tests {
         let result = parse_mem_available(contents).unwrap();
         assert_eq!(result, 12345 * 1024);
     }
-}
-
-/// Check whether there is enough RAM to start one more VM.
-/// Returns the current available RAM on success, or an error describing the shortfall.
-pub fn check_ram(req: &RamRequirements) -> anyhow::Result<u64> {
-    let avail = available_ram()?;
-    let needed = req.per_vm + req.host_reserve;
-    if avail < needed {
-        anyhow::bail!(
-            "insufficient RAM: {:.1} GB available, need {:.1} GB per VM + {:.1} GB host reserve",
-            avail as f64 / 1e9,
-            req.per_vm as f64 / 1e9,
-            req.host_reserve as f64 / 1e9,
-        );
-    }
-    Ok(avail)
 }

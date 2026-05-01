@@ -901,7 +901,10 @@ pub async fn run<S>(
         fail_count: failed,
         total_count: total,
         timeout_count: timed_out_count,
-        pass_rate: if total > 0 { passed * 100 / total } else { 0 },
+        pass_rate: passed
+            .checked_mul(100)
+            .and_then(|count| count.checked_div(total))
+            .unwrap_or(0),
         duration: session.total_duration,
         exit_label: session
             .runs

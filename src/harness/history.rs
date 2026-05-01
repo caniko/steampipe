@@ -160,7 +160,7 @@ fn print_failure_breakdown(results: &[TestResult], exit_code_map: &HashMap<i32, 
     if !code_counts.is_empty() {
         println!("\n  Failure breakdown:");
         let mut codes: Vec<_> = code_counts.into_iter().collect();
-        codes.sort_by(|a, b| b.1.cmp(&a.1));
+        codes.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
         for (code, count) in codes {
             println!(
                 "    exit {code} ({}): {count}x",

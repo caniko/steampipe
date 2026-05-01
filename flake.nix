@@ -31,7 +31,12 @@
       };
       inherit (pkgs) lib;
 
-      toolchain = pkgs.rust-bin.nightly.latest.minimal;
+      toolchain = pkgs.rust-bin.nightly.latest.minimal.override {
+        extensions = [
+          "clippy"
+          "rustfmt"
+        ];
+      };
 
       docs = pkgs.stdenv.mkDerivation {
         pname = "steampipe-docs";
