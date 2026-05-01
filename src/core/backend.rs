@@ -155,6 +155,34 @@ impl Backend {
         }
     }
 
+    /// Run a command with stdin/stdout/stderr inherited from this process.
+    pub async fn run_cmd_interactive(&self, ip: &str, cmd: &str) -> anyhow::Result<bool> {
+        match self {
+            Self::MicroVm(b) => Ok(b.ssh.run_interactive(ip, cmd).await?),
+            Self::Docker(_) => {
+                let status = tokio::process::Command::new("docker")
+                    .args(["exec", "-i", ip, "sh", "-c", cmd])
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .status()
+                    .await?;
+                Ok(status.success())
+            }
+            Self::Local(b) => {
+                let status = tokio::process::Command::new("sh")
+                    .args(["-c", cmd])
+                    .current_dir(&b.work_dir)
+                    .stdin(Stdio::inherit())
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .status()
+                    .await?;
+                Ok(status.success())
+            }
+        }
+    }
+
     /// Upload files to a remote instance.
     pub async fn upload(&self, sources: &[&Path], ip: &str, dest: &str) -> anyhow::Result<()> {
         match self {

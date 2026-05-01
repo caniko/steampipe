@@ -343,7 +343,7 @@ async fn login_single_vm(
     println!("ready");
 
     let outcome = if let Some(creds) = creds {
-        // Automated login via `steam -login`
+        // Automated login via SteamCMD state bootstrap + GUI validation.
         automated_login(backend, vm, creds, &config.vm_user).await?;
         LoginOutcome::Completed
     } else {
@@ -444,19 +444,125 @@ enum LoginOutcome {
     LeftRunning,
 }
 
-/// Automated login: starts weston, runs `steam -login`, waits for login confirmation,
-/// and optionally activates a game key.
+/// Automated login: bootstraps account state with SteamCMD, starts Steam GUI,
+/// waits for GUI-side session evidence, and optionally activates a game key.
 async fn automated_login(
     backend: &Backend,
     vm: &VmDef,
     creds: &VmCredentials,
     vm_user: &str,
 ) -> anyhow::Result<()> {
-    let user = shell_escape(&creds.steam_user);
-    let pass = shell_escape(&creds.steam_pass);
-
     println!("  Logging in as {}...", creds.steam_user);
+    println!("  Running SteamCMD bootstrap. Enter Steam Guard code if prompted.");
 
+    let steamcmd = steamcmd_bootstrap_command(vm_user, &creds.steam_user, &creds.steam_pass);
+    let steamcmd_ok = backend
+        .run_cmd_interactive(&vm.ip, &steamcmd)
+        .await
+        .map_err(|e| anyhow::anyhow!("{}: SteamCMD bootstrap failed to start: {e}", vm.name))?;
+    if !steamcmd_ok {
+        anyhow::bail!(
+            "{}: SteamCMD bootstrap failed. Re-run without credentials to use VNC fallback.",
+            vm.name
+        );
+    }
+
+    println!("  Syncing SteamCMD login state into Steam GUI profile...");
+    let sync = backend
+        .run_cmd(&vm.ip, &steamcmd_state_sync_script(vm_user))
+        .await;
+    if !sync.success || !steamcmd_sync_succeeded(&sync.stdout) {
+        anyhow::bail!(
+            "{}: SteamCMD state sync failed. stdout: {} stderr: {}",
+            vm.name,
+            redact_sensitive(&sync.stdout, &[&creds.steam_pass]),
+            redact_sensitive(&sync.stderr, &[&creds.steam_pass])
+        );
+    }
+
+    println!("  Starting Steam GUI for session validation...");
+    let validate = backend
+        .run_cmd(&vm.ip, &steam_gui_validation_script(vm_user))
+        .await;
+    let output = redact_sensitive(validate.stdout.trim(), &[&creds.steam_pass]);
+    let stderr = redact_sensitive(validate.stderr.trim(), &[&creds.steam_pass]);
+
+    if !validate.success || !steam_login_succeeded(&output) {
+        anyhow::bail!(
+            "{}: Steam GUI validation failed ({}). stderr: {}. Use VNC fallback if Steam Guard requires GUI confirmation.",
+            vm.name,
+            output,
+            stderr
+        );
+    }
+    println!("  Login successful");
+
+    // Activate game key if provided
+    if let Some(key) = &creds.game_key {
+        println!("  Activating game key...");
+        let escaped_key = shell_escape(key);
+        let activate_cmd = format!(
+            r#"steam steam://registerkey/{escaped_key} &
+sleep 10
+echo KEY_SUBMITTED"#,
+        );
+        let key_result = backend.run_cmd(&vm.ip, &activate_cmd).await;
+        println!(
+            "  Game key activation submitted ({})",
+            key_result.stdout.trim()
+        );
+    }
+
+    Ok(())
+}
+
+fn steamcmd_bootstrap_command(vm_user: &str, steam_user: &str, steam_pass: &str) -> String {
+    let home = format!("/home/{vm_user}");
+    let user = shell_escape(steam_user);
+    let pass = shell_escape(steam_pass);
+    format!(
+        r#"export HOME='{home}'
+mkdir -p "$HOME/.steam/steamcmd" "$HOME/.local/share/Steam/config"
+steamcmd +login '{user}' '{pass}' +quit"#
+    )
+}
+
+fn steamcmd_state_sync_script(vm_user: &str) -> String {
+    format!(
+        r#"HOME=/home/{vm_user}
+GUI_STEAM="$HOME/.local/share/Steam"
+GUI_CONFIG="$GUI_STEAM/config"
+mkdir -p "$GUI_CONFIG"
+copied=0
+copy_file() {{
+    src="$1"
+    dest="$2"
+    if [ -f "$src" ]; then
+        mkdir -p "$dest"
+        cp -f "$src" "$dest/"
+        copied=$((copied + 1))
+        echo "copied:${{src#$HOME/}}"
+    fi
+}}
+for base in "$HOME/.steam/steamcmd" "$HOME/Steam" "$HOME/.local/share/Steam"; do
+    copy_file "$base/config/loginusers.vdf" "$GUI_CONFIG"
+    copy_file "$base/config/config.vdf" "$GUI_CONFIG"
+    copy_file "$base/config/registry.vdf" "$GUI_CONFIG"
+    copy_file "$base/registry.vdf" "$GUI_CONFIG"
+    for ssfn in "$base"/ssfn*; do
+        [ -f "$ssfn" ] || continue
+        copy_file "$ssfn" "$GUI_STEAM"
+    done
+done
+if [ "$copied" -eq 0 ]; then
+    echo STEAMCMD_SYNC_NO_ARTIFACTS
+    exit 1
+fi
+echo STEAMCMD_SYNC_OK"#
+    )
+}
+
+fn steam_gui_validation_script(vm_user: &str) -> String {
     let log_dir = format!("/home/{vm_user}/.local/share/Steam/logs");
     let log = format!("{log_dir}/connection_log.txt");
     let bootstrap_log = format!("{log_dir}/bootstrap_log.txt");
@@ -465,7 +571,7 @@ async fn automated_login(
     let updateui_log = format!("{log_dir}/updateui_child.txt");
     let stdout_log = format!("{log_dir}/steampipe_login_stdout.log");
     let weston = weston_setup(vm_user);
-    let cmd = format!(
+    format!(
         r#"{weston}
 mkdir -p {log_dir}
 : > {log} 2>/dev/null
@@ -474,11 +580,17 @@ mkdir -p {log_dir}
 : > {console_log} 2>/dev/null
 : > {updateui_log} 2>/dev/null
 : > {stdout_log} 2>/dev/null
+LOGIN_FILE="/home/{vm_user}/.local/share/Steam/config/loginusers.vdf"
+valid_login_file() {{
+    [ -s "$LOGIN_FILE" ] || return 1
+    grep -Eq '"[0-9]{{17}}"' "$LOGIN_FILE" || return 1
+    grep -Eq '"(PersonaName|AccountName)"' "$LOGIN_FILE" || return 1
+}}
 echo "STEAM_BIN=$(command -v steam || true)"
-steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+steam -silent -cef-disable-gpu >{stdout_log} 2>&1 &
 echo "STEAM_START_PID=$!"
-for i in $(seq 1 180); do
-    if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then
+for i in $(seq 1 240); do
+    if valid_login_file; then
         echo STEAM_LOGIN_OK
         exit 0
     fi
@@ -491,10 +603,10 @@ if grep -q 'Update complete, launching' {bootstrap_log} 2>/dev/null; then
     : > {log} 2>/dev/null
     : > {cef_log} 2>/dev/null
     : > {stdout_log} 2>/dev/null
-    steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+    steam -silent -cef-disable-gpu >{stdout_log} 2>&1 &
     echo "STEAM_RETRY_PID=$!"
-    for i in $(seq 1 180); do
-        if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then
+    for i in $(seq 1 240); do
+        if valid_login_file; then
             echo STEAM_LOGIN_OK
             exit 0
         fi
@@ -527,38 +639,7 @@ echo "--- updateui_child.txt tail ---"
 tail -n 80 {updateui_log} 2>/dev/null || true
 echo "--- steam stdout/stderr tail ---"
 tail -n 80 {stdout_log} 2>/dev/null || true"#,
-    );
-
-    let result = backend.run_cmd(&vm.ip, &cmd).await;
-    let output = result.stdout.trim();
-
-    if !steam_login_succeeded(output) {
-        anyhow::bail!(
-            "{}: Steam login failed ({}). stderr: {}",
-            vm.name,
-            output,
-            result.stderr.trim()
-        );
-    }
-    println!("  Login successful");
-
-    // Activate game key if provided
-    if let Some(key) = &creds.game_key {
-        println!("  Activating game key...");
-        let escaped_key = shell_escape(key);
-        let activate_cmd = format!(
-            r#"steam steam://registerkey/{escaped_key} &
-sleep 10
-echo KEY_SUBMITTED"#,
-        );
-        let key_result = backend.run_cmd(&vm.ip, &activate_cmd).await;
-        println!(
-            "  Game key activation submitted ({})",
-            key_result.stdout.trim()
-        );
-    }
-
-    Ok(())
+    )
 }
 
 /// Interactive VNC-based login (original flow).
@@ -663,6 +744,24 @@ fn steam_login_succeeded(output: &str) -> bool {
     output.lines().any(|line| line.trim() == "STEAM_LOGIN_OK")
 }
 
+fn steamcmd_sync_succeeded(output: &str) -> bool {
+    output.lines().any(|line| line.trim() == "STEAMCMD_SYNC_OK")
+}
+
+fn redact_sensitive(text: &str, secrets: &[&str]) -> String {
+    let mut redacted = text.to_owned();
+    for secret in secrets {
+        if !secret.is_empty() {
+            redacted = redacted.replace(secret, "[REDACTED]");
+            let escaped = shell_escape(secret);
+            if escaped != *secret {
+                redacted = redacted.replace(&escaped, "[REDACTED]");
+            }
+        }
+    }
+    redacted
+}
+
 /// Escape single quotes for safe shell interpolation inside single-quoted strings.
 fn shell_escape(s: &str) -> String {
     s.replace('\'', "'\\''")
@@ -749,6 +848,57 @@ mod tests {
         assert!(steam_login_succeeded("noise\nSTEAM_LOGIN_OK\nmore noise"));
         assert!(!steam_login_succeeded("STEAM_LOGIN_TIMEOUT"));
         assert!(!steam_login_succeeded("NOT_STEAM_LOGIN_OK"));
+    }
+
+    #[test]
+    fn steamcmd_sync_succeeded_requires_exact_marker_line() {
+        assert!(steamcmd_sync_succeeded(
+            "copied:.steam/steamcmd/config/config.vdf\nSTEAMCMD_SYNC_OK\n"
+        ));
+        assert!(!steamcmd_sync_succeeded("STEAMCMD_SYNC_NO_ARTIFACTS"));
+        assert!(!steamcmd_sync_succeeded("NOT_STEAMCMD_SYNC_OK"));
+    }
+
+    #[test]
+    fn steamcmd_command_is_redacted_in_diagnostics() {
+        let command = steamcmd_bootstrap_command("chessbender", "account", "pa'ss guard");
+        assert!(command.contains("steamcmd +login"));
+        assert!(command.contains("'pa'\\''ss guard'"));
+
+        let diagnostic = redact_sensitive(&format!("failed command: {command}"), &["pa'ss guard"]);
+        assert!(!diagnostic.contains("pa'ss guard"));
+        assert!(diagnostic.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn steamcmd_state_sync_targets_only_known_gui_artifacts() {
+        let script = steamcmd_state_sync_script("chessbender");
+        assert!(script.contains("$HOME/.steam/steamcmd"));
+        assert!(script.contains("$HOME/.local/share/Steam"));
+        assert!(script.contains("config/loginusers.vdf"));
+        assert!(script.contains("config/config.vdf"));
+        assert!(script.contains("registry.vdf"));
+        assert!(script.contains("ssfn*"));
+        assert!(script.contains("STEAMCMD_SYNC_OK"));
+    }
+
+    #[test]
+    fn steam_gui_validation_requires_gui_loginusers_evidence() {
+        let script = steam_gui_validation_script("chessbender");
+        assert!(
+            script.contains(
+                "LOGIN_FILE=\"/home/chessbender/.local/share/Steam/config/loginusers.vdf\""
+            )
+        );
+        assert!(script.contains("valid_login_file"));
+        assert!(script.contains("grep -Eq '\"[0-9]{17}\"'"));
+        assert!(script.contains("grep -Eq '\"(PersonaName|AccountName)\"'"));
+        assert!(!script.contains("steam -login"));
+    }
+
+    #[test]
+    fn redact_sensitive_ignores_empty_secret() {
+        assert_eq!(redact_sensitive("abc", &["", "b"]), "a[REDACTED]c");
     }
 
     #[test]

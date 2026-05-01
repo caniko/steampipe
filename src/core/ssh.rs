@@ -72,6 +72,22 @@ impl SshClient {
             .spawn()
     }
 
+    /// Run a command on a remote host with stdio inherited from the caller.
+    pub async fn run_interactive(&self, ip: &str, cmd: &str) -> std::io::Result<bool> {
+        let mut args = self.ssh_args(ip);
+        args.push(cmd.into());
+
+        let status = tokio::process::Command::new("ssh")
+            .args(&args)
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()
+            .await?;
+
+        Ok(status.success())
+    }
+
     /// Run a command with a timeout. Returns a "timed out" error on expiry.
     pub async fn run_with_timeout(&self, ip: &str, cmd: &str, timeout: Duration) -> SshOutput {
         match tokio::time::timeout(timeout, self.run(ip, cmd)).await {
