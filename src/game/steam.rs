@@ -6,6 +6,8 @@ use crate::core::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
 use crate::core::credentials::{CredentialsMap, VmCredentials};
 use crate::vm::lease;
 
+const LOGIN_SSH_TIMEOUT_SECS: u32 = 180;
+
 /// Shell snippet that ensures weston (headless) is running and exports display vars.
 /// Append your own commands after this to run under the compositor.
 pub fn weston_setup(vm_user: &str) -> String {
@@ -335,8 +337,9 @@ async fn login_single_vm(
     };
 
     print!("  Waiting for SSH... ");
-    if !backend.wait_ready(&vm.ip, 60).await {
-        println!("timeout");
+    if !backend.wait_ready(&vm.ip, LOGIN_SSH_TIMEOUT_SECS).await {
+        println!("timeout after {LOGIN_SSH_TIMEOUT_SECS}s");
+        print_vm_log_tail(&config.state_dir, &vm.name.0);
         cleanup();
         anyhow::bail!("SSH timeout for {}", vm.name);
     }
@@ -371,6 +374,26 @@ async fn login_single_vm(
     println!("  {} done.", vm.name);
 
     Ok(())
+}
+
+fn print_vm_log_tail(state_dir: &Path, vm_name: &str) {
+    let path = state_dir.join(vm_name).join("vm.log");
+    let Ok(log) = std::fs::read_to_string(&path) else {
+        println!("  VM log unavailable: {}", path.display());
+        return;
+    };
+    println!("  --- {} tail ---", path.display());
+    for line in log
+        .lines()
+        .rev()
+        .take(40)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        println!("  {line}");
+    }
+    println!("  --- end VM log tail ---");
 }
 
 /// Auto-login Steam on already-running VMs using credentials.
