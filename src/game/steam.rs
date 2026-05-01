@@ -467,6 +467,8 @@ mkdir -p {log_dir}
 : > {log} 2>/dev/null
 : > {bootstrap_log} 2>/dev/null
 : > {cef_log} 2>/dev/null
+: > {console_log} 2>/dev/null
+: > {updateui_log} 2>/dev/null
 : > {stdout_log} 2>/dev/null
 echo "STEAM_BIN=$(command -v steam || true)"
 steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
@@ -638,6 +640,7 @@ async fn interactive_login(
 fn read_stdin_line<R: BufRead>(reader: &mut R) -> io::Result<Option<String>> {
     let mut input = String::new();
     match reader.read_line(&mut input) {
+        Ok(0) => Ok(None),
         Ok(_) => Ok(Some(input)),
         Err(error) if is_nonblocking_stdin_error(&error) => Ok(None),
         Err(error) => Err(error),
@@ -754,6 +757,12 @@ mod tests {
     fn read_stdin_line_reads_normal_input() {
         let mut input = io::Cursor::new("p\n");
         assert_eq!(read_stdin_line(&mut input).unwrap().as_deref(), Some("p\n"));
+    }
+
+    #[test]
+    fn read_stdin_line_treats_eof_as_unavailable() {
+        let mut input = io::Cursor::new("");
+        assert_eq!(read_stdin_line(&mut input).unwrap(), None);
     }
 
     // ── Compositor setup scripts ────────────────────────────────────────
