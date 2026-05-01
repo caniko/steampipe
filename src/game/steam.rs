@@ -84,6 +84,17 @@ pub fn compositor_setup(mode: crate::cli::DisplayMode, vm_user: &str) -> String 
     }
 }
 
+/// Return a compositor snippet suitable for Steam itself.
+///
+/// Headless game runs still need a headless Weston/Xwayland session for Steam
+/// login and IPC readiness; the game process can still receive `--headless`.
+pub fn steam_compositor_setup(mode: crate::cli::DisplayMode, vm_user: &str) -> String {
+    match mode {
+        crate::cli::DisplayMode::Headless => weston_setup(vm_user),
+        _ => compositor_setup(mode, vm_user),
+    }
+}
+
 /// Shell snippet that starts Steam silently if not already running.
 pub const STEAM_START_SILENT: &str = r#"
 if pgrep -x steam >/dev/null; then
@@ -183,7 +194,7 @@ pub async fn start<S>(
     );
     let script = format!(
         "{}{}",
-        compositor_setup(display, &config.vm_user),
+        steam_compositor_setup(display, &config.vm_user),
         STEAM_START_SILENT,
     );
 
@@ -241,7 +252,7 @@ pub async fn check(
         }
         println!("OK");
 
-        let compositor = compositor_setup(display, &config.vm_user);
+        let compositor = steam_compositor_setup(display, &config.vm_user);
         let identity = backend
             .run_cmd(&vm.ip, &steam_identity_probe_script(&config.vm_user))
             .await;
@@ -1513,6 +1524,13 @@ mod tests {
     fn compositor_setup_headless_returns_empty() {
         let script = compositor_setup(crate::cli::DisplayMode::Headless, "u");
         assert!(script.is_empty());
+    }
+
+    #[test]
+    fn steam_compositor_setup_headless_uses_weston() {
+        let script = steam_compositor_setup(crate::cli::DisplayMode::Headless, "u");
+        assert!(script.contains("weston --backend=headless --xwayland"));
+        assert!(script.contains("DISPLAY=:0"));
     }
 
     #[test]

@@ -575,11 +575,10 @@ pub async fn run<S>(
     // Step 2b: Ensure Steam on VMs if steam network
     if test_config.network == NetworkMode::Steam {
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===", verbose);
-        // If display is Headless, Steam still needs weston as a compositor
         let compositor = if test_config.display == crate::cli::DisplayMode::Headless {
-            crate::steam::weston_setup(&config.vm_user)
+            crate::steam::steam_compositor_setup(test_config.display, &config.vm_user)
         } else {
-            // Compositor already running from step 2a — just export the env vars
+            // Compositor already running from step 2a — just export the env vars.
             String::new()
         };
         for vm in target_vms {
