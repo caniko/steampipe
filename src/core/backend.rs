@@ -2,6 +2,9 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+
 use crate::core::config::{BridgeReady, ClusterConfig, VmDef};
 use crate::core::ssh::SshClient;
 use crate::core::state;
@@ -243,11 +246,15 @@ fn microvm_start(
 
     let log_file = std::fs::File::create(vm_dir.join("vm.log"))?;
 
-    let child = std::process::Command::new(&runner)
+    let mut command = std::process::Command::new(&runner);
+    command
         .current_dir(&vm_dir)
         .stdout(log_file.try_clone()?)
-        .stderr(log_file)
-        .spawn()?;
+        .stderr(log_file);
+    #[cfg(unix)]
+    command.process_group(0);
+
+    let child = command.spawn()?;
 
     let pid = child.id();
     state::write_pid(&config.state_dir, &vm.name, pid)?;

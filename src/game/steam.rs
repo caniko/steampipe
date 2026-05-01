@@ -4,6 +4,7 @@ use std::path::Path;
 use crate::core::backend::Backend;
 use crate::core::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
 use crate::core::credentials::{CredentialsMap, VmCredentials};
+use crate::vm::lease;
 
 /// Shell snippet that ensures weston (headless) is running and exports display vars.
 /// Append your own commands after this to run under the compositor.
@@ -321,7 +322,8 @@ async fn login_single_vm(
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     println!("  Booting VM...");
-    backend.start_instance(config, vm, login_runners_dir)?;
+    let pid = backend.start_instance(config, vm, login_runners_dir)?;
+    lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
 
     let config_for_cleanup = config.clone();
     let vm_for_cleanup = vm.clone();
@@ -329,6 +331,7 @@ async fn login_single_vm(
         config_for_cleanup
             .backend
             .stop_instance(&config_for_cleanup, &vm_for_cleanup);
+        lease::remove_claim(vm_for_cleanup.index, &config_for_cleanup.lock_dir);
     };
 
     print!("  Waiting for SSH... ");
@@ -364,6 +367,7 @@ async fn login_single_vm(
         .await;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     backend.stop_instance(config, vm);
+    lease::remove_claim(vm.index, &config.lock_dir);
     println!("  {} done.", vm.name);
 
     Ok(())
