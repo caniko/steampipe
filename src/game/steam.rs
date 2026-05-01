@@ -461,7 +461,9 @@ mkdir -p {log_dir}
 : > {bootstrap_log} 2>/dev/null
 : > {cef_log} 2>/dev/null
 : > {stdout_log} 2>/dev/null
+echo "STEAM_BIN=$(command -v steam || true)"
 steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+echo "STEAM_START_PID=$!"
 for i in $(seq 1 180); do
     if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then
         echo STEAM_LOGIN_OK
@@ -477,6 +479,7 @@ if grep -q 'Update complete, launching' {bootstrap_log} 2>/dev/null; then
     : > {cef_log} 2>/dev/null
     : > {stdout_log} 2>/dev/null
     steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+    echo "STEAM_RETRY_PID=$!"
     for i in $(seq 1 180); do
         if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then
             echo STEAM_LOGIN_OK
@@ -487,7 +490,16 @@ if grep -q 'Update complete, launching' {bootstrap_log} 2>/dev/null; then
 fi
 echo STEAM_LOGIN_TIMEOUT
 echo "--- steam processes ---"
-pgrep -af steam 2>/dev/null || true
+if pgrep -x steam >/dev/null 2>&1; then
+    echo "steam-running"
+else
+    echo "steam-not-running"
+fi
+if pgrep -x steamwebhelper >/dev/null 2>&1; then
+    echo "steamwebhelper-running"
+else
+    echo "steamwebhelper-not-running"
+fi
 echo "--- log directory ---"
 ls -la {log_dir} 2>/dev/null || true
 echo "--- connection_log.txt tail ---"
