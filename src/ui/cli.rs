@@ -613,6 +613,31 @@ mod tests {
     }
 
     #[test]
+    fn steam_guard_accepts_global_credentials_after_subcommand() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam-guard",
+            "vm-1",
+            "--credentials",
+            "/etc/steampipe/credentials.toml",
+            "--code",
+            "ABCDE",
+        ]);
+        assert_eq!(
+            cli.credentials.as_deref(),
+            Some(std::path::Path::new("/etc/steampipe/credentials.toml"))
+        );
+        match cli.command {
+            Commands::SteamGuard { target, code } => {
+                assert_eq!(target, "vm-1");
+                assert_eq!(code.as_deref(), Some("ABCDE"));
+            }
+            _ => panic!("expected SteamGuard command"),
+        }
+    }
+
+    #[test]
     fn logs_follow_with_target() {
         let cli = parse(&["--vm-count", "7", "logs", "--follow", "vm-2"]);
         match cli.command {
