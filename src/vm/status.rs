@@ -3,6 +3,7 @@ use std::time::Duration;
 use crate::core::backend::Backend;
 use crate::core::config::{ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
 use crate::core::state;
+use crate::game::steam::STEAM_READY_LOG_PATTERN;
 use crate::vm::lease;
 
 /// Status of a single instance: process, connectivity, Steam, game.
@@ -36,12 +37,12 @@ pub async fn poll_vm_statuses(
 
             let (steam_running, game_running) = if ssh_ok {
                 let timeout = Duration::from_secs(5);
+                let steam_probe = format!(
+                    "pgrep -x steam >/dev/null 2>&1 && grep -q '{}' \"$HOME/.local/share/Steam/logs/connection_log.txt\" 2>/dev/null && echo yes || echo no",
+                    STEAM_READY_LOG_PATTERN
+                );
                 let steam = backend
-                    .run_cmd_timeout(
-                        &vm.ip,
-                        "pgrep -x steam >/dev/null 2>&1 && echo yes || echo no",
-                        timeout,
-                    )
+                    .run_cmd_timeout(&vm.ip, &steam_probe, timeout)
                     .await;
                 let game = backend
                     .run_cmd_timeout(

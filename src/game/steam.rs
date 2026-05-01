@@ -94,15 +94,18 @@ else
 fi
 "#;
 
+pub const STEAM_READY_LOG_PATTERN: &str = "Logged On.*processing complete";
+
 fn ensure_steam_script(vm_user: &str, compositor: &str) -> String {
     let log = format!("/home/{vm_user}/.local/share/Steam/logs/connection_log.txt");
+    let ready_pattern = STEAM_READY_LOG_PATTERN;
     format!(
         r#"{compositor}
 log="{log}"
 mkdir -p "$(dirname "$log")"
 wait_for_steam_ready() {{
     for i in $(seq 1 60); do
-        if grep -q 'Logged On.*processing complete' "$log" 2>/dev/null; then
+        if grep -q '{ready_pattern}' "$log" 2>/dev/null; then
             echo STEAM_READY
             return 0
         fi
@@ -239,57 +242,27 @@ pub async fn check(
         println!("OK");
 
         let compositor = compositor_setup(display, &config.vm_user);
-        let result = backend
-            .run_cmd(
-                &vm.ip,
-                &format!(
-                    r#"
-                    STEAM_DIR="$HOME/.local/share/Steam"
-                    ERRORS=""
-                    LOGIN_FILE="$STEAM_DIR/config/loginusers.vdf"
-                    if [ -f "$LOGIN_FILE" ]; then
-                        PERSONA=$(grep -oP '"PersonaName"\s+"\K[^"]+' "$LOGIN_FILE" 2>/dev/null | head -1)
-                        if [ -z "$PERSONA" ]; then ERRORS="$ERRORS no-persona"; fi
-                    else
-                        PERSONA=""
-                        ERRORS="$ERRORS not-logged-in"
-                    fi
-                    {compositor}
-                    STARTED_COMPOSITOR=1
-                    steam -silent -cef-disable-gpu >/dev/null 2>&1 &
-                    STEAM_PID=$!
-                    sleep 12
-                    if ! kill -0 $STEAM_PID 2>/dev/null; then ERRORS="$ERRORS steam-crashed"; fi
-                    pkill -x steam 2>/dev/null || true
-                    pkill -x weston 2>/dev/null || true
-                    if [ -z "$ERRORS" ]; then echo "OK:$PERSONA"; else echo "FAIL:$PERSONA:$ERRORS"; fi
-                    "#
-                ),
-            )
+        let identity = backend
+            .run_cmd(&vm.ip, &steam_identity_probe_script(&config.vm_user))
             .await;
+        let (persona, has_cached_login) = parse_steam_identity(identity.stdout.trim());
+        let steam_ready = ensure_steam(backend, &vm.ip, &config.vm_user, &compositor).await;
 
-        let output = result.stdout.trim();
-        if let Some(rest) = output.strip_prefix("OK:") {
-            println!("  Login: OK ({rest})");
+        if has_cached_login {
+            println!("  Login: OK ({})", persona.as_deref().unwrap_or("unknown"));
+        } else {
+            println!("  Login: FAIL");
+        }
+
+        if let Err(error) = steam_ready {
+            println!("  Steam: FAIL");
+            println!("  Diagnostics: {error}");
+            failed.push(vm.name.clone());
+        } else if has_cached_login {
             println!("  Steam: OK");
             passed.push(vm.name.clone());
-        } else if let Some(rest) = output.strip_prefix("FAIL:") {
-            let parts: Vec<&str> = rest.splitn(2, ':').collect();
-            let persona = parts.first().unwrap_or(&"");
-            let errors = parts.get(1).unwrap_or(&"");
-            if persona.is_empty() || errors.contains("not-logged-in") {
-                println!("  Login: FAIL");
-            } else {
-                println!("  Login: OK ({persona})");
-            }
-            if errors.contains("steam-crashed") {
-                println!("  Steam: FAIL (process crashed)");
-            } else {
-                println!("  Steam: OK");
-            }
-            failed.push(vm.name.clone());
         } else {
-            println!("  Check: FAIL (unexpected output: {output})");
+            println!("  Steam: FAIL (ready but cached login metadata missing)");
             failed.push(vm.name.clone());
         }
 
@@ -309,6 +282,35 @@ pub async fn check(
         println!("  All VMs ready for testing");
     }
     Ok(())
+}
+
+fn steam_identity_probe_script(vm_user: &str) -> String {
+    format!(
+        r#"HOME=/home/{vm_user}
+LOGIN_FILE="$HOME/.local/share/Steam/config/loginusers.vdf"
+if [ -f "$LOGIN_FILE" ]; then
+    PERSONA=$(grep -oP '"PersonaName"\s+"\K[^"]+' "$LOGIN_FILE" 2>/dev/null | head -1)
+    STEAMID=$(grep -oP '^\s*"\K[0-9]{{17}}' "$LOGIN_FILE" 2>/dev/null | head -1)
+    if [ -n "$STEAMID" ]; then
+        echo "LOGIN:${{PERSONA:-unknown}}:$STEAMID"
+        exit 0
+    fi
+fi
+echo "NO_LOGIN""#
+    )
+}
+
+fn parse_steam_identity(output: &str) -> (Option<String>, bool) {
+    if let Some(rest) = output.strip_prefix("LOGIN:") {
+        let persona = rest
+            .split(':')
+            .next()
+            .filter(|value| !value.is_empty() && *value != "unknown")
+            .map(ToOwned::to_owned);
+        (persona, true)
+    } else {
+        (None, false)
+    }
 }
 
 /// Run the `steam-login` subcommand: interactive per-instance Steam login wizard.
@@ -1399,6 +1401,24 @@ mod tests {
         assert!(script.contains("RecvMsgClientLogOnResponse\\(\\) : \\[U:1:[0-9]+\\] 'OK'"));
         assert!(script.contains("write_login_file_from_connection_log"));
         assert!(script.contains("steam_id=\"$((76561197960265728 + account_id))\""));
+    }
+
+    #[test]
+    fn steam_check_identity_probe_reads_cached_account_only() {
+        let script = steam_identity_probe_script("chessbender");
+        assert!(script.contains("loginusers.vdf"));
+        assert!(script.contains("echo \"LOGIN:${PERSONA:-unknown}:$STEAMID\""));
+        assert!(script.contains("echo \"NO_LOGIN\""));
+
+        assert_eq!(
+            parse_steam_identity("LOGIN:test_account:76561198000000000"),
+            (Some("test_account".to_owned()), true)
+        );
+        assert_eq!(
+            parse_steam_identity("LOGIN:unknown:76561198000000000"),
+            (None, true)
+        );
+        assert_eq!(parse_steam_identity("NO_LOGIN"), (None, false));
     }
 
     #[test]
