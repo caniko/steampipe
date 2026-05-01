@@ -725,7 +725,10 @@ async fn finish_steam_login(
 
     println!("  Starting Steam GUI for session validation...");
     let validate = backend
-        .run_cmd(&vm.ip, &steam_gui_validation_script(vm_user))
+        .run_cmd(
+            &vm.ip,
+            &steam_gui_validation_script(vm_user, &creds.steam_user, &creds.steam_pass),
+        )
         .await;
     let output = redact_sensitive(validate.stdout.trim(), secrets);
     let stderr = redact_sensitive(validate.stderr.trim(), secrets);
@@ -793,7 +796,7 @@ echo STEAMCMD_SYNC_OK"#
     )
 }
 
-fn steam_gui_validation_script(vm_user: &str) -> String {
+fn steam_gui_validation_script(vm_user: &str, steam_user: &str, steam_pass: &str) -> String {
     let log_dir = format!("/home/{vm_user}/.local/share/Steam/logs");
     let log = format!("{log_dir}/connection_log.txt");
     let bootstrap_log = format!("{log_dir}/bootstrap_log.txt");
@@ -802,6 +805,8 @@ fn steam_gui_validation_script(vm_user: &str) -> String {
     let updateui_log = format!("{log_dir}/updateui_child.txt");
     let stdout_log = format!("{log_dir}/steampipe_login_stdout.log");
     let weston = weston_setup(vm_user);
+    let user = shell_escape(steam_user);
+    let pass = shell_escape(steam_pass);
     format!(
         r#"{weston}
 mkdir -p {log_dir}
@@ -818,7 +823,7 @@ valid_login_file() {{
     grep -Eq '"(PersonaName|AccountName)"' "$LOGIN_FILE" || return 1
 }}
 echo "STEAM_BIN=$(command -v steam || true)"
-steam -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+steam -silent -login '{user}' '{pass}' -cef-disable-gpu >{stdout_log} 2>&1 &
 echo "STEAM_START_PID=$!"
 for i in $(seq 1 240); do
     if valid_login_file; then
@@ -834,7 +839,7 @@ if grep -q 'Update complete, launching' {bootstrap_log} 2>/dev/null; then
     : > {log} 2>/dev/null
     : > {cef_log} 2>/dev/null
     : > {stdout_log} 2>/dev/null
-    steam -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+    steam -silent -login '{user}' '{pass}' -cef-disable-gpu >{stdout_log} 2>&1 &
     echo "STEAM_RETRY_PID=$!"
     for i in $(seq 1 240); do
         if valid_login_file; then
@@ -1186,7 +1191,7 @@ mod tests {
 
     #[test]
     fn steam_gui_validation_requires_gui_loginusers_evidence() {
-        let script = steam_gui_validation_script("chessbender");
+        let script = steam_gui_validation_script("chessbender", "account", "pa'ss");
         assert!(
             script.contains(
                 "LOGIN_FILE=\"/home/chessbender/.local/share/Steam/config/loginusers.vdf\""
@@ -1195,7 +1200,7 @@ mod tests {
         assert!(script.contains("valid_login_file"));
         assert!(script.contains("grep -Eq '\"[0-9]{17}\"'"));
         assert!(script.contains("grep -Eq '\"(PersonaName|AccountName)\"'"));
-        assert!(!script.contains("steam -login"));
+        assert!(script.contains("steam -silent -login 'account' 'pa'\\''ss' -cef-disable-gpu"));
     }
 
     #[test]
