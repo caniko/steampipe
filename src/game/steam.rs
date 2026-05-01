@@ -349,7 +349,15 @@ pub async fn guard<S>(
         );
     }
 
-    wait_for_steamcmd_bootstrap(backend, vm, &config.vm_user, &secrets).await?;
+    match wait_for_steamcmd_bootstrap(backend, vm, &config.vm_user, &secrets).await? {
+        SteamCmdWait::Complete => {}
+        SteamCmdWait::GuardRequired => {
+            anyhow::bail!(
+                "{}: Steam Guard code was rejected or superseded by a newer code. The VM was left running; retry with the latest code.",
+                vm.name
+            );
+        }
+    }
     finish_steam_login(backend, vm, vm_creds, &config.vm_user, &secrets).await?;
 
     println!("  Shutting down Steam and VM...");
@@ -807,6 +815,7 @@ fn steam_gui_validation_script(vm_user: &str, steam_user: &str, steam_pass: &str
     let weston = weston_setup(vm_user);
     let user = shell_escape(steam_user);
     let pass = shell_escape(steam_pass);
+    let account = shell_escape(steam_user);
     format!(
         r#"{weston}
 mkdir -p {log_dir}
@@ -822,11 +831,41 @@ valid_login_file() {{
     grep -Eq '"[0-9]{{17}}"' "$LOGIN_FILE" || return 1
     grep -Eq '"(PersonaName|AccountName)"' "$LOGIN_FILE" || return 1
 }}
+write_login_file_from_connection_log() {{
+    account_id="$(grep -Eo '\[U:1:[0-9]+\]' {log} 2>/dev/null | grep -Eo '[0-9]+' | tail -1)"
+    [ -n "$account_id" ] || return 1
+    steam_id="$((76561197960265728 + account_id))"
+    [ -n "$steam_id" ] || return 1
+    cat > "$LOGIN_FILE" <<STEAMPIPE_LOGINUSERS
+"users"
+{{
+	"$steam_id"
+	{{
+		"AccountName"		"{account}"
+		"PersonaName"		"{account}"
+		"RememberPassword"		"1"
+		"MostRecent"		"1"
+		"WantsOfflineMode"		"0"
+		"SkipOfflineModeWarning"		"0"
+	}}
+}}
+STEAMPIPE_LOGINUSERS
+}}
+valid_gui_session_evidence() {{
+    grep -q 'PollAuthSessionStatus succeeded and has refresh token' {log} 2>/dev/null || return 1
+    grep -Eq "RecvMsgClientLogOnResponse\(\) : \[U:1:[0-9]+\] 'OK'" {log} 2>/dev/null || return 1
+    write_login_file_from_connection_log
+    valid_login_file
+}}
 echo "STEAM_BIN=$(command -v steam || true)"
 steam -silent -login '{user}' '{pass}' -cef-disable-gpu >{stdout_log} 2>&1 &
 echo "STEAM_START_PID=$!"
 for i in $(seq 1 240); do
     if valid_login_file; then
+        echo STEAM_LOGIN_OK
+        exit 0
+    fi
+    if valid_gui_session_evidence; then
         echo STEAM_LOGIN_OK
         exit 0
     fi
@@ -843,6 +882,10 @@ if grep -q 'Update complete, launching' {bootstrap_log} 2>/dev/null; then
     echo "STEAM_RETRY_PID=$!"
     for i in $(seq 1 240); do
         if valid_login_file; then
+            echo STEAM_LOGIN_OK
+            exit 0
+        fi
+        if valid_gui_session_evidence; then
             echo STEAM_LOGIN_OK
             exit 0
         fi
@@ -1201,6 +1244,16 @@ mod tests {
         assert!(script.contains("grep -Eq '\"[0-9]{17}\"'"));
         assert!(script.contains("grep -Eq '\"(PersonaName|AccountName)\"'"));
         assert!(script.contains("steam -silent -login 'account' 'pa'\\''ss' -cef-disable-gpu"));
+    }
+
+    #[test]
+    fn steam_gui_validation_accepts_refresh_token_evidence() {
+        let script = steam_gui_validation_script("chessbender", "account", "password");
+        assert!(script.contains("valid_gui_session_evidence"));
+        assert!(script.contains("PollAuthSessionStatus succeeded and has refresh token"));
+        assert!(script.contains("RecvMsgClientLogOnResponse\\(\\) : \\[U:1:[0-9]+\\] 'OK'"));
+        assert!(script.contains("write_login_file_from_connection_log"));
+        assert!(script.contains("steam_id=\"$((76561197960265728 + account_id))\""));
     }
 
     #[test]
