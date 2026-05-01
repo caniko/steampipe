@@ -283,11 +283,16 @@ pub async fn login(
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, continue_from)?;
 
+    let mut failed = 0usize;
     for vm in &targets {
         let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
         if let Err(e) = login_single_vm(config, vm, login_runners_dir, vm_creds).await {
             eprintln!("Error with {}: {e}", vm.name);
+            failed += 1;
         }
+    }
+    if failed > 0 {
+        anyhow::bail!("{failed}/{} Steam login target(s) failed", targets.len());
     }
     Ok(())
 }
@@ -452,6 +457,8 @@ async fn automated_login(
     let log = format!("{log_dir}/connection_log.txt");
     let bootstrap_log = format!("{log_dir}/bootstrap_log.txt");
     let cef_log = format!("{log_dir}/cef_log.txt");
+    let console_log = format!("{log_dir}/console-linux.txt");
+    let updateui_log = format!("{log_dir}/updateui_child.txt");
     let stdout_log = format!("{log_dir}/steampipe_login_stdout.log");
     let weston = weston_setup(vm_user);
     let cmd = format!(
@@ -508,6 +515,10 @@ echo "--- bootstrap_log.txt tail ---"
 tail -n 80 {bootstrap_log} 2>/dev/null || true
 echo "--- cef_log.txt tail ---"
 tail -n 80 {cef_log} 2>/dev/null || true
+echo "--- console-linux.txt tail ---"
+tail -n 80 {console_log} 2>/dev/null || true
+echo "--- updateui_child.txt tail ---"
+tail -n 80 {updateui_log} 2>/dev/null || true
 echo "--- steam stdout/stderr tail ---"
 tail -n 80 {stdout_log} 2>/dev/null || true"#,
     );
