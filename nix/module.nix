@@ -119,8 +119,9 @@ in
       default = {};
       description = ''
         Per-VM Steam account credentials, keyed by VM name (e.g. "vm-1").
-        When set, a credentials TOML is generated and login state directories
-        are created under loginStateDir.
+        When set, a credentials TOML is generated for automated login.
+        Login state directories are created under loginStateDir whenever
+        the cluster service is enabled.
       '';
       example = lib.literalExpression ''
         {
@@ -175,15 +176,19 @@ in
       };
     };
 
-    # Create login state directories when accounts are configured
-    systemd.tmpfiles.rules = lib.mkIf (cfg.accounts != {})
-      (map (name: "d ${cfg.loginStateDir}/${name} 0755 ${cfg.tapOwner or "root"} users -") vmNames);
+    # Create login state directories for interactive and automated Steam login.
+    systemd.tmpfiles.rules =
+      ["d ${cfg.loginStateDir} 0755 ${cfg.tapOwner or "root"} users -"]
+      ++ (map (name: "d ${cfg.loginStateDir}/${name} 0755 ${cfg.tapOwner or "root"} users -") vmNames);
 
     # Write module config so project-level flakes can discover NixOS-level settings
-    environment.etc."steampipe/module.json" = lib.mkIf (cfg.accounts != {}) {
+    environment.etc."steampipe/module.json" = {
       text = builtins.toJSON {
         loginStateDir = toString cfg.loginStateDir;
-        credentialsPath = "/etc/steampipe/credentials.toml";
+        credentialsPath =
+          if cfg.accounts != {}
+          then "/etc/steampipe/credentials.toml"
+          else null;
         vmCount = cfg.vmCount;
       };
     };
