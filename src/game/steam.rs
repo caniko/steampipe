@@ -465,6 +465,21 @@ for i in $(seq 1 180); do
     fi
     sleep 1
 done
+if grep -q 'Update complete, launching' {log_dir}/bootstrap_log.txt 2>/dev/null; then
+    echo STEAM_LOGIN_RETRY_AFTER_UPDATE
+    pkill -x steam 2>/dev/null || true
+    sleep 5
+    : > {log} 2>/dev/null
+    : > {stdout_log} 2>/dev/null
+    steam -login '{user}' '{pass}' -silent -cef-disable-gpu >{stdout_log} 2>&1 &
+    for i in $(seq 1 180); do
+        if grep -q 'Logged On.*processing complete' {log} 2>/dev/null; then
+            echo STEAM_LOGIN_OK
+            exit 0
+        fi
+        sleep 1
+    done
+fi
 echo STEAM_LOGIN_TIMEOUT
 echo "--- connection_log.txt tail ---"
 tail -n 80 {log} 2>/dev/null || true
