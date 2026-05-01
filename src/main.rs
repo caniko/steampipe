@@ -200,6 +200,11 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
         }
+        Commands::SteamGuard { target, code } => {
+            bridge::ensure_bridge(&config, &project_root)?;
+            let validated = config.validate_or_skip_bridge()?;
+            steam::guard(&validated, target.as_str(), code.as_deref(), creds.as_ref()).await?;
+        }
 
         // Commands that work on any config state
         Commands::Status => status::run(&config).await?,

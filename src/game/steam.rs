@@ -300,6 +300,80 @@ pub async fn login(
     Ok(())
 }
 
+/// Submit a Steam Guard code to a running SteamCMD login session, then finish
+/// syncing and validating the GUI Steam session.
+pub async fn guard<S>(
+    config: &ClusterConfig<S>,
+    target: &str,
+    code: Option<&str>,
+    creds: Option<&CredentialsMap>,
+) -> anyhow::Result<()> {
+    let targets = config.resolve_targets(Some(target), false)?;
+    if targets.len() != 1 {
+        anyhow::bail!("steam-guard requires exactly one target VM");
+    }
+    let vm = &targets[0];
+    let Some(vm_creds) = creds.and_then(|c| c.get::<str>(&vm.name)) else {
+        anyhow::bail!(
+            "credentials for {} are required to finish Steam GUI validation",
+            vm.name
+        );
+    };
+    let code = match code {
+        Some(code) => code.trim().to_owned(),
+        None => read_guard_code_from_stdin()?,
+    };
+    if code.is_empty() {
+        anyhow::bail!("Steam Guard code cannot be empty");
+    }
+
+    let backend = &config.backend;
+    if !backend.is_reachable(&vm.ip).await {
+        anyhow::bail!("{} is not reachable over SSH", vm.name);
+    }
+
+    println!("==> Submitting Steam Guard code to {}...", vm.name);
+    let submit = backend
+        .run_cmd(
+            &vm.ip,
+            &steamcmd_guard_submit_script(&config.vm_user, &code),
+        )
+        .await;
+    let secrets = [&vm_creds.steam_pass as &str, code.as_str()];
+    if !submit.success || !steamcmd_guard_submitted(&submit.stdout) {
+        anyhow::bail!(
+            "{}: Steam Guard submit failed. stdout: {} stderr: {}",
+            vm.name,
+            redact_sensitive(&submit.stdout, &secrets),
+            redact_sensitive(&submit.stderr, &secrets)
+        );
+    }
+
+    wait_for_steamcmd_bootstrap(backend, vm, &config.vm_user, &secrets).await?;
+    finish_steam_login(backend, vm, vm_creds, &config.vm_user, &secrets).await?;
+
+    println!("  Shutting down Steam and VM...");
+    backend
+        .run_cmd(
+            &vm.ip,
+            "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null; pkill -x tmux 2>/dev/null",
+        )
+        .await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    backend.stop_instance(config, vm);
+    lease::remove_claim(vm.index, &config.lock_dir);
+    println!("  {} done.", vm.name);
+
+    Ok(())
+}
+
+fn read_guard_code_from_stdin() -> anyhow::Result<String> {
+    println!("Steam Guard code:");
+    let mut code = String::new();
+    std::io::stdin().read_line(&mut code)?;
+    Ok(code.trim().to_owned())
+}
+
 async fn login_single_vm(
     config: &ClusterConfig<BridgeReady>,
     vm: &VmDef,
@@ -347,15 +421,14 @@ async fn login_single_vm(
 
     let outcome = if let Some(creds) = creds {
         // Automated login via SteamCMD state bootstrap + GUI validation.
-        automated_login(backend, vm, creds, &config.vm_user).await?;
-        LoginOutcome::Completed
+        automated_login(backend, vm, creds, &config.vm_user).await?
     } else {
         // Interactive VNC-based login (original flow)
         interactive_login(backend, vm, &config.vm_user).await?
     };
 
     if outcome == LoginOutcome::LeftRunning {
-        println!("  {} left running for manual VNC login.", vm.name);
+        println!("  {} left running for Steam login completion.", vm.name);
         println!("  After completing Steam login, validate with `cluster-ctl accounts`.");
         println!("  Stop the login VM with `cluster-ctl down` when you are done.");
         return Ok(());
@@ -426,7 +499,14 @@ pub async fn auto_login<S>(
                 return (vm.name, None);
             };
             match automated_login(&backend, &vm, vm_creds, &vm_user).await {
-                Ok(()) => (vm.name, Some(true)),
+                Ok(LoginOutcome::Completed) => (vm.name, Some(true)),
+                Ok(LoginOutcome::LeftRunning) => {
+                    eprintln!(
+                        "  {}: Steam Guard required; finish with steam-guard",
+                        vm.name
+                    );
+                    (vm.name, Some(false))
+                }
                 Err(e) => {
                     eprintln!("  {}: login failed: {e}", vm.name);
                     (vm.name, Some(false))
@@ -474,22 +554,151 @@ async fn automated_login(
     vm: &VmDef,
     creds: &VmCredentials,
     vm_user: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<LoginOutcome> {
     println!("  Logging in as {}...", creds.steam_user);
-    println!("  Running SteamCMD bootstrap. Enter Steam Guard code if prompted.");
+    println!("  Starting SteamCMD bootstrap session...");
 
     let steamcmd = steamcmd_bootstrap_command(vm_user, &creds.steam_user, &creds.steam_pass);
-    let steamcmd_ok = backend
-        .run_cmd_interactive(&vm.ip, &steamcmd)
-        .await
-        .map_err(|e| anyhow::anyhow!("{}: SteamCMD bootstrap failed to start: {e}", vm.name))?;
-    if !steamcmd_ok {
+    let started = backend.run_cmd(&vm.ip, &steamcmd).await;
+    if !started.success || !steamcmd_started(&started.stdout) {
         anyhow::bail!(
-            "{}: SteamCMD bootstrap failed. Re-run without credentials to use VNC fallback.",
-            vm.name
+            "{}: SteamCMD bootstrap failed to start. stdout: {} stderr: {}",
+            vm.name,
+            redact_sensitive(&started.stdout, &[&creds.steam_pass]),
+            redact_sensitive(&started.stderr, &[&creds.steam_pass])
         );
     }
 
+    let wait = wait_for_steamcmd_bootstrap(backend, vm, vm_user, &[&creds.steam_pass]).await?;
+    if wait == SteamCmdWait::GuardRequired {
+        println!("  Steam Guard required for {}.", creds.steam_user);
+        println!(
+            "  Complete from another shell with: cluster-ctl steam-guard {} --code <CODE>",
+            vm.name
+        );
+        println!(
+            "  Or use the project wrapper: nix run .#cluster-steam-guard -- {} --code <CODE>",
+            vm.name
+        );
+        return Ok(LoginOutcome::LeftRunning);
+    }
+
+    finish_steam_login(backend, vm, creds, vm_user, &[&creds.steam_pass]).await?;
+    Ok(LoginOutcome::Completed)
+}
+
+fn steamcmd_bootstrap_command(vm_user: &str, steam_user: &str, steam_pass: &str) -> String {
+    let home = format!("/home/{vm_user}");
+    let user = shell_escape(steam_user);
+    let pass = shell_escape(steam_pass);
+    format!(
+        r#"export HOME='{home}'
+SESSION="steampipe-steamcmd-login"
+LOG="$HOME/.local/share/Steam/logs/steampipe_steamcmd_login.log"
+STATUS="$HOME/.local/share/Steam/logs/steampipe_steamcmd_status"
+mkdir -p "$HOME/.steam/steamcmd" "$HOME/.local/share/Steam/config" "$(dirname "$LOG")"
+if ! command -v tmux >/dev/null 2>&1; then
+    echo STEAMCMD_TMUX_MISSING
+    exit 1
+fi
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+: > "$LOG"
+rm -f "$STATUS"
+tmux new-session -d -s "$SESSION" "export HOME='{home}'; steamcmd +login '{user}' '{pass}' +quit; code=\$?; echo \$code > '$STATUS'; echo STEAMCMD_EXIT:\$code"
+tmux pipe-pane -o -t "$SESSION" "cat >> '$LOG'"
+echo STEAMCMD_STARTED"#
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SteamCmdWait {
+    Complete,
+    GuardRequired,
+}
+
+async fn wait_for_steamcmd_bootstrap(
+    backend: &Backend,
+    vm: &VmDef,
+    vm_user: &str,
+    secrets: &[&str],
+) -> anyhow::Result<SteamCmdWait> {
+    let wait = backend
+        .run_cmd(&vm.ip, &steamcmd_wait_script(vm_user))
+        .await;
+    let stdout = redact_sensitive(&wait.stdout, secrets);
+    let stderr = redact_sensitive(&wait.stderr, secrets);
+    if steamcmd_guard_required(&stdout) {
+        return Ok(SteamCmdWait::GuardRequired);
+    }
+    if wait.success && steamcmd_bootstrap_succeeded(&stdout) {
+        return Ok(SteamCmdWait::Complete);
+    }
+    anyhow::bail!(
+        "{}: SteamCMD bootstrap failed. stdout: {} stderr: {}",
+        vm.name,
+        stdout,
+        stderr
+    );
+}
+
+fn steamcmd_wait_script(vm_user: &str) -> String {
+    format!(
+        r#"HOME=/home/{vm_user}
+SESSION="steampipe-steamcmd-login"
+LOG="$HOME/.local/share/Steam/logs/steampipe_steamcmd_login.log"
+STATUS="$HOME/.local/share/Steam/logs/steampipe_steamcmd_status"
+for i in $(seq 1 300); do
+    if grep -q 'Steam Guard code:' "$LOG" 2>/dev/null; then
+        echo STEAMCMD_GUARD_REQUIRED
+        exit 0
+    fi
+    if [ -f "$STATUS" ]; then
+        code="$(cat "$STATUS" 2>/dev/null || true)"
+        if [ "$code" = "0" ]; then
+            echo STEAMCMD_BOOTSTRAP_OK
+            exit 0
+        fi
+        echo "STEAMCMD_EXIT:$code"
+        echo "--- steamcmd log tail ---"
+        tail -n 80 "$LOG" 2>/dev/null || true
+        exit 1
+    fi
+    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+        echo STEAMCMD_SESSION_ENDED_WITHOUT_STATUS
+        echo "--- steamcmd log tail ---"
+        tail -n 80 "$LOG" 2>/dev/null || true
+        exit 1
+    fi
+    sleep 1
+done
+echo STEAMCMD_WAIT_TIMEOUT
+echo "--- steamcmd log tail ---"
+tail -n 80 "$LOG" 2>/dev/null || true
+exit 1"#
+    )
+}
+
+fn steamcmd_guard_submit_script(vm_user: &str, code: &str) -> String {
+    let code = shell_escape(code);
+    format!(
+        r#"HOME=/home/{vm_user}
+SESSION="steampipe-steamcmd-login"
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo STEAMCMD_SESSION_NOT_FOUND
+    exit 1
+fi
+tmux send-keys -t "$SESSION" '{code}' Enter
+echo STEAMCMD_GUARD_SUBMITTED"#
+    )
+}
+
+async fn finish_steam_login(
+    backend: &Backend,
+    vm: &VmDef,
+    creds: &VmCredentials,
+    vm_user: &str,
+    secrets: &[&str],
+) -> anyhow::Result<()> {
     println!("  Syncing SteamCMD login state into Steam GUI profile...");
     let sync = backend
         .run_cmd(&vm.ip, &steamcmd_state_sync_script(vm_user))
@@ -498,8 +707,8 @@ async fn automated_login(
         anyhow::bail!(
             "{}: SteamCMD state sync failed. stdout: {} stderr: {}",
             vm.name,
-            redact_sensitive(&sync.stdout, &[&creds.steam_pass]),
-            redact_sensitive(&sync.stderr, &[&creds.steam_pass])
+            redact_sensitive(&sync.stdout, secrets),
+            redact_sensitive(&sync.stderr, secrets)
         );
     }
 
@@ -507,8 +716,8 @@ async fn automated_login(
     let validate = backend
         .run_cmd(&vm.ip, &steam_gui_validation_script(vm_user))
         .await;
-    let output = redact_sensitive(validate.stdout.trim(), &[&creds.steam_pass]);
-    let stderr = redact_sensitive(validate.stderr.trim(), &[&creds.steam_pass]);
+    let output = redact_sensitive(validate.stdout.trim(), secrets);
+    let stderr = redact_sensitive(validate.stderr.trim(), secrets);
 
     if !validate.success || !steam_login_succeeded(&output) {
         anyhow::bail!(
@@ -520,7 +729,6 @@ async fn automated_login(
     }
     println!("  Login successful");
 
-    // Activate game key if provided
     if let Some(key) = &creds.game_key {
         println!("  Activating game key...");
         let escaped_key = shell_escape(key);
@@ -537,17 +745,6 @@ echo KEY_SUBMITTED"#,
     }
 
     Ok(())
-}
-
-fn steamcmd_bootstrap_command(vm_user: &str, steam_user: &str, steam_pass: &str) -> String {
-    let home = format!("/home/{vm_user}");
-    let user = shell_escape(steam_user);
-    let pass = shell_escape(steam_pass);
-    format!(
-        r#"export HOME='{home}'
-mkdir -p "$HOME/.steam/steamcmd" "$HOME/.local/share/Steam/config"
-steamcmd +login '{user}' '{pass}' +quit"#
-    )
 }
 
 fn steamcmd_state_sync_script(vm_user: &str) -> String {
@@ -767,6 +964,28 @@ fn steam_login_succeeded(output: &str) -> bool {
     output.lines().any(|line| line.trim() == "STEAM_LOGIN_OK")
 }
 
+fn steamcmd_started(output: &str) -> bool {
+    output.lines().any(|line| line.trim() == "STEAMCMD_STARTED")
+}
+
+fn steamcmd_bootstrap_succeeded(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim() == "STEAMCMD_BOOTSTRAP_OK")
+}
+
+fn steamcmd_guard_required(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim() == "STEAMCMD_GUARD_REQUIRED")
+}
+
+fn steamcmd_guard_submitted(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim() == "STEAMCMD_GUARD_SUBMITTED")
+}
+
 fn steamcmd_sync_succeeded(output: &str) -> bool {
     output.lines().any(|line| line.trim() == "STEAMCMD_SYNC_OK")
 }
@@ -883,6 +1102,16 @@ mod tests {
     }
 
     #[test]
+    fn steamcmd_marker_parsers_require_exact_lines() {
+        assert!(steamcmd_started("noise\nSTEAMCMD_STARTED\n"));
+        assert!(steamcmd_bootstrap_succeeded("STEAMCMD_BOOTSTRAP_OK\n"));
+        assert!(steamcmd_guard_required("x\nSTEAMCMD_GUARD_REQUIRED\n"));
+        assert!(steamcmd_guard_submitted("STEAMCMD_GUARD_SUBMITTED\n"));
+        assert!(!steamcmd_started("NOT_STEAMCMD_STARTED"));
+        assert!(!steamcmd_guard_submitted("NOT_STEAMCMD_GUARD_SUBMITTED"));
+    }
+
+    #[test]
     fn steamcmd_command_is_redacted_in_diagnostics() {
         let command = steamcmd_bootstrap_command("chessbender", "account", "pa'ss guard");
         assert!(command.contains("steamcmd +login"));
@@ -891,6 +1120,33 @@ mod tests {
         let diagnostic = redact_sensitive(&format!("failed command: {command}"), &["pa'ss guard"]);
         assert!(!diagnostic.contains("pa'ss guard"));
         assert!(diagnostic.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn steamcmd_command_uses_tmux_session_and_status_files() {
+        let script = steamcmd_bootstrap_command("chessbender", "account", "password");
+        assert!(script.contains("SESSION=\"steampipe-steamcmd-login\""));
+        assert!(script.contains("tmux new-session -d"));
+        assert!(script.contains("tmux pipe-pane"));
+        assert!(script.contains("steampipe_steamcmd_status"));
+        assert!(script.contains("STEAMCMD_STARTED"));
+    }
+
+    #[test]
+    fn steamcmd_guard_submit_uses_tmux_send_keys() {
+        let script = steamcmd_guard_submit_script("chessbender", "AB'CDE");
+        assert!(script.contains("tmux send-keys"));
+        assert!(script.contains("'AB'\\''CDE'"));
+        assert!(script.contains("STEAMCMD_GUARD_SUBMITTED"));
+    }
+
+    #[test]
+    fn steamcmd_wait_detects_guard_prompt_and_success() {
+        let script = steamcmd_wait_script("chessbender");
+        assert!(script.contains("Steam Guard code:"));
+        assert!(script.contains("STEAMCMD_GUARD_REQUIRED"));
+        assert!(script.contains("STEAMCMD_BOOTSTRAP_OK"));
+        assert!(script.contains("STEAMCMD_WAIT_TIMEOUT"));
     }
 
     #[test]

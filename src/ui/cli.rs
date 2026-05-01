@@ -159,6 +159,15 @@ pub enum Commands {
         login_runners_dir: Option<PathBuf>,
     },
 
+    /// Submit Steam Guard code to a running SteamCMD login VM
+    SteamGuard {
+        /// Target VM: "3" or "vm-3"
+        target: String,
+        /// Steam Guard code. If omitted, read one line from stdin.
+        #[arg(long)]
+        code: Option<String>,
+    },
+
     /// Check Steam login + health on VMs (boots each VM to verify)
     SteamCheck {
         /// Target VM: "all", "3", "vm-3"
@@ -588,6 +597,18 @@ mod tests {
                 assert!(login_runners_dir.is_none());
             }
             _ => panic!("expected SteamLogin command"),
+        }
+    }
+
+    #[test]
+    fn steam_guard_accepts_target_and_code() {
+        let cli = parse(&["--vm-count", "7", "steam-guard", "vm-1", "--code", "ABCDE"]);
+        match cli.command {
+            Commands::SteamGuard { target, code } => {
+                assert_eq!(target, "vm-1");
+                assert_eq!(code.as_deref(), Some("ABCDE"));
+            }
+            _ => panic!("expected SteamGuard command"),
         }
     }
 
