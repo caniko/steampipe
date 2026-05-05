@@ -89,6 +89,7 @@ struct VmHeartbeat<'a> {
     backend: &'a Backend,
     vms: &'a [(VmName, IpAddr)],
     remote_dir: &'a str,
+    heartbeat_subdir: &'a str,
 }
 
 struct LocalDisplay {
@@ -368,9 +369,13 @@ impl HeartbeatSource for LocalHeartbeat<'_> {
 
 impl HeartbeatSource for VmHeartbeat<'_> {
     fn snapshots(&self) -> Vec<HeartbeatSnapshot> {
+        // Reads both the per-cluster subdir (current layout) and the legacy
+        // remote-dir root (for older deployed binaries that don't honor
+        // STEAMPIPE_HEARTBEAT_DIR). The legacy fallback can be removed once
+        // all deployed games are recent enough.
         let cmd = format!(
-            "cat {}/game_progress_*.json 2>/dev/null || true",
-            self.remote_dir
+            "cat {0}/{1}/game_progress_*.json {0}/game_progress_*.json 2>/dev/null || true",
+            self.remote_dir, self.heartbeat_subdir
         );
         let mut snapshots = Vec::new();
         for (_, ip) in self.vms {
@@ -667,6 +672,18 @@ pub async fn run<S>(
         output.push('\n');
     }
 
+    // Per-cluster runtime dir: heartbeat files and strace output are scoped to
+    // <project_root>/.steampipe-runtime/<cluster_name>/ so two parallel
+    // cluster_test invocations with distinct cluster names cannot wipe each
+    // other's heartbeats or merge into a single strace log.
+    let local_heartbeat_dir = ensure_cluster_runtime_dirs(project_root, &config.cluster_name);
+    let strace_output = cluster_runtime_dir(project_root, &config.cluster_name)
+        .join("strace-host.log");
+    // VM-side heartbeats live under `<remote_dir>/<vm_heartbeat_subdir>` so the
+    // VM scoping mirrors the host. The path is relative because launch_game
+    // shells in via `cd remote_dir`.
+    let vm_heartbeat_subdir = format!(".steampipe-runtime/{}/heartbeats", config.cluster_name);
+
     let mut passed = 0u32;
     let mut failed = 0u32;
     let mut timed_out_count = 0u32;
@@ -695,7 +712,6 @@ pub async fn run<S>(
 
         // Launch local (host) process FIRST so it's listening when VMs connect
         eprintln!("[cluster-ctl] Launching local process...");
-        let strace_output = project_root.join("strace-host.log");
         let mut local_cmd = if test_config.strace {
             let mut cmd = std::process::Command::new("strace");
             cmd.args(["-f", "-e", "trace=network", "-tt", "-o"]);
@@ -713,6 +729,7 @@ pub async fn run<S>(
         }
         local_cmd.current_dir(project_root);
         local_cmd.env("BEVY_ASSET_ROOT", project_root);
+        local_cmd.env("STEAMPIPE_HEARTBEAT_DIR", &local_heartbeat_dir);
         if let Some(display) = &local_display {
             display.apply_to(&mut local_cmd);
         }
@@ -769,6 +786,7 @@ pub async fn run<S>(
                 &config.vm_user,
                 &config.log_file,
                 vm_args,
+                &vm_heartbeat_subdir,
             )
             .await
             {
@@ -795,17 +813,18 @@ pub async fn run<S>(
         eprintln!("[cluster-ctl] VMs launched OK");
 
         // Monitor with heartbeat detection
-        cleanup_heartbeat_files(project_root);
+        cleanup_heartbeat_files(&local_heartbeat_dir);
 
         let timeout = test_config.timeout;
         let shutdown_timeout = test_config.shutdown_timeout;
-        let project_root_owned = project_root.to_owned();
+        let heartbeat_dir_owned = local_heartbeat_dir.clone();
         let vm_ips: Vec<(VmName, IpAddr)> = target_vms
             .iter()
             .map(|vm| (vm.name.clone(), vm.ip.clone()))
             .collect();
         let backend_for_monitor = backend.clone();
         let remote_dir_owned = config.remote_dir.clone();
+        let vm_heartbeat_subdir_owned = vm_heartbeat_subdir.clone();
 
         let hb_stall = test_config.heartbeat_stall_secs;
         let hard_timeout = test_config.hard_timeout;
@@ -815,16 +834,17 @@ pub async fn run<S>(
                 timeout,
                 hard_timeout,
                 shutdown_timeout,
-                &project_root_owned,
+                &heartbeat_dir_owned,
                 &vm_ips,
                 &backend_for_monitor,
                 &remote_dir_owned,
+                &vm_heartbeat_subdir_owned,
                 hb_stall,
             )
         })
         .await??;
 
-        cleanup_heartbeat_files(project_root);
+        cleanup_heartbeat_files(&local_heartbeat_dir);
         crate::run::kill_games(backend, target_vms, binary_name).await;
 
         // Filter and report
@@ -1160,13 +1180,21 @@ async fn launch_game(
     vm_user: &str,
     log_file: &str,
     args: &str,
+    heartbeat_dir: &str,
 ) -> anyhow::Result<()> {
+    // Per-cluster heartbeat dir on the VM (`<remote_dir>/<heartbeat_dir>`)
+    // mirrors the host-side scoping. Lease partitioning already guarantees one
+    // game per VM at a time, but scoping per cluster name means a prior owner's
+    // stale files never poison a new owner's read, even before game-side
+    // `cleanup_stale_heartbeat_files` runs.
     let cmd = format!(
-        "cd {remote_dir} && \
+        "mkdir -p {remote_dir}/{heartbeat_dir} && \
+         cd {remote_dir} && \
          export LD_LIBRARY_PATH=\"{remote_dir}:$LD_LIBRARY_PATH\" \
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
-         DISPLAY=:0 && \
+         DISPLAY=:0 \
+         STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir} && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     );
     // Use run_cmd_timeout to avoid hanging if the channel doesn't close
@@ -1206,6 +1234,24 @@ fn cleanup_heartbeat_files(dir: &Path) {
     }
 }
 
+/// Per-cluster runtime directory under the project root.
+///
+/// Two parallel `cluster_test` invocations with distinct cluster names get
+/// distinct heartbeat dirs and strace paths so they cannot wipe or merge each
+/// other's progress files. Returns
+/// `<project_root>/.steampipe-runtime/<cluster_name>/`.
+fn cluster_runtime_dir(project_root: &Path, cluster_name: &str) -> std::path::PathBuf {
+    project_root
+        .join(".steampipe-runtime")
+        .join(cluster_name)
+}
+
+fn ensure_cluster_runtime_dirs(project_root: &Path, cluster_name: &str) -> std::path::PathBuf {
+    let heartbeat_dir = cluster_runtime_dir(project_root, cluster_name).join("heartbeats");
+    let _ = std::fs::create_dir_all(&heartbeat_dir);
+    heartbeat_dir
+}
+
 fn now_ms() -> u128 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1239,10 +1285,11 @@ fn monitor_local_process(
     timeout: Duration,
     hard_timeout: Duration,
     shutdown_timeout: Duration,
-    project_root: &Path,
+    local_heartbeat_dir: &Path,
     vm_ips: &[(VmName, IpAddr)],
     backend: &Backend,
     remote_dir: &str,
+    vm_heartbeat_subdir: &str,
     heartbeat_stall_secs: u64,
 ) -> anyhow::Result<(String, Option<i32>, Option<MonitorFailure>)> {
     use std::io::Read as _;
@@ -1274,12 +1321,15 @@ fn monitor_local_process(
     let mut last_vm_check = Instant::now();
 
     let rt = tokio::runtime::Handle::current();
-    let local_hb = LocalHeartbeat { dir: project_root };
+    let local_hb = LocalHeartbeat {
+        dir: local_heartbeat_dir,
+    };
     let vm_hb = VmHeartbeat {
         rt: &rt,
         backend,
         vms: vm_ips,
         remote_dir,
+        heartbeat_subdir: vm_heartbeat_subdir,
     };
 
     loop {
