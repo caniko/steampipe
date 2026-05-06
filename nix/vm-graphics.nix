@@ -18,13 +18,40 @@
 # What this module does when microvm.graphics.enable is true:
 #   - Enables mesa/DRI drivers so wgpu/Vulkan can render on virtio-gpu
 #   - Sets Wayland/X11 session variables for GUI applications
+#   - Exposes a graphical-app runtime library path so foreign-binary clients
+#     (steampipe-deployed game binaries with no Nix rpath) can dlopen
+#     libxkbcommon, libvulkan, libwayland, etc. without manual wrappers.
 {
   config,
   lib,
+  pkgs,
   ...
 }: let
   graphicsEnabled = config.microvm.graphics.enable or false;
+
+  # Runtime libs that wayland/wgpu/winit-style clients dlopen at startup.
+  # Mesa/DRI is already on /run/opengl-driver/lib via hardware.graphics.enable.
+  graphicalRuntimeLibs = with pkgs; [
+    libxkbcommon
+    vulkan-loader
+    wayland
+    libGL
+    stdenv.cc.cc.lib
+  ];
+
+  graphicalRuntimeLibPath = lib.makeLibraryPath graphicalRuntimeLibs;
 in {
+  options.steampipe.vmGraphics.runtimeLibraryPath = lib.mkOption {
+    type = lib.types.str;
+    readOnly = true;
+    default = graphicalRuntimeLibPath;
+    description = ''
+      Colon-separated library path for graphical clients deployed into the VM.
+      Exported as STEAMPIPE_GRAPHICS_LIB_PATH (system-wide) and prepended to
+      LD_LIBRARY_PATH for login shells when graphics are enabled.
+    '';
+  };
+
   config = lib.mkIf graphicsEnabled {
     # Mesa/DRI so wgpu and other GPU clients can render on virtio-gpu
     hardware.graphics.enable = true;
@@ -34,5 +61,22 @@ in {
       WAYLAND_DISPLAY = "wayland-1";
       DISPLAY = ":0";
     };
+
+    # System-wide env: exposes the runtime lib path under a steampipe-namespaced
+    # variable so consumers (e.g. SSH-launched binaries) can opt in explicitly.
+    # We do NOT clobber LD_LIBRARY_PATH globally — that breaks system tooling
+    # that links against newer libs on /run/current-system. Consumers prepend
+    # this path themselves when launching their binary.
+    environment.variables = {
+      STEAMPIPE_GRAPHICS_LIB_PATH = graphicalRuntimeLibPath;
+    };
+
+    # /etc/profile.d/steampipe-graphics.sh — sourced by the steampipe SSH game
+    # launcher (which is a non-login non-interactive shell that wouldn't pick
+    # up environment.variables otherwise). Keep this file path stable:
+    # `harness/runner.rs::launch_game` sources it explicitly.
+    environment.etc."profile.d/steampipe-graphics.sh".text = ''
+      export STEAMPIPE_GRAPHICS_LIB_PATH="${graphicalRuntimeLibPath}"
+    '';
   };
 }
