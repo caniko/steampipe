@@ -487,6 +487,9 @@ pub struct ClusterConfig<S = Unchecked> {
     pub log_file: String,
     pub state_dir: PathBuf,
     pub cluster_name: String,
+    /// Total VM pool size (from `steampipe.toml`'s `max_vms`, default 7).
+    /// `vms` is the *requested* slice; `max_vms` is the pool to lease from.
+    pub max_vms: u8,
     pub vms: Vec<VmDef>,
     pub backend: Backend,
     pub backend_kind: BackendKind,
@@ -662,6 +665,7 @@ impl ClusterConfig<Unchecked> {
             log_file: proj.as_ref().and_then(|p| p.log_file.clone()).unwrap_or_else(|| "game.log".into()),
             state_dir,
             cluster_name,
+            max_vms,
             vms,
             backend,
             backend_kind,
@@ -731,6 +735,7 @@ impl<S> ClusterConfig<S> {
             log_file: self.log_file,
             state_dir: self.state_dir,
             cluster_name: self.cluster_name,
+            max_vms: self.max_vms,
             vms: self.vms,
             backend: self.backend,
             backend_kind: self.backend_kind,
@@ -756,8 +761,7 @@ impl<S> ClusterConfig<S> {
     /// Return VMs currently leased by this cluster, or fall back to `self.vms`
     /// if no leases are held (backward compat for setups without leasing).
     pub fn leased_vms(&self) -> Vec<VmDef> {
-        let max_vms = self.vms.iter().map(|v| v.index).max().unwrap_or(7);
-        let ids = crate::vm::lease::list_cluster_vms(&self.cluster_name, max_vms, &self.lock_dir);
+        let ids = crate::vm::lease::list_cluster_vms(&self.cluster_name, self.max_vms, &self.lock_dir);
         if ids.is_empty() {
             return self.vms.clone();
         }
@@ -828,6 +832,7 @@ impl ClusterConfig<Unchecked> {
             log_file: "game.log".into(),
             state_dir: std::env::temp_dir().join("steampipe-test"),
             cluster_name: "test".into(),
+            max_vms: vm_count.max(1),
             vms,
             backend: Backend::new_local(std::env::temp_dir()),
             backend_kind: BackendKind::Local,

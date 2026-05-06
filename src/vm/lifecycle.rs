@@ -45,13 +45,7 @@ pub async fn up(
     state::ensure_state_dir(&config.state_dir)?;
 
     let vm_count = config.vms.len() as u8;
-    let max_vms = config
-        .vms
-        .iter()
-        .map(|v| v.index)
-        .max()
-        .unwrap_or(7)
-        .max(vm_count);
+    let max_vms = config.max_vms.max(vm_count);
 
     // Reserve VM slots (checks for claims held by other clusters)
     println!("==> Reserving {vm_count} VM(s)...");
