@@ -1187,10 +1187,16 @@ async fn launch_game(
     // game per VM at a time, but scoping per cluster name means a prior owner's
     // stale files never poison a new owner's read, even before game-side
     // `cleanup_stale_heartbeat_files` runs.
+    // Prepend the graphical-app library path published by the vm-graphics
+    // NixOS module (libxkbcommon, libvulkan, libwayland, libGL, libstdc++).
+    // SSH non-login non-interactive sessions don't source /etc/profile, so we
+    // pull the value from /etc/profile.d here instead of relying on shell init.
+    // The variable is empty/unset on VMs without graphics, so a no-op there.
     let cmd = format!(
         "mkdir -p {remote_dir}/{heartbeat_dir} && \
          cd {remote_dir} && \
-         export LD_LIBRARY_PATH=\"{remote_dir}:$LD_LIBRARY_PATH\" \
+         . /etc/profile.d/steampipe-graphics.sh 2>/dev/null || true && \
+         export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
          DISPLAY=:0 \
