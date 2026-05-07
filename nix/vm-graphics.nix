@@ -53,9 +53,11 @@ in {
 
   config = lib.mkIf graphicsEnabled {
     # Mesa/DRI so wgpu and other GPU clients can render on virtio-gpu.
-    # The UI-full crosvm runner disables guest Vulkan; do not add
-    # vulkan-loader to the deployed binary's LD_LIBRARY_PATH here or wgpu can
-    # pick a Mesa software Vulkan adapter instead of virgl/GL.
+    # The UI-full crosvm runner disables guest Vulkan, so the SSH-launched
+    # game must use wgpu's GL backend and Mesa's virtio/virgl path. If wgpu can
+    # see Vulkan here it may select a Mesa software adapter instead; if it
+    # cannot see Vulkan and is not told to use GL it reports "Unable to find a
+    # GPU".
     hardware.graphics.enable = true;
 
     # Default session variables for Wayland clients
@@ -79,6 +81,9 @@ in {
     # `harness/runner.rs::launch_game` sources it explicitly.
     environment.etc."profile.d/steampipe-graphics.sh".text = ''
       export STEAMPIPE_GRAPHICS_LIB_PATH="${graphicalRuntimeLibPath}"
+      export WGPU_BACKEND=gl
+      export MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu
+      export GALLIUM_DRIVER=virgl
     '';
   };
 }
