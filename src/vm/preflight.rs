@@ -5,9 +5,11 @@
 //! - Orphaned microvm processes with no valid lease claim
 //! - Leftover socket files in VM state directories
 //!
-//! Also verifies VM→host connectivity for tests, auto-inserting the nixos-fw
-//! accept rule if needed (the NixOS host firewall blocks VM→host TCP unless
-//! an explicit rule exists for the cluster bridge interface).
+//! Also verifies VM→host connectivity for tests. The NixOS host firewall
+//! must already accept traffic on the cluster bridge — that rule is supplied
+//! by the `services.steampipe-cluster` NixOS module via
+//! `networking.firewall.extraInputRules`. We no longer auto-insert via sudo;
+//! if the rule is missing, the operator must rebuild the host config.
 //!
 //! GPU checks: verifies that VMs have a DRM device when using a GPU display mode.
 
@@ -82,8 +84,11 @@ pub fn cleanup_stale_state<S>(config: &ClusterConfig<S>) -> Option<String> {
 
 /// Verify that at least one VM can TCP-connect back to the host.
 ///
-/// If connectivity fails, checks for the missing nftables rule and
-/// auto-inserts it via `sudo nft`. Bails if the fix doesn't help.
+/// The nixos-fw bridge accept rule must be present declaratively via the
+/// `services.steampipe-cluster` NixOS module (the module sets both
+/// `networking.firewall.trustedInterfaces` and a matching `extraInputRules`
+/// entry). If connectivity fails, this bails with an actionable error
+/// instead of mutating host firewall state at runtime via `sudo nft`.
 pub async fn ensure_vm_to_host_connectivity<S>(
     config: &ClusterConfig<S>,
     backend: &Backend,
@@ -111,7 +116,9 @@ pub async fn ensure_vm_to_host_connectivity<S>(
         return Ok(());
     }
 
-    // Connectivity failed — check nftables
+    // Connectivity failed. Surface a precise diagnostic but do NOT mutate
+    // the host firewall — the rule is the operator's responsibility, set
+    // declaratively via the NixOS module.
     eprintln!(
         "[preflight] VM {} cannot reach host {}:{} — checking nftables...",
         vm.name, config.host_ip, port
@@ -119,30 +126,22 @@ pub async fn ensure_vm_to_host_connectivity<S>(
 
     if has_nixos_fw_bridge_rule(&config.bridge) {
         anyhow::bail!(
-            "VM→host connectivity failed but nixos-fw rule exists.\n\
-             The bridge {br} is up and the firewall rule is present, but TCP\n\
-             from {vm} to {host} is blocked by something else.",
+            "VM→host connectivity failed but the nixos-fw accept rule for {br}\n\
+             is present. TCP from {vm} to {host} is blocked by something else\n\
+             (NAT, IP forwarding, conflicting rule, etc.). Run `cluster-ctl doctor`.",
             br = config.bridge,
             vm = vm.name,
             host = config.host_ip,
         );
     }
 
-    eprintln!(
-        "[preflight] Missing nixos-fw accept rule for {} — inserting via sudo...",
-        config.bridge
-    );
-    insert_nixos_fw_rule(&config.bridge)?;
-
-    // Retry
-    if probe_vm_to_host(backend, &vm.ip, &config.host_ip, port).await {
-        eprintln!("[preflight] Auto-fix successful — VM→host connectivity OK");
-        return Ok(());
-    }
-
     anyhow::bail!(
-        "VM→host connectivity still failing after inserting nixos-fw rule.\n\
-         Run: cluster-ctl doctor"
+        "VM→host connectivity failed and the nixos-fw accept rule for {br}\n\
+         is missing. The `services.steampipe-cluster` NixOS module supplies\n\
+         this rule via networking.firewall.extraInputRules — rebuild your\n\
+         host configuration to apply it (e.g. `sudo nixos-rebuild switch`).\n\
+         Steampipe no longer mutates host firewall state at runtime.",
+        br = config.bridge,
     );
 }
 
@@ -178,23 +177,6 @@ fn has_nixos_fw_bridge_rule(bridge: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// Insert the nixos-fw accept rule for the bridge interface via sudo.
-fn insert_nixos_fw_rule(bridge: &str) -> anyhow::Result<()> {
-    let iifname = format!("iifname \"{bridge}\"");
-    let status = std::process::Command::new("sudo")
-        .args([
-            "nft", "insert", "rule", "inet", "nixos-fw", "input", &iifname, "accept",
-        ])
-        .status()?;
-    if !status.success() {
-        anyhow::bail!(
-            "Failed to insert nixos-fw rule (sudo nft failed).\n\
-             Run manually: sudo nft insert rule inet nixos-fw input iifname \"{bridge}\" accept"
-        );
-    }
-    Ok(())
 }
 
 /// Shell script that checks for a DRM render device inside a VM.

@@ -225,7 +225,16 @@ in {
       };
     };
 
-    # Trust the bridge interface in the NixOS firewall
+    # Trust the bridge interface in the NixOS firewall.
+    # `trustedInterfaces` adds an `iifname "<bridge>" accept` rule near the top
+    # of the nixos-fw input chain, but on some host configurations the rule
+    # ordering or backend (iptables-nft vs pure nftables) can hide it from
+    # textual checks. Add `extraInputRules` as a belt-and-braces explicit rule
+    # so VM→host TCP works deterministically and the cluster preflight check
+    # has a stable substring to match against.
     networking.firewall.trustedInterfaces = [cfg.bridge];
+    networking.firewall.extraInputRules = ''
+      iifname "${cfg.bridge}" accept comment "steampipe-cluster: trust VM bridge"
+    '';
   };
 }
