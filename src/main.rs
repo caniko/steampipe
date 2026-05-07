@@ -15,7 +15,7 @@ use core::state;
 use game::{accounts, capture, run, steam};
 use harness::{bisect, history, output::OutputFormat, runner as test};
 use net::{bridge, deploy, netem};
-use ui::cli::{self, Cli, Commands, DisplayMode, HistoryAction, NetworkMode};
+use ui::cli::{self, Cli, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend};
 use ui::{logs, watch};
 use vm::{lifecycle, snapshot, status};
 
@@ -340,6 +340,16 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .unwrap_or(OutputFormat::Text);
 
+            let resolved_screenshot_backend = prof
+                .as_ref()
+                .and_then(|p| p.screenshot_backend.as_deref())
+                .and_then(|s| match s {
+                    "grim" | "wayland" => Some(ScreenshotBackend::Grim),
+                    "vnc" => Some(ScreenshotBackend::Vnc),
+                    _ => None,
+                })
+                .unwrap_or(ScreenshotBackend::Grim);
+
             // Resolve chaos profile
             let chaos = chaos_profile
                 .as_deref()
@@ -395,6 +405,8 @@ async fn main() -> anyhow::Result<()> {
                             .as_ref()
                             .and_then(|p| p.capture_on_failure)
                             .unwrap_or(false),
+                    screenshot_backend: resolved_screenshot_backend,
+                    visual_validator: prof.as_ref().and_then(|p| p.visual_validator.clone()),
                     display: resolved_display,
                     verbose: true,
                     chaos,
@@ -505,12 +517,42 @@ async fn main() -> anyhow::Result<()> {
         Commands::SnapshotRestore { name } => snapshot::restore(&config, &name)?,
         Commands::SnapshotList => snapshot::list(&config)?,
         Commands::SnapshotDelete { name } => snapshot::delete(&config, &name)?,
-        Commands::Screenshot { output } => {
+        Commands::Screenshot {
+            output,
+            screenshot_backend,
+            validate,
+        } => {
             let output_dir = output.unwrap_or_else(|| {
                 let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
                 project_root.join(format!("screenshots/{ts}"))
             });
-            capture::screenshot_all(&config, &output_dir).await?;
+            let validator = if validate {
+                let project_config = config::load_project_config(&project_root)
+                    .ok_or_else(|| anyhow::anyhow!("--validate requires steampipe.toml"))?;
+                let validators: Vec<String> = project_config
+                    .profile
+                    .unwrap_or_default()
+                    .into_values()
+                    .filter_map(|profile| profile.visual_validator)
+                    .collect();
+                match validators.as_slice() {
+                    [validator] => Some(validator.clone()),
+                    [] => anyhow::bail!(
+                        "--validate requires exactly one profile visual_validator in steampipe.toml"
+                    ),
+                    _ => anyhow::bail!(
+                        "--validate found multiple profile visual_validator values; use a test profile for disambiguation"
+                    ),
+                }
+            } else {
+                None
+            };
+            let options = capture::ScreenshotOptions {
+                backend: screenshot_backend,
+                validator,
+                run_label: None,
+            };
+            capture::screenshot_all(&config, &output_dir, &options).await?;
         }
         Commands::Accounts => accounts::show(&config).await?,
         Commands::CleanLogins {

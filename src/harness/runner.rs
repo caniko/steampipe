@@ -38,6 +38,8 @@ pub struct TestConfig {
     pub filter_pattern: Option<String>,
     pub output_file: Option<PathBuf>,
     pub capture_on_failure: bool,
+    pub screenshot_backend: crate::cli::ScreenshotBackend,
+    pub visual_validator: Option<String>,
     /// VM display mode: headless (game gets `--headless`), weston, or sway.
     pub display: crate::cli::DisplayMode,
     /// When false, suppress `println!` output (for MCP tools where stdout is JSON-RPC).
@@ -76,6 +78,23 @@ pub fn resolve_hard_timeout(timeout: Duration, explicit: Option<Duration>) -> Du
                 .max(DEFAULT_HARD_TIMEOUT_MIN_SECS),
         )
     })
+}
+
+pub fn validate_visual_capture_config(
+    display: crate::cli::DisplayMode,
+    screenshot_backend: crate::cli::ScreenshotBackend,
+) -> anyhow::Result<()> {
+    if screenshot_backend == crate::cli::ScreenshotBackend::Vnc
+        && !matches!(
+            display,
+            crate::cli::DisplayMode::Sway | crate::cli::DisplayMode::SwayGpu
+        )
+    {
+        anyhow::bail!(
+            "VNC screenshots require display \"sway\" or \"sway-gpu\" because wayvnc requires a wlroots compositor; got \"{display}\""
+        );
+    }
+    Ok(())
 }
 
 // ── Heartbeat trait: static dispatch for local vs. VM heartbeat sources ──
@@ -490,6 +509,9 @@ pub async fn run<S>(
 ) -> anyhow::Result<String> {
     if test_config.players < 2 || test_config.players > 8 {
         anyhow::bail!("players must be 2-8, got {}", test_config.players);
+    }
+    if test_config.capture_on_failure || test_config.visual_validator.is_some() {
+        validate_visual_capture_config(test_config.display, test_config.screenshot_backend)?;
     }
 
     let vm_count = (test_config.players as usize)
@@ -945,7 +967,13 @@ pub async fn run<S>(
             // Capture screenshots on failure
             if test_config.capture_on_failure {
                 let screenshot_dir = project_root.join("logs");
-                crate::capture::capture_on_failure(config, &screenshot_dir, run_num).await;
+                let options = crate::capture::ScreenshotOptions {
+                    backend: test_config.screenshot_backend,
+                    validator: test_config.visual_validator.clone(),
+                    run_label: None,
+                };
+                crate::capture::capture_on_failure(config, &screenshot_dir, run_num, &options)
+                    .await;
             }
 
             if test_config.stop_on_failure {
@@ -1788,6 +1816,25 @@ mod tests {
             resolve_hard_timeout(Duration::from_secs(600), None),
             Duration::from_secs(3_000)
         );
+    }
+
+    #[test]
+    fn vnc_backend_rejects_non_sway_display() {
+        let err = validate_visual_capture_config(
+            crate::cli::DisplayMode::WestonGpu,
+            crate::cli::ScreenshotBackend::Vnc,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("sway"));
+    }
+
+    #[test]
+    fn vnc_backend_accepts_sway_gpu_display() {
+        validate_visual_capture_config(
+            crate::cli::DisplayMode::SwayGpu,
+            crate::cli::ScreenshotBackend::Vnc,
+        )
+        .unwrap();
     }
 
     #[test]

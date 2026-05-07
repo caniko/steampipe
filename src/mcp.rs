@@ -212,6 +212,12 @@ pub struct ClusterTestInput {
     /// Capture screenshots on failure (default: false).
     #[serde(default)]
     pub capture_on_failure: Option<bool>,
+    /// Screenshot backend: "grim" (default) or "vnc".
+    #[serde(default)]
+    pub screenshot_backend: Option<String>,
+    /// Project-owned visual validator command.
+    #[serde(default)]
+    pub visual_validator: Option<String>,
     /// Regex filter for output lines.
     #[serde(default)]
     pub filter_pattern: Option<String>,
@@ -530,6 +536,17 @@ impl SteampipeMcp {
             }
         };
 
+        let screenshot_backend = match input.screenshot_backend.as_deref().unwrap_or("grim") {
+            "grim" | "wayland" => crate::cli::ScreenshotBackend::Grim,
+            "vnc" => crate::cli::ScreenshotBackend::Vnc,
+            other => {
+                return Err(ErrorData::invalid_params(
+                    format!("screenshot_backend must be \"grim\" or \"vnc\", got \"{other}\""),
+                    None,
+                ));
+            }
+        };
+
         let test_config = crate::test::TestConfig {
             network,
             players: input.players.unwrap_or(default_players),
@@ -548,6 +565,8 @@ impl SteampipeMcp {
             filter_pattern: input.filter_pattern,
             output_file: input.output_file.map(std::path::PathBuf::from),
             capture_on_failure: input.capture_on_failure.unwrap_or(false),
+            screenshot_backend,
+            visual_validator: input.visual_validator,
             display,
             verbose: false, // suppress println to avoid corrupting MCP transport
             chaos: None,

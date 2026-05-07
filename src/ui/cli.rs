@@ -7,6 +7,25 @@ use clap_complete::Shell;
 use crate::core::config::BackendKind;
 use crate::harness::output::OutputFormat;
 
+/// Screenshot capture backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ScreenshotBackend {
+    /// Capture from the VM's Wayland compositor using grim.
+    #[value(alias = "wayland")]
+    Grim,
+    /// Capture the viewer-visible VNC framebuffer.
+    Vnc,
+}
+
+impl fmt::Display for ScreenshotBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Grim => f.write_str("grim"),
+            Self::Vnc => f.write_str("vnc"),
+        }
+    }
+}
+
 /// Network transport layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum NetworkMode {
@@ -426,6 +445,12 @@ pub enum Commands {
         /// Output directory (default: screenshots/<timestamp>)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Screenshot backend: grim or vnc
+        #[arg(long = "screenshot-backend", default_value = "grim")]
+        screenshot_backend: ScreenshotBackend,
+        /// Run the configured project visual validator for each screenshot
+        #[arg(long)]
+        validate: bool,
     },
 
     /// Show Steam account status across all VMs
@@ -646,6 +671,29 @@ mod tests {
                 assert_eq!(target.as_deref(), Some("vm-2"));
             }
             _ => panic!("expected Logs command"),
+        }
+    }
+
+    #[test]
+    fn screenshot_backend_vnc() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "screenshot",
+            "--screenshot-backend",
+            "vnc",
+            "--validate",
+        ]);
+        match cli.command {
+            Commands::Screenshot {
+                screenshot_backend,
+                validate,
+                ..
+            } => {
+                assert!(matches!(screenshot_backend, ScreenshotBackend::Vnc));
+                assert!(validate);
+            }
+            _ => panic!("expected Screenshot command"),
         }
     }
 

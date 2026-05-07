@@ -203,6 +203,8 @@ pub struct TestProfile {
     pub no_deploy: Option<bool>,
     pub no_stop_on_failure: Option<bool>,
     pub capture_on_failure: Option<bool>,
+    pub screenshot_backend: Option<String>,
+    pub visual_validator: Option<String>,
     pub filter_pattern: Option<String>,
     pub output_file: Option<String>,
     pub chaos_profile: Option<String>,
@@ -1299,6 +1301,8 @@ mod tests {
             no_deploy = false
             no_stop_on_failure = true
             capture_on_failure = true
+            screenshot_backend = "vnc"
+            visual_validator = "validator --image $STEAMPIPE_VISUAL_IMAGE"
             filter_pattern = "FAIL|PASS"
             output_file = "/tmp/out.txt"
             chaos_profile = "satellite"
@@ -1322,6 +1326,11 @@ mod tests {
         assert_eq!(full.no_deploy, Some(false));
         assert_eq!(full.no_stop_on_failure, Some(true));
         assert_eq!(full.capture_on_failure, Some(true));
+        assert_eq!(full.screenshot_backend.as_deref(), Some("vnc"));
+        assert_eq!(
+            full.visual_validator.as_deref(),
+            Some("validator --image $STEAMPIPE_VISUAL_IMAGE")
+        );
         assert_eq!(full.filter_pattern.as_deref(), Some("FAIL|PASS"));
         assert_eq!(full.output_file.as_deref(), Some("/tmp/out.txt"));
         assert_eq!(full.chaos_profile.as_deref(), Some("satellite"));

@@ -195,6 +195,8 @@ pub async fn run<S: Send + Sync>(
                 filter_pattern: None,
                 output_file: None,
                 capture_on_failure: false,
+                screenshot_backend: crate::cli::ScreenshotBackend::Grim,
+                visual_validator: None,
                 display: bisect_config.display,
                 verbose: false,
                 chaos: None,
