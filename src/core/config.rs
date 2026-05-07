@@ -769,7 +769,8 @@ impl<S> ClusterConfig<S> {
     /// Return VMs currently leased by this cluster, or fall back to `self.vms`
     /// if no leases are held (backward compat for setups without leasing).
     pub fn leased_vms(&self) -> Vec<VmDef> {
-        let ids = crate::vm::lease::list_cluster_vms(&self.cluster_name, self.max_vms, &self.lock_dir);
+        let ids =
+            crate::vm::lease::list_cluster_vms(&self.cluster_name, self.max_vms, &self.lock_dir);
         if ids.is_empty() {
             return self.vms.clone();
         }
@@ -1360,7 +1361,10 @@ mod tests {
         let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
         let iso = proj.profile.unwrap().get("iso").unwrap().clone();
         let env = iso.env.unwrap();
-        assert_eq!(env.get("THESPAN_SESSION_ID").map(String::as_str), Some("fixloop-uifull-1v1-lan"));
+        assert_eq!(
+            env.get("THESPAN_SESSION_ID").map(String::as_str),
+            Some("fixloop-uifull-1v1-lan")
+        );
         assert_eq!(env.get("RUST_LOG").map(String::as_str), Some("info"));
     }
 

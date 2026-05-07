@@ -31,12 +31,10 @@ fn resolve_run_env(
     profile: Option<&core::config::TestProfile>,
     config: &core::config::ClusterConfig,
 ) -> std::collections::BTreeMap<String, String> {
-    let mut env: std::collections::BTreeMap<String, String> = profile
-        .and_then(|p| p.env.clone())
-        .unwrap_or_default();
-    env.entry("THESPAN_SESSION_ID".to_string()).or_insert_with(|| {
-        format!("{}-{}", config.cluster_name, std::process::id())
-    });
+    let mut env: std::collections::BTreeMap<String, String> =
+        profile.and_then(|p| p.env.clone()).unwrap_or_default();
+    env.entry("THESPAN_SESSION_ID".to_string())
+        .or_insert_with(|| format!("{}-{}", config.cluster_name, std::process::id()));
     env
 }
 

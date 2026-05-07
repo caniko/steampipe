@@ -212,7 +212,10 @@ fn blit_vnc_pixels(
     let rect_height = usize::from(rect.height);
     let expected = rect_width * rect_height * bytes_per_pixel;
     if pixels.len() < expected {
-        anyhow::bail!("short VNC pixel buffer: got {}, expected {expected}", pixels.len());
+        anyhow::bail!(
+            "short VNC pixel buffer: got {}, expected {expected}",
+            pixels.len()
+        );
     }
 
     for y in 0..rect_height {
@@ -412,10 +415,8 @@ mod tests {
 
     #[test]
     fn blank_image_fails_nonblank_validation() {
-        let dir = std::env::temp_dir().join(format!(
-            "steampipe-blank-image-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("steampipe-blank-image-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let image = dir.join("blank.png");
         image::save_buffer(&image, &[0; 4 * 8 * 8], 8, 8, image::ColorType::Rgba8).unwrap();
@@ -427,10 +428,8 @@ mod tests {
 
     #[test]
     fn validator_receives_visual_env() {
-        let dir = std::env::temp_dir().join(format!(
-            "steampipe-validator-env-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("steampipe-validator-env-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let image = dir.join("vm-1.png");
         image::save_buffer(&image, &[255; 4], 1, 1, image::ColorType::Rgba8).unwrap();
@@ -448,10 +447,7 @@ mod tests {
         run_validator(&validator, &image, "vm-1", &options).unwrap();
 
         let env = std::fs::read_to_string(&env_out).unwrap();
-        assert_eq!(
-            env,
-            format!("{}|vm-1|run-7|vnc", image.display())
-        );
+        assert_eq!(env, format!("{}|vm-1|run-7|vnc", image.display()));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

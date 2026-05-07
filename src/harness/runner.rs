@@ -248,11 +248,10 @@ fn fatal_output_marker(output: &str) -> Option<&'static str> {
     for line in output.lines() {
         let nonzero_graceful_shutdown = line.contains("Graceful shutdown: exit_code=")
             && !line.contains("Graceful shutdown: exit_code=0");
-        let nonzero_graceful_shutdown_request =
-            line.contains("GracefulShutdownRequest received (exit_code=")
-                && !line.contains("GracefulShutdownRequest received (exit_code=0");
-        if nonzero_graceful_shutdown || nonzero_graceful_shutdown_request
-        {
+        let nonzero_graceful_shutdown_request = line
+            .contains("GracefulShutdownRequest received (exit_code=")
+            && !line.contains("GracefulShutdownRequest received (exit_code=0");
+        if nonzero_graceful_shutdown || nonzero_graceful_shutdown_request {
             return Some("GRACEFUL_SHUTDOWN_ERROR");
         }
     }
@@ -699,8 +698,8 @@ pub async fn run<S>(
     // cluster_test invocations with distinct cluster names cannot wipe each
     // other's heartbeats or merge into a single strace log.
     let local_heartbeat_dir = ensure_cluster_runtime_dirs(project_root, &config.cluster_name);
-    let strace_output = cluster_runtime_dir(project_root, &config.cluster_name)
-        .join("strace-host.log");
+    let strace_output =
+        cluster_runtime_dir(project_root, &config.cluster_name).join("strace-host.log");
     // VM-side heartbeats live under `<remote_dir>/<vm_heartbeat_subdir>` so the
     // VM scoping mirrors the host. The path is relative because launch_game
     // shells in via `cd remote_dir`.
@@ -868,7 +867,6 @@ pub async fn run<S>(
         .await??;
 
         cleanup_heartbeat_files(&local_heartbeat_dir);
-        crate::run::kill_games(backend, target_vms, binary_name).await;
 
         // Filter and report
         for line in combined.lines().filter(|l| filter_re.is_match(l)) {
@@ -950,7 +948,9 @@ pub async fn run<S>(
         }
 
         // Collect VM logs on failure
-        if monitor_failure.is_some() || exit_code != Some(0) || fatal_marker.is_some() {
+        let run_failed =
+            monitor_failure.is_some() || exit_code != Some(0) || fatal_marker.is_some();
+        if run_failed {
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
             if vm_logs_for_report.is_none() {
                 let mut logs = Vec::new();
@@ -988,9 +988,12 @@ pub async fn run<S>(
                     .await;
             }
 
+            crate::run::kill_games(backend, target_vms, binary_name).await;
             if test_config.stop_on_failure {
                 break;
             }
+        } else {
+            crate::run::kill_games(backend, target_vms, binary_name).await;
         }
 
         // Track exit codes for history
@@ -1321,9 +1324,7 @@ fn cleanup_heartbeat_files(dir: &Path) {
 /// other's progress files. Returns
 /// `<project_root>/.steampipe-runtime/<cluster_name>/`.
 fn cluster_runtime_dir(project_root: &Path, cluster_name: &str) -> std::path::PathBuf {
-    project_root
-        .join(".steampipe-runtime")
-        .join(cluster_name)
+    project_root.join(".steampipe-runtime").join(cluster_name)
 }
 
 fn ensure_cluster_runtime_dirs(project_root: &Path, cluster_name: &str) -> std::path::PathBuf {
@@ -1618,7 +1619,10 @@ mod tests {
             cmd.contains("STEAMPIPE_HEARTBEAT_DIR=/home/u/cb/.steampipe-runtime/1v1/heartbeats &&"),
             "expected production-shape export tail, got: {cmd}",
         );
-        assert!(!cmd.contains("THESPAN_SESSION_ID="), "expected no env injection: {cmd}");
+        assert!(
+            !cmd.contains("THESPAN_SESSION_ID="),
+            "expected no env injection: {cmd}"
+        );
     }
 
     /// With session id set, the bash command exports it on the same line
@@ -1626,10 +1630,7 @@ mod tests {
     #[test]
     fn build_vm_launch_cmd_injects_session_id() {
         let mut env = std::collections::BTreeMap::new();
-        env.insert(
-            "THESPAN_SESSION_ID".into(),
-            "1v1-uifull-12345".into(),
-        );
+        env.insert("THESPAN_SESSION_ID".into(), "1v1-uifull-12345".into());
         let cmd = build_vm_launch_cmd(
             "/home/u/cb",
             "chessbender",
@@ -1647,7 +1648,10 @@ mod tests {
         // applies to the game process, not to a later subshell.
         let session_idx = cmd.find("THESPAN_SESSION_ID=").unwrap();
         let nohup_idx = cmd.find("nohup ").unwrap();
-        assert!(session_idx < nohup_idx, "session id must export before launch: {cmd}");
+        assert!(
+            session_idx < nohup_idx,
+            "session id must export before launch: {cmd}"
+        );
     }
 
     #[test]
