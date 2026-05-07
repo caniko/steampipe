@@ -63,7 +63,7 @@ export WAYLAND_DISPLAY=wayland-1
 if ! pgrep -x wayvnc >/dev/null; then
     rm -f "$XDG_RUNTIME_DIR/wayvnc.log"
     nohup env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-        wayvnc --log-level=info 0.0.0.0 5900 >"$XDG_RUNTIME_DIR/wayvnc.log" 2>&1 &
+        wayvnc --disable-input --log-level=info 0.0.0.0 5900 >"$XDG_RUNTIME_DIR/wayvnc.log" 2>&1 &
     sleep 2
 fi
 if pgrep -x wayvnc >/dev/null; then
