@@ -1192,15 +1192,22 @@ async fn launch_game(
     // SSH non-login non-interactive sessions don't source /etc/profile, so we
     // pull the value from /etc/profile.d here instead of relying on shell init.
     // The variable is empty/unset on VMs without graphics, so a no-op there.
+    //
+    // The VM compositors still expose Wayland for setup/capture tooling, but
+    // the game itself is launched through Xwayland. Bevy/wgpu's native Wayland
+    // Vulkan swapchain path can time out on crosvm/virtio-gpu after several
+    // minutes of UI-full play. Xwayland keeps a visible VM window while using
+    // a different WSI path for the game client.
     let cmd = format!(
         "mkdir -p {remote_dir}/{heartbeat_dir} && \
          cd {remote_dir} && \
          . /etc/profile.d/steampipe-graphics.sh 2>/dev/null || true && \
          export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
-         WAYLAND_DISPLAY=wayland-1 \
          DISPLAY=:0 \
+         RUST_BACKTRACE=1 \
          STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir} && \
+         unset WAYLAND_DISPLAY WAYLAND_SOCKET && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     );
     // Use run_cmd_timeout to avoid hanging if the channel doesn't close
