@@ -16,7 +16,7 @@ pub fn weston_setup(vm_user: &str) -> String {
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
 if ! pgrep -x weston >/dev/null; then
-    weston --backend=headless --xwayland --no-config >/dev/null 2>&1 &
+    weston --backend=headless --xwayland --no-config >$XDG_RUNTIME_DIR/weston.log 2>&1 &
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
@@ -32,7 +32,7 @@ pub fn sway_setup(vm_user: &str) -> String {
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
 if ! pgrep -x sway >/dev/null; then
-    sway >/dev/null 2>&1 &
+    sway >$XDG_RUNTIME_DIR/sway.log 2>&1 &
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
@@ -56,7 +56,7 @@ pub fn weston_gpu_setup(vm_user: &str) -> String {
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
 if ! pgrep -x weston >/dev/null; then
-    weston --renderer=pixman --xwayland --no-config >/dev/null 2>&1 &
+    weston --renderer=pixman --xwayland --no-config >$XDG_RUNTIME_DIR/weston.log 2>&1 &
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
@@ -72,7 +72,7 @@ pub fn sway_gpu_setup(vm_user: &str) -> String {
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
 if ! pgrep -x sway >/dev/null; then
-    WLR_BACKENDS=drm sway >/dev/null 2>&1 &
+    WLR_BACKENDS=drm sway >$XDG_RUNTIME_DIR/sway.log 2>&1 &
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1

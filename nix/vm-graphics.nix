@@ -78,5 +78,12 @@ in {
     environment.etc."profile.d/steampipe-graphics.sh".text = ''
       export STEAMPIPE_GRAPHICS_LIB_PATH="${graphicalRuntimeLibPath}"
     '';
+
+    environment.systemPackages = with pkgs; [
+      grim
+      mesa-demos
+      vulkan-tools
+      wayland-utils
+    ];
   };
 }
