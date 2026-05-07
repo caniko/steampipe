@@ -221,11 +221,19 @@ fn first_wayland_socket(runtime: &Path) -> anyhow::Result<Option<String>> {
 }
 
 fn fatal_output_marker(output: &str) -> Option<&'static str> {
-    const MARKERS: [(&str, &str); 7] = [
+    const MARKERS: [(&str, &str); 15] = [
         ("panicked at", "PANIC"),
         ("thread '", "PANIC"),
         ("[FATAL]", "FATAL"),
+        ("PHASE_WATCHDOG", "PHASE_WATCHDOG"),
+        ("CONNECTION_LOST", "CONNECTION_LOST"),
+        ("INVARIANT_VIOLATION", "INVARIANT_VIOLATION"),
+        ("COMMITMENT_FAILURE", "COMMITMENT_FAILURE"),
+        ("FORMATION_WATCHDOG", "FORMATION_WATCHDOG"),
+        ("MOVE_RESEND_WATCHDOG", "MOVE_RESEND_WATCHDOG"),
+        ("PEER_READY_TIMEOUT", "PEER_READY_TIMEOUT"),
         ("STEAM_UNAVAILABLE", "STEAM_UNAVAILABLE"),
+        ("BATTLE_STUCK", "BATTLE_STUCK"),
         ("DAG_VIOLATION", "DAG_VIOLATION"),
         ("DAG.VIOLATION", "DAG_VIOLATION"),
         ("DESYNC", "DESYNC"),
@@ -238,8 +246,12 @@ fn fatal_output_marker(output: &str) -> Option<&'static str> {
     }
 
     for line in output.lines() {
-        if line.contains("Graceful shutdown: exit_code=")
-            && !line.contains("Graceful shutdown: exit_code=0")
+        let nonzero_graceful_shutdown = line.contains("Graceful shutdown: exit_code=")
+            && !line.contains("Graceful shutdown: exit_code=0");
+        let nonzero_graceful_shutdown_request =
+            line.contains("GracefulShutdownRequest received (exit_code=")
+                && !line.contains("GracefulShutdownRequest received (exit_code=0");
+        if nonzero_graceful_shutdown || nonzero_graceful_shutdown_request
         {
             return Some("GRACEFUL_SHUTDOWN_ERROR");
         }
@@ -1651,6 +1663,16 @@ mod tests {
         assert_eq!(
             fatal_output_marker("Graceful shutdown: exit_code=19 (STEAM_UNAVAILABLE)"),
             Some("STEAM_UNAVAILABLE")
+        );
+        assert_eq!(
+            fatal_output_marker(
+                "GracefulShutdownRequest received (exit_code=17, MOVE_RESEND_WATCHDOG)"
+            ),
+            Some("MOVE_RESEND_WATCHDOG")
+        );
+        assert_eq!(
+            fatal_output_marker("GracefulShutdownRequest received (exit_code=42, CUSTOM_ERROR)"),
+            Some("GRACEFUL_SHUTDOWN_ERROR")
         );
         assert_eq!(
             fatal_output_marker("Graceful shutdown: exit_code=0 (SUCCESS)"),
