@@ -1193,21 +1193,36 @@ async fn launch_game(
     // pull the value from /etc/profile.d here instead of relying on shell init.
     // The variable is empty/unset on VMs without graphics, so a no-op there.
     //
-    // The VM compositors still expose Wayland for setup/capture tooling, but
-    // the game itself is launched through Xwayland. Bevy/wgpu's native Wayland
-    // Vulkan swapchain path can time out on crosvm/virtio-gpu after several
-    // minutes of UI-full play. Xwayland keeps a visible VM window while using
-    // a different WSI path for the game client.
+    // Game runs as a native Wayland client: weston-gpu (or weston-pixman
+    // under regicide's `patchCrosvmGpuParams`) provides the wayland-1
+    // socket, the guest's mesa stack maps virtio-gpu's DRM render node
+    // through EGL/GBM to virgl, and that routes to the host hardware
+    // (verified: in-VM `eglinfo` reports
+    // `OpenGL core profile renderer: virgl (AMD Radeon RX 7900 XTX ...)`).
+    //
+    // An earlier comment here said Bevy/wgpu's native Wayland Vulkan
+    // swapchain timed out on crosvm + virtio-gpu after several minutes
+    // of UI-full play, and forced the game through Xwayland (`DISPLAY=:0;
+    // unset WAYLAND_DISPLAY`). That workaround had a hidden cost: GLX-
+    // on-Xwayland in this configuration falls back to llvmpipe, so the
+    // entire UI-full path was rendering in software despite the GPU
+    // stack being wired through. With `patchCrosvmGpuParams` currently
+    // setting `vulkan:false` to dodge a host-side scanout corruption,
+    // wgpu picks GL via virgl, not Vulkan, so the original Vulkan-
+    // specific timeout cannot reproduce in this configuration.
+    //
+    // See docs/src/investigations/removing-xwayland-from-cluster-vms.md
+    // for the full picture and the verification checklist.
     let cmd = format!(
         "mkdir -p {remote_dir}/{heartbeat_dir} && \
          cd {remote_dir} && \
          . /etc/profile.d/steampipe-graphics.sh 2>/dev/null || true && \
          export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
+         WAYLAND_DISPLAY=wayland-1 \
          DISPLAY=:0 \
          RUST_BACKTRACE=1 \
          STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir} && \
-         unset WAYLAND_DISPLAY WAYLAND_SOCKET && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     );
     // Use run_cmd_timeout to avoid hanging if the channel doesn't close
