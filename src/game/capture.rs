@@ -57,12 +57,24 @@ pub async fn ensure_wayvnc(backend: &Backend, vm: &VmDef, vm_user: &str) -> anyh
     let cmd = format!(
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
+mkdir -p "$XDG_RUNTIME_DIR"
+chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 export WAYLAND_DISPLAY=wayland-1
 if ! pgrep -x wayvnc >/dev/null; then
-    nohup wayvnc 0.0.0.0 5900 >$XDG_RUNTIME_DIR/wayvnc.log 2>&1 &
-    sleep 1
+    rm -f "$XDG_RUNTIME_DIR/wayvnc.log"
+    nohup env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
+        wayvnc --log-level=info 0.0.0.0 5900 >"$XDG_RUNTIME_DIR/wayvnc.log" 2>&1 &
+    sleep 2
 fi
-pgrep -x wayvnc >/dev/null && echo OK || echo FAIL
+if pgrep -x wayvnc >/dev/null; then
+    echo OK
+else
+    echo FAIL
+    if [ -f "$XDG_RUNTIME_DIR/wayvnc.log" ]; then
+        echo "--- wayvnc.log ---"
+        tail -n 40 "$XDG_RUNTIME_DIR/wayvnc.log"
+    fi
+fi
 "#
     );
     let result = backend.run_cmd(&vm.ip, &cmd).await;
@@ -70,8 +82,10 @@ pgrep -x wayvnc >/dev/null && echo OK || echo FAIL
         Ok(())
     } else {
         anyhow::bail!(
-            "{}: wayvnc failed to start; VNC screenshots require a sway/sway-gpu display",
-            vm.name
+            "{}: wayvnc failed to start; VNC screenshots require an active sway/sway-gpu session\nstdout:\n{}\nstderr:\n{}",
+            vm.name,
+            result.stdout.trim(),
+            result.stderr.trim()
         );
     }
 }
