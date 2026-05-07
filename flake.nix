@@ -193,6 +193,13 @@
           # microvm runner skips that workaround and uses our pre-compiled
           # `.bpf` policies instead.
           version = "107.1-unstable-2026-02-13";
+          buildInputs = (oldAttrs.buildInputs or []) ++ [
+            final.aemu
+            final.gfxstream
+          ];
+          buildFeatures = (oldAttrs.buildFeatures or []) ++ [
+            "gfxstream"
+          ];
           nativeBuildInputs = (oldAttrs.nativeBuildInputs or []) ++ [
             final.python3
           ];
