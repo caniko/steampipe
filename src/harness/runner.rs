@@ -6,7 +6,6 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -100,9 +99,8 @@ struct VmHeartbeat<'a> {
 
 struct LocalDisplay {
     child: Child,
-    display: String,
+    wayland_display: String,
     xdg_runtime_dir: PathBuf,
-    extra_ld_library_path: Option<String>,
 }
 
 impl LocalDisplay {
@@ -113,12 +111,12 @@ impl LocalDisplay {
 
         Self::start()
             .map(Some)
-            .map_err(|err| anyhow::anyhow!("failed to start local Weston/Xwayland display: {err}"))
+            .map_err(|err| anyhow::anyhow!("failed to start local Weston display: {err}"))
     }
 
     fn start() -> anyhow::Result<Self> {
         let runtime =
-            std::env::temp_dir().join(format!("steampipe-xwayland-{}", std::process::id()));
+            std::env::temp_dir().join(format!("steampipe-wayland-{}", std::process::id()));
         std::fs::create_dir_all(&runtime)?;
 
         #[cfg(unix)]
@@ -131,7 +129,6 @@ impl LocalDisplay {
             .args([
                 "--backend=headless",
                 "--renderer=gl",
-                "--xwayland",
                 "--width=1280",
                 "--height=720",
                 "--idle-time=0",
@@ -140,58 +137,33 @@ impl LocalDisplay {
             .env("XDG_RUNTIME_DIR", &runtime)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::null())
             .spawn()?;
 
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("Weston stderr was not captured"))?;
-        let mut reader = BufReader::new(stderr);
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut line = String::new();
-        let mut log_excerpt = String::new();
-        let display = loop {
-            line.clear();
-            let bytes = reader.read_line(&mut line)?;
-            if bytes == 0 {
-                anyhow::bail!("Weston exited before Xwayland display was ready: {log_excerpt}");
+        let wayland_display = loop {
+            if let Some(display) = first_wayland_socket(&runtime)? {
+                break display;
             }
-            log_excerpt.push_str(&line);
-            if let Some(display) = parse_xwayland_display(&line) {
-                break display.to_string();
+            if let Some(status) = child.try_wait()? {
+                anyhow::bail!("Weston exited before Wayland socket was ready: {status}");
             }
             if Instant::now() > deadline {
-                anyhow::bail!("timed out waiting for Xwayland display: {log_excerpt}");
+                anyhow::bail!("timed out waiting for Wayland socket");
             }
+            std::thread::sleep(Duration::from_millis(50));
         };
-
-        let _stderr_drain = std::thread::spawn(move || {
-            let mut sink = String::new();
-            for line in reader.lines().map_while(Result::ok) {
-                sink.push_str(&line);
-                if sink.len() > 8192 {
-                    sink.clear();
-                }
-            }
-        });
 
         Ok(Self {
             child,
-            display,
+            wayland_display,
             xdg_runtime_dir: runtime,
-            extra_ld_library_path: std::env::var("STEAMPIPE_XWAYLAND_LD_LIBRARY_PATH").ok(),
         })
     }
 
     fn apply_to(&self, command: &mut Command) {
-        command.env("DISPLAY", &self.display);
         command.env("XDG_RUNTIME_DIR", &self.xdg_runtime_dir);
-        command.env("WINIT_UNIX_BACKEND", "x11");
-    }
-
-    fn extra_ld_library_path(&self) -> Option<&str> {
-        self.extra_ld_library_path.as_deref()
+        command.env("WAYLAND_DISPLAY", &self.wayland_display);
     }
 }
 
@@ -213,10 +185,20 @@ fn should_auto_start_local_display(host_args: &str, has_display: bool) -> bool {
     !has_display && !host_args.split_whitespace().any(|arg| arg == "--headless")
 }
 
-fn parse_xwayland_display(line: &str) -> Option<&str> {
-    let marker = "xserver listening on display ";
-    let start = line.find(marker)? + marker.len();
-    line[start..].split_whitespace().next()
+fn first_wayland_socket(runtime: &Path) -> anyhow::Result<Option<String>> {
+    let mut displays = Vec::new();
+    for entry in std::fs::read_dir(runtime)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with("wayland-") && !name.ends_with(".lock") {
+            displays.push(name.to_string());
+        }
+    }
+    displays.sort();
+    Ok(displays.into_iter().next())
 }
 
 fn fatal_output_marker(output: &str) -> Option<&'static str> {
@@ -672,7 +654,7 @@ pub async fn run<S>(
     if let Some(display) = &local_display {
         print_and_push(
             &mut output,
-            &format!("=== LOCAL XWAYLAND DISPLAY {} ===", display.display),
+            &format!("=== LOCAL WAYLAND DISPLAY {} ===", display.wayland_display),
             verbose,
         );
         output.push('\n');
@@ -742,11 +724,6 @@ pub async fn run<S>(
         let mut ld_paths = Vec::new();
         if let Some(lib_dir) = config.steam_api_lib.parent() {
             ld_paths.push(lib_dir.to_string_lossy().into_owned());
-        }
-        if let Some(display) = &local_display
-            && let Some(extra) = display.extra_ld_library_path()
-        {
-            ld_paths.push(extra.to_string());
         }
         if let Ok(existing) = std::env::var("LD_LIBRARY_PATH")
             && !existing.is_empty()
@@ -1535,14 +1512,6 @@ mod tests {
         assert_eq!(parsed[0].round, 1);
         assert_eq!(parsed[0].turn, 2);
         assert_eq!(parsed[0].progress_seq, 3);
-    }
-
-    #[test]
-    fn xwayland_display_line_parses_display() {
-        assert_eq!(
-            parse_xwayland_display("[15:12:08.235] xserver listening on display :2\n"),
-            Some(":2")
-        );
     }
 
     #[test]
