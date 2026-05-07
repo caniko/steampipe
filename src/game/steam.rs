@@ -42,13 +42,21 @@ export DISPLAY=:0
 }
 
 /// Shell snippet that ensures weston is running on the virtio-gpu DRM device.
+///
+/// Uses the pixman software renderer for compositing. The DRM backend itself
+/// still binds to the virtio-gpu DRM device for KMS, but pixman avoids issuing
+/// the GLSL 4.30 / virgl 3D commands that crash the crosvm vcpu thread on
+/// hosts whose virglrenderer/KVM combo is sensitive (the EFAULT documented
+/// in `project_uifull_virgl_efault.md`). Guest applications can still bind
+/// the virtio-gpu via /dev/dri for their own rendering — the pixman renderer
+/// only governs weston's *compositor* path, not what clients render with.
 pub fn weston_gpu_setup(vm_user: &str) -> String {
     format!(
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
 if ! pgrep -x weston >/dev/null; then
-    weston --xwayland --no-config >/dev/null 2>&1 &
+    weston --renderer=pixman --xwayland --no-config >/dev/null 2>&1 &
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
@@ -1496,6 +1504,17 @@ mod tests {
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
+    }
+
+    #[test]
+    fn weston_gpu_setup_uses_pixman_renderer() {
+        let script = weston_gpu_setup("testuser");
+        assert!(
+            script.contains("--renderer=pixman"),
+            "weston_gpu_setup must use the pixman software renderer to avoid \
+             issuing virgl 3D commands during compositor init — see \
+             project_uifull_virgl_efault.md"
+        );
     }
 
     #[test]

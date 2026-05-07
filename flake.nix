@@ -238,16 +238,31 @@
                 #     a result. We widen to `madvise: 1` (advice is a
                 #     memory hint, no security-meaningful operation).
                 #
-                # Filed upstream: <tbd>.
-                if [ -f "$outdir/common_device.policy" ]; then
+                # Filed upstream:
+                #   - nixpkgs: NixOS/nixpkgs#517363 (install policies +
+                #     widen prctl/madvise in common_device.policy)
+                #   - microvm.nix: microvm-nix/microvm.nix#516 (drop
+                #     --seccomp-log-failures version-gate, makes the
+                #     `version = "107.1-..."` override above unnecessary
+                #     once it lands)
+                #
+                # Apply the same widenings to gpu_common.policy. The GPU
+                # device's seccomp filter is layered on gpu_common, which
+                # already permits `prctl PR_SET_NAME|PR_GET_NAME`, but
+                # still uses the same fixed `madvise: arg2 == ...` list
+                # that fails on kernel 6.13+ stack-guard installation.
+                # Without this, the gpu device proxy dies the first time
+                # a Mesa/EGL worker thread spawns under virgl/cross-domain.
+                for policy in common_device.policy gpu_common.policy; do
+                  [ -f "$outdir/$policy" ] || continue
                   sed -i \
                     -e 's~^prctl: arg0 == PR_SET_VMA$~prctl: arg0 == PR_SET_VMA || arg0 == PR_SET_NAME~' \
                     -e 's~^madvise: arg2 ==.*$~madvise: 1~' \
-                    "$outdir/common_device.policy"
-                  if ! grep -q '^madvise:' "$outdir/common_device.policy"; then
-                    echo 'madvise: 1' >> "$outdir/common_device.policy"
+                    "$outdir/$policy"
+                  if ! grep -q '^madvise:' "$outdir/$policy"; then
+                    echo 'madvise: 1' >> "$outdir/$policy"
                   fi
-                fi
+                done
 
                 # Pre-compile to .bpf so minijail's runtime can use them in
                 # the strict (non-redefinition-tolerant) BPF mode that crosvm
