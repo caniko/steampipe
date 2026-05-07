@@ -16,11 +16,11 @@
 # modules cannot inject overlays from a different evaluation scope.
 #
 # What this module does when microvm.graphics.enable is true:
-#   - Enables mesa/DRI drivers so wgpu/Vulkan can render on virtio-gpu
-#   - Sets Wayland/X11 session variables for GUI applications
+#   - Enables mesa/DRI drivers so wgpu can render on virtio-gpu
+#   - Sets Wayland session variables for GUI applications
 #   - Exposes a graphical-app runtime library path so foreign-binary clients
 #     (steampipe-deployed game binaries with no Nix rpath) can dlopen
-#     libxkbcommon, libvulkan, libwayland, etc. without manual wrappers.
+#     libxkbcommon, libwayland, libGL, etc. without manual wrappers.
 {
   config,
   lib,
@@ -33,7 +33,6 @@
   # Mesa/DRI is already on /run/opengl-driver/lib via hardware.graphics.enable.
   graphicalRuntimeLibs = with pkgs; [
     libxkbcommon
-    vulkan-loader
     wayland
     libGL
     stdenv.cc.cc.lib
@@ -53,10 +52,13 @@ in {
   };
 
   config = lib.mkIf graphicsEnabled {
-    # Mesa/DRI so wgpu and other GPU clients can render on virtio-gpu
+    # Mesa/DRI so wgpu and other GPU clients can render on virtio-gpu.
+    # The UI-full crosvm runner disables guest Vulkan; do not add
+    # vulkan-loader to the deployed binary's LD_LIBRARY_PATH here or wgpu can
+    # pick a Mesa software Vulkan adapter instead of virgl/GL.
     hardware.graphics.enable = true;
 
-    # Default session variables for Wayland/X11 clients
+    # Default session variables for Wayland clients
     environment.sessionVariables = {
       WAYLAND_DISPLAY = "wayland-1";
       DISPLAY = ":0";

@@ -1267,7 +1267,7 @@ async fn launch_game(
     // stale files never poison a new owner's read, even before game-side
     // `cleanup_stale_heartbeat_files` runs.
     // Prepend the graphical-app library path published by the vm-graphics
-    // NixOS module (libxkbcommon, libvulkan, libwayland, libGL, libstdc++).
+    // NixOS module (libxkbcommon, libwayland, libGL, libstdc++).
     // SSH non-login non-interactive sessions don't source /etc/profile, so we
     // pull the value from /etc/profile.d here instead of relying on shell init.
     // The variable is empty/unset on VMs without graphics, so a no-op there.
