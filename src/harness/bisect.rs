@@ -204,6 +204,14 @@ pub async fn run<S: Send + Sync>(
                 on_failure: None,
                 exit_codes: exit_codes.clone(),
                 strace: false,
+                env: {
+                    let mut env = std::collections::BTreeMap::new();
+                    env.insert(
+                        "THESPAN_SESSION_ID".to_string(),
+                        format!("{}-{}", config.cluster_name, std::process::id()),
+                    );
+                    env
+                },
             };
             match crate::test::run(config, project_root, test_config).await {
                 Ok(_) => pass_count += 1,

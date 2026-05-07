@@ -210,6 +210,12 @@ pub struct TestProfile {
     pub output_format: Option<String>,
     pub on_complete: Option<String>,
     pub on_failure: Option<String>,
+    /// Extra environment variables exported to both peers (the host process
+    /// spawned locally and the VM-side game launched via SSH). Inline-exported
+    /// into the bash -c command so we don't depend on `AcceptEnv` on the
+    /// remote sshd. Values undergo no shell escaping beyond what the consumer
+    /// would already need — keep ids and tags free of spaces/quotes.
+    pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
 /// Network emulation parameters for chaos testing.
@@ -1323,6 +1329,30 @@ mod tests {
         assert_eq!(full.output_format.as_deref(), Some("junit"));
         assert_eq!(full.on_complete.as_deref(), Some("echo done"));
         assert_eq!(full.on_failure.as_deref(), Some("echo fail"));
+    }
+
+    /// Per-profile `[profile.<name>.env]` table deserialises into the
+    /// `TestProfile.env` field — required so the `cluster-ctl` runner can
+    /// forward those entries to both peers without the user having to set
+    /// any process-level env var.
+    #[test]
+    fn profile_env_table_deserialize() {
+        let toml_str = r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+
+            [profile.iso]
+            [profile.iso.env]
+            THESPAN_SESSION_ID = "fixloop-uifull-1v1-lan"
+            RUST_LOG = "info"
+        "#;
+        let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
+        let iso = proj.profile.unwrap().get("iso").unwrap().clone();
+        let env = iso.env.unwrap();
+        assert_eq!(env.get("THESPAN_SESSION_ID").map(String::as_str), Some("fixloop-uifull-1v1-lan"));
+        assert_eq!(env.get("RUST_LOG").map(String::as_str), Some("info"));
     }
 
     #[test]

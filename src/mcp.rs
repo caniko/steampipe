@@ -557,6 +557,19 @@ impl SteampipeMcp {
             on_failure: None,
             exit_codes: config.exit_codes.clone(),
             strace: input.strace.unwrap_or(false),
+            env: {
+                // Auto-set THESPAN_SESSION_ID per MCP invocation so concurrent
+                // cluster_test calls (different cluster names) cannot
+                // cross-discover at the libp2p layer when chessbender is
+                // built with `--features session-isolation`. See
+                // `resolve_run_env` in main.rs for the same default.
+                let mut env = std::collections::BTreeMap::new();
+                env.insert(
+                    "THESPAN_SESSION_ID".to_string(),
+                    format!("{}-{}", config.cluster_name, std::process::id()),
+                );
+                env
+            },
         };
 
         let result = crate::test::run(&config, &root, test_config).await;
