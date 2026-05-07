@@ -38,6 +38,37 @@ fn resolve_run_env(
     env
 }
 
+fn resolve_screenshot_backend_from_profile(
+    profile: Option<&core::config::TestProfile>,
+) -> ScreenshotBackend {
+    profile
+        .and_then(|p| p.screenshot_backend.as_deref())
+        .and_then(|s| match s {
+            "grim" | "wayland" => Some(ScreenshotBackend::Grim),
+            "vnc" => Some(ScreenshotBackend::Vnc),
+            _ => None,
+        })
+        .unwrap_or(ScreenshotBackend::Grim)
+}
+
+fn select_visual_validator(project_config: core::config::ProjectConfig) -> anyhow::Result<String> {
+    let validators: Vec<String> = project_config
+        .profile
+        .unwrap_or_default()
+        .into_values()
+        .filter_map(|profile| profile.visual_validator)
+        .collect();
+    match validators.as_slice() {
+        [validator] => Ok(validator.clone()),
+        [] => anyhow::bail!(
+            "--validate requires exactly one profile visual_validator in steampipe.toml"
+        ),
+        _ => anyhow::bail!(
+            "--validate found multiple profile visual_validator values; use a test profile for disambiguation"
+        ),
+    }
+}
+
 /// Require a runners_dir for the microvm backend, or return a dummy path for others.
 fn require_runners_dir(
     runners_dir: Option<PathBuf>,
@@ -338,15 +369,8 @@ async fn main() -> anyhow::Result<()> {
                 })
                 .unwrap_or(OutputFormat::Text);
 
-            let resolved_screenshot_backend = prof
-                .as_ref()
-                .and_then(|p| p.screenshot_backend.as_deref())
-                .and_then(|s| match s {
-                    "grim" | "wayland" => Some(ScreenshotBackend::Grim),
-                    "vnc" => Some(ScreenshotBackend::Vnc),
-                    _ => None,
-                })
-                .unwrap_or(ScreenshotBackend::Grim);
+            let resolved_screenshot_backend =
+                resolve_screenshot_backend_from_profile(prof.as_ref());
 
             // Resolve chaos profile
             let chaos = chaos_profile
@@ -527,21 +551,7 @@ async fn main() -> anyhow::Result<()> {
             let validator = if validate {
                 let project_config = config::load_project_config(&project_root)
                     .ok_or_else(|| anyhow::anyhow!("--validate requires steampipe.toml"))?;
-                let validators: Vec<String> = project_config
-                    .profile
-                    .unwrap_or_default()
-                    .into_values()
-                    .filter_map(|profile| profile.visual_validator)
-                    .collect();
-                match validators.as_slice() {
-                    [validator] => Some(validator.clone()),
-                    [] => anyhow::bail!(
-                        "--validate requires exactly one profile visual_validator in steampipe.toml"
-                    ),
-                    _ => anyhow::bail!(
-                        "--validate found multiple profile visual_validator values; use a test profile for disambiguation"
-                    ),
-                }
+                Some(select_visual_validator(project_config)?)
             } else {
                 None
             };
@@ -569,4 +579,79 @@ async fn main() -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn profile_with_backend(backend: &str) -> core::config::TestProfile {
+        core::config::TestProfile {
+            screenshot_backend: Some(backend.into()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn profile_screenshot_backend_resolves_vnc_and_grim_aliases() {
+        assert!(matches!(
+            resolve_screenshot_backend_from_profile(Some(&profile_with_backend("vnc"))),
+            ScreenshotBackend::Vnc
+        ));
+        assert!(matches!(
+            resolve_screenshot_backend_from_profile(Some(&profile_with_backend("wayland"))),
+            ScreenshotBackend::Grim
+        ));
+        assert!(matches!(
+            resolve_screenshot_backend_from_profile(None),
+            ScreenshotBackend::Grim
+        ));
+    }
+
+    #[test]
+    fn select_visual_validator_requires_exactly_one_profile_validator() {
+        let none = core::config::ProjectConfig {
+            profile: Some(HashMap::new()),
+            ..Default::default()
+        };
+        let err = select_visual_validator(none).unwrap_err().to_string();
+        assert!(err.contains("exactly one profile visual_validator"));
+
+        let mut one_profiles = HashMap::new();
+        one_profiles.insert(
+            "uifull".into(),
+            core::config::TestProfile {
+                visual_validator: Some("validator-one".into()),
+                ..Default::default()
+            },
+        );
+        let one = core::config::ProjectConfig {
+            profile: Some(one_profiles),
+            ..Default::default()
+        };
+        assert_eq!(select_visual_validator(one).unwrap(), "validator-one");
+
+        let mut multiple_profiles = HashMap::new();
+        multiple_profiles.insert(
+            "a".into(),
+            core::config::TestProfile {
+                visual_validator: Some("validator-a".into()),
+                ..Default::default()
+            },
+        );
+        multiple_profiles.insert(
+            "b".into(),
+            core::config::TestProfile {
+                visual_validator: Some("validator-b".into()),
+                ..Default::default()
+            },
+        );
+        let multiple = core::config::ProjectConfig {
+            profile: Some(multiple_profiles),
+            ..Default::default()
+        };
+        let err = select_visual_validator(multiple).unwrap_err().to_string();
+        assert!(err.contains("multiple profile visual_validator"));
+    }
 }

@@ -53,8 +53,8 @@ pub async fn screenshot_wayland_vm(
 }
 
 /// Start wayvnc inside a VM. This requires a wlroots compositor such as sway.
-pub async fn ensure_wayvnc(backend: &Backend, vm: &VmDef, vm_user: &str) -> anyhow::Result<()> {
-    let cmd = format!(
+pub fn wayvnc_start_script(vm_user: &str) -> String {
+    format!(
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p "$XDG_RUNTIME_DIR"
@@ -76,7 +76,11 @@ else
     fi
 fi
 "#
-    );
+    )
+}
+
+pub async fn ensure_wayvnc(backend: &Backend, vm: &VmDef, vm_user: &str) -> anyhow::Result<()> {
+    let cmd = wayvnc_start_script(vm_user);
     let result = backend.run_cmd(&vm.ip, &cmd).await;
     if result.stdout.trim().contains("OK") {
         Ok(())
@@ -449,5 +453,14 @@ mod tests {
         let env = std::fs::read_to_string(&env_out).unwrap();
         assert_eq!(env, format!("{}|vm-1|run-7|vnc", image.display()));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn wayvnc_start_script_sets_runtime_display_and_diagnostics() {
+        let script = wayvnc_start_script("chessbender");
+        assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-chessbender"));
+        assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("wayvnc --disable-input --log-level=info 0.0.0.0 5900"));
+        assert!(script.contains("tail -n 40 \"$XDG_RUNTIME_DIR/wayvnc.log\""));
     }
 }

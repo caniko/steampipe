@@ -236,15 +236,15 @@ fn microvm_start(
     vm: &VmDef,
     runners_dir: &Path,
 ) -> anyhow::Result<u32> {
-    let runner = runners_dir.join(&vm.name).join("bin/microvm-run");
+    let runner = microvm_runner_path(runners_dir, vm);
     if !runner.exists() {
         anyhow::bail!("Runner not found: {}", runner.display());
     }
 
-    let vm_dir = config.state_dir.join(&vm.name);
+    let vm_dir = microvm_state_dir(&config.state_dir, vm);
     std::fs::create_dir_all(&vm_dir)?;
 
-    let log_file = std::fs::File::create(vm_dir.join("vm.log"))?;
+    let log_file = std::fs::File::create(microvm_log_path(&config.state_dir, vm))?;
 
     let mut command = std::process::Command::new(&runner);
     command
@@ -277,8 +277,24 @@ fn microvm_stop<S>(config: &ClusterConfig<S>, vm: &VmDef) {
         .status();
 
     let vm_dir = config.state_dir.join(&vm.name);
+    cleanup_microvm_sockets(&vm_dir);
+}
+
+pub fn microvm_runner_path(runners_dir: &Path, vm: &VmDef) -> std::path::PathBuf {
+    runners_dir.join(&vm.name).join("bin/microvm-run")
+}
+
+pub fn microvm_state_dir(state_dir: &Path, vm: &VmDef) -> std::path::PathBuf {
+    state_dir.join(&vm.name)
+}
+
+pub fn microvm_log_path(state_dir: &Path, vm: &VmDef) -> std::path::PathBuf {
+    microvm_state_dir(state_dir, vm).join("vm.log")
+}
+
+pub fn cleanup_microvm_sockets(vm_dir: &Path) {
     if vm_dir.exists()
-        && let Ok(entries) = std::fs::read_dir(&vm_dir)
+        && let Ok(entries) = std::fs::read_dir(vm_dir)
     {
         for entry in entries.flatten() {
             let path = entry.path();
@@ -452,4 +468,58 @@ fn copy_dir_all(src: &Path, dst: &Path) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::{IpAddr, VmName};
+
+    fn vm() -> VmDef {
+        VmDef {
+            name: VmName("vm-1".into()),
+            ip: IpAddr("10.0.100.1".into()),
+            index: 1,
+        }
+    }
+
+    #[test]
+    fn microvm_paths_use_runner_and_state_layout() {
+        let vm = vm();
+        assert_eq!(
+            microvm_runner_path(Path::new("/runners"), &vm),
+            Path::new("/runners/vm-1/bin/microvm-run")
+        );
+        assert_eq!(
+            microvm_state_dir(Path::new("/state"), &vm),
+            Path::new("/state/vm-1")
+        );
+        assert_eq!(
+            microvm_log_path(Path::new("/state"), &vm),
+            Path::new("/state/vm-1/vm.log")
+        );
+    }
+
+    #[test]
+    fn cleanup_microvm_sockets_preserves_non_socket_files() {
+        let dir =
+            std::env::temp_dir().join(format!("steampipe-microvm-cleanup-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket = dir.join("vm-1-gpu.sock");
+        let vsock = dir.join("vm-1.vsock");
+        let log = dir.join("vm.log");
+        let image = dir.join("vm-1-home.img");
+        std::fs::write(&socket, "socket").unwrap();
+        std::fs::write(&vsock, "vsock").unwrap();
+        std::fs::write(&log, "log").unwrap();
+        std::fs::write(&image, "image").unwrap();
+
+        cleanup_microvm_sockets(&dir);
+
+        assert!(!socket.exists());
+        assert!(!vsock.exists());
+        assert!(log.exists());
+        assert!(image.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
