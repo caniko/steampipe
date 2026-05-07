@@ -63,7 +63,6 @@ in {
     # Default session variables for Wayland clients
     environment.sessionVariables = {
       WAYLAND_DISPLAY = "wayland-1";
-      DISPLAY = ":0";
     };
 
     # System-wide env: exposes the runtime lib path under a steampipe-namespaced

@@ -20,7 +20,6 @@ if ! pgrep -x weston >/dev/null; then
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
-export DISPLAY=:0
 "#
     )
 }
@@ -36,7 +35,6 @@ if ! pgrep -x sway >/dev/null; then
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
-export DISPLAY=:0
 "#
     )
 }
@@ -57,7 +55,6 @@ if ! pgrep -x weston >/dev/null; then
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
-export DISPLAY=:0
 "#
     )
 }
@@ -73,7 +70,6 @@ if ! pgrep -x sway >/dev/null; then
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
-export DISPLAY=:0
 "#
     )
 }
@@ -1088,7 +1084,6 @@ async fn interactive_login(
             nohup wayvnc 0.0.0.0 5900 >$XDG_RUNTIME_DIR/wayvnc.log 2>&1 &
             sleep 1
         fi
-        export DISPLAY=:0
         if ! pgrep -x steam >/dev/null; then
             nohup steam -cef-disable-gpu >$XDG_RUNTIME_DIR/steam.log 2>&1 &
         fi
@@ -1470,13 +1465,12 @@ mod tests {
             "weston_setup must use headless backend"
         );
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
-        assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
 
     #[test]
     fn ensure_steam_script_restarts_stale_steam_before_ready() {
-        let script = ensure_steam_script("testuser", "export DISPLAY=:0\n");
+        let script = ensure_steam_script("testuser", "export WAYLAND_DISPLAY=wayland-1\n");
         assert!(script.contains("wait_for_steam_ready"));
         assert!(script.contains("STALE_STEAM_RESTARTING"));
         assert!(script.contains("pkill -TERM -x steam"));
@@ -1498,7 +1492,6 @@ mod tests {
         assert!(script.contains("weston"), "must still launch weston");
         assert!(script.contains("--no-config"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
-        assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
 
@@ -1517,7 +1510,6 @@ mod tests {
         let script = sway_setup("testuser");
         assert!(script.contains("sway"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
-        assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
 
@@ -1534,7 +1526,6 @@ mod tests {
         );
         assert!(script.contains("sway"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
-        assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
 
@@ -1548,7 +1539,7 @@ mod tests {
     fn steam_compositor_setup_headless_uses_weston() {
         let script = steam_compositor_setup(crate::cli::DisplayMode::Headless, "u");
         assert!(script.contains("weston --backend=headless --no-config"));
-        assert!(script.contains("DISPLAY=:0"));
+        assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
     }
 
     #[test]

@@ -1244,7 +1244,6 @@ fn build_vm_launch_cmd(
          export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
-         DISPLAY=:0 \
          STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir}{extra_exports} && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     )
