@@ -57,6 +57,12 @@ pub struct TestConfig {
     pub exit_codes: HashMap<i32, String>,
     /// Launch the local host process under strace (captures network syscalls).
     pub strace: bool,
+    /// Extra env vars exported to both the local host process and the VM-side
+    /// game launched via SSH. Used by tests that need a shared per-session
+    /// tag (e.g. `THESPAN_SESSION_ID` for libp2p protocol-id namespacing) so
+    /// concurrent fix-loops on the same host can't cross-discover each other.
+    /// Production behaviour (no entries) is unchanged.
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 const DEFAULT_HARD_TIMEOUT_MIN_SECS: u64 = 1_800;
@@ -750,6 +756,11 @@ pub async fn run<S>(
         if !ld_paths.is_empty() {
             local_cmd.env("LD_LIBRARY_PATH", ld_paths.join(":"));
         }
+        // Profile-supplied env (and the auto-set `THESPAN_SESSION_ID`) goes
+        // here so it's also available to subprocesses the host might spawn.
+        for (k, v) in &test_config.env {
+            local_cmd.env(k, v);
+        }
         if verbose {
             local_cmd.stdout(std::process::Stdio::inherit());
             local_cmd.stderr(std::process::Stdio::inherit());
@@ -787,6 +798,7 @@ pub async fn run<S>(
                 &config.log_file,
                 vm_args,
                 &vm_heartbeat_subdir,
+                &test_config.env,
             )
             .await
             {
@@ -1172,6 +1184,52 @@ fn print_and_push(output: &mut String, msg: &str, verbose: bool) {
 }
 
 /// Launch game on an instance (detached via nohup).
+/// Build a leading-space-separated string of `KEY='VALUE'` pairs suitable for
+/// inlining inside an `export ...` clause in the SSH bash -c command. Values
+/// containing `'` are escaped with the standard `'\''` trick. Keep keys and
+/// values to printable ASCII without embedded `\0` — this is not a general
+/// shell escaper, just enough for our ids and tags.
+fn format_inline_exports(env: &std::collections::BTreeMap<String, String>) -> String {
+    let mut out = String::new();
+    for (k, v) in env {
+        let escaped = v.replace('\'', "'\\''");
+        out.push_str(&format!(" {k}='{escaped}'"));
+    }
+    out
+}
+
+/// Build the bash -c command we hand to SSH on the VM to launch the game.
+///
+/// Caller-supplied env (e.g. `THESPAN_SESSION_ID` from the auto-set or
+/// profile `env` table) is appended to the same `export` so the game binary
+/// sees it. We inline-export rather than relying on SSH `SetEnv`/`AcceptEnv`
+/// because those require sshd cooperation we don't control across distros /
+/// image rebuilds.
+///
+/// Pulled out so we can assert the exact command shape from a unit test.
+fn build_vm_launch_cmd(
+    remote_dir: &str,
+    binary_name: &str,
+    vm_user: &str,
+    log_file: &str,
+    args: &str,
+    heartbeat_dir: &str,
+    extra_env: &std::collections::BTreeMap<String, String>,
+) -> String {
+    let extra_exports = format_inline_exports(extra_env);
+    format!(
+        "mkdir -p {remote_dir}/{heartbeat_dir} && \
+         cd {remote_dir} && \
+         . /etc/profile.d/steampipe-graphics.sh 2>/dev/null || true && \
+         export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
+         XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
+         WAYLAND_DISPLAY=wayland-1 \
+         DISPLAY=:0 \
+         STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir}{extra_exports} && \
+         nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
+    )
+}
+
 async fn launch_game(
     backend: &Backend,
     ip: &str,
@@ -1181,6 +1239,7 @@ async fn launch_game(
     log_file: &str,
     args: &str,
     heartbeat_dir: &str,
+    extra_env: &std::collections::BTreeMap<String, String>,
 ) -> anyhow::Result<()> {
     // Per-cluster heartbeat dir on the VM (`<remote_dir>/<heartbeat_dir>`)
     // mirrors the host-side scoping. Lease partitioning already guarantees one
@@ -1192,16 +1251,14 @@ async fn launch_game(
     // SSH non-login non-interactive sessions don't source /etc/profile, so we
     // pull the value from /etc/profile.d here instead of relying on shell init.
     // The variable is empty/unset on VMs without graphics, so a no-op there.
-    let cmd = format!(
-        "mkdir -p {remote_dir}/{heartbeat_dir} && \
-         cd {remote_dir} && \
-         . /etc/profile.d/steampipe-graphics.sh 2>/dev/null || true && \
-         export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
-         XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
-         WAYLAND_DISPLAY=wayland-1 \
-         DISPLAY=:0 \
-         STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir} && \
-         nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
+    let cmd = build_vm_launch_cmd(
+        remote_dir,
+        binary_name,
+        vm_user,
+        log_file,
+        args,
+        heartbeat_dir,
+        extra_env,
     );
     // Use run_cmd_timeout to avoid hanging if the channel doesn't close
     let result = backend
@@ -1496,6 +1553,92 @@ mod tests {
             false
         ));
         assert!(!should_auto_start_local_display("--auto-host-steam", true));
+    }
+
+    /// Empty env table → empty inline-export string. Production runs that
+    /// don't set any session id must produce a bash `export ...` clause
+    /// byte-identical to the pre-feature path.
+    #[test]
+    fn format_inline_exports_empty() {
+        let env = std::collections::BTreeMap::new();
+        assert_eq!(format_inline_exports(&env), "");
+    }
+
+    /// Populated env table → leading-space-separated `KEY='VALUE'` pairs in
+    /// `BTreeMap` (sorted) order, ready to drop into an `export ...` clause.
+    #[test]
+    fn format_inline_exports_populates() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("THESPAN_SESSION_ID".into(), "fixloop-uifull-1v1-lan".into());
+        env.insert("RUST_LOG".into(), "info".into());
+        let out = format_inline_exports(&env);
+        // BTreeMap iterates in lexicographic key order.
+        assert_eq!(
+            out,
+            " RUST_LOG='info' THESPAN_SESSION_ID='fixloop-uifull-1v1-lan'"
+        );
+    }
+
+    /// Single quotes in values are escaped with `'\''` so the surrounding
+    /// `'...'` quoting in the bash command stays intact.
+    #[test]
+    fn format_inline_exports_escapes_single_quote() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("WEIRD".into(), "a'b".into());
+        assert_eq!(format_inline_exports(&env), " WEIRD='a'\\''b'");
+    }
+
+    /// Production path: when no env entries are provided, the VM bash -c
+    /// command is byte-identical to the pre-feature shape (no stray exports
+    /// or trailing whitespace before the trailing `&&`).
+    #[test]
+    fn build_vm_launch_cmd_empty_env_unchanged() {
+        let env = std::collections::BTreeMap::new();
+        let cmd = build_vm_launch_cmd(
+            "/home/u/cb",
+            "chessbender",
+            "u",
+            "game.log",
+            "--auto-join-udp --auto-play",
+            ".steampipe-runtime/1v1/heartbeats",
+            &env,
+        );
+        // No KEY='VAL' shows up between `STEAMPIPE_HEARTBEAT_DIR=...` and the
+        // trailing ` &&`.
+        assert!(
+            cmd.contains("STEAMPIPE_HEARTBEAT_DIR=/home/u/cb/.steampipe-runtime/1v1/heartbeats &&"),
+            "expected production-shape export tail, got: {cmd}",
+        );
+        assert!(!cmd.contains("THESPAN_SESSION_ID="), "expected no env injection: {cmd}");
+    }
+
+    /// With session id set, the bash command exports it on the same line
+    /// as the other test-runner env so the VM-side game inherits it.
+    #[test]
+    fn build_vm_launch_cmd_injects_session_id() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert(
+            "THESPAN_SESSION_ID".into(),
+            "1v1-uifull-12345".into(),
+        );
+        let cmd = build_vm_launch_cmd(
+            "/home/u/cb",
+            "chessbender",
+            "u",
+            "game.log",
+            "--auto-join-udp --auto-play",
+            ".steampipe-runtime/1v1-uifull/heartbeats",
+            &env,
+        );
+        assert!(
+            cmd.contains("THESPAN_SESSION_ID='1v1-uifull-12345' &&"),
+            "expected session id on the same export line, got: {cmd}",
+        );
+        // The injected env must precede the `nohup ./chessbender ...` so it
+        // applies to the game process, not to a later subshell.
+        let session_idx = cmd.find("THESPAN_SESSION_ID=").unwrap();
+        let nohup_idx = cmd.find("nohup ").unwrap();
+        assert!(session_idx < nohup_idx, "session id must export before launch: {cmd}");
     }
 
     #[test]

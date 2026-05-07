@@ -19,6 +19,27 @@ use ui::cli::{self, Cli, Commands, DisplayMode, HistoryAction, NetworkMode};
 use ui::{logs, watch};
 use vm::{lifecycle, snapshot, status};
 
+/// Resolve the env-var table passed to both peers for this test run.
+///
+/// Order: profile `env` table merged on top of any cluster-wide defaults (none
+/// today), then the auto-set `THESPAN_SESSION_ID` if the consumer didn't pin
+/// one explicitly. The auto-default is `<cluster-name>-<runner-pid>` so two
+/// concurrent fix-loops on the same host always get distinct ids without the
+/// caller having to think about it. Production runs that don't enable the
+/// chessbender `session-isolation` Cargo feature simply ignore the env var.
+fn resolve_run_env(
+    profile: Option<&core::config::TestProfile>,
+    config: &core::config::ClusterConfig,
+) -> std::collections::BTreeMap<String, String> {
+    let mut env: std::collections::BTreeMap<String, String> = profile
+        .and_then(|p| p.env.clone())
+        .unwrap_or_default();
+    env.entry("THESPAN_SESSION_ID".to_string()).or_insert_with(|| {
+        format!("{}-{}", config.cluster_name, std::process::id())
+    });
+    env
+}
+
 /// Require a runners_dir for the microvm backend, or return a dummy path for others.
 fn require_runners_dir(
     runners_dir: Option<PathBuf>,
@@ -385,6 +406,7 @@ async fn main() -> anyhow::Result<()> {
                     on_failure: resolved_on_failure,
                     exit_codes: config.exit_codes.clone(),
                     strace,
+                    env: resolve_run_env(prof.as_ref(), &config),
                 }
             })
             .await?;
