@@ -1183,11 +1183,6 @@ fn format_inline_exports(env: &std::collections::BTreeMap<String, String>) -> St
 /// because those require sshd cooperation we don't control across distros /
 /// image rebuilds.
 ///
-/// Force wgpu's GL backend for VM-side native-Wayland graphical runs. The
-/// crosvm runners used by regicide intentionally patch virtio-gpu params to
-/// `vulkan:false`; without the explicit backend, wgpu probes the broken Vulkan
-/// path, then falls through to llvmpipe instead of the virgl EGL path.
-///
 /// Pulled out so we can assert the exact command shape from a unit test.
 fn build_vm_launch_cmd(
     remote_dir: &str,
@@ -1207,7 +1202,6 @@ fn build_vm_launch_cmd(
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
          DISPLAY=:0 \
-         WGPU_BACKEND=\"${{WGPU_BACKEND:-gl}}\" \
          STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir}{extra_exports} && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     )
