@@ -68,7 +68,7 @@ export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
 if ! pgrep -x sway >/dev/null; then
-    WLR_BACKENDS=drm WLR_RENDERER=pixman sway >/dev/null 2>&1 &
+    WLR_BACKENDS=drm WLR_RENDERER=gles2 sway >/dev/null 2>&1 &
     sleep 2
 fi
 export WAYLAND_DISPLAY=wayland-1
@@ -1524,8 +1524,8 @@ mod tests {
             "sway_gpu_setup must set WLR_BACKENDS=drm"
         );
         assert!(
-            script.contains("WLR_RENDERER=pixman"),
-            "sway_gpu_setup must avoid the VM virgl renderer for compositor drawing"
+            script.contains("WLR_RENDERER=gles2"),
+            "sway_gpu_setup must use a GPU compositor renderer so Vulkan Wayland clients get present modes"
         );
         assert!(script.contains("sway"));
         assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
