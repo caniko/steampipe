@@ -30,6 +30,7 @@ pub fn sway_setup(vm_user: &str) -> String {
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
+unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
 if ! pgrep -x sway >/dev/null; then
     sway >/dev/null 2>&1 &
     sleep 2
@@ -65,6 +66,7 @@ pub fn sway_gpu_setup(vm_user: &str) -> String {
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
+unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
 if ! pgrep -x sway >/dev/null; then
     WLR_BACKENDS=drm WLR_RENDERER=pixman sway >/dev/null 2>&1 &
     sleep 2
@@ -1509,6 +1511,7 @@ mod tests {
     fn sway_setup_script() {
         let script = sway_setup("testuser");
         assert!(script.contains("sway"));
+        assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
@@ -1525,6 +1528,7 @@ mod tests {
             "sway_gpu_setup must avoid the VM virgl renderer for compositor drawing"
         );
         assert!(script.contains("sway"));
+        assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
