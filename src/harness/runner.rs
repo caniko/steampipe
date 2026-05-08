@@ -1244,6 +1244,7 @@ fn build_vm_launch_cmd(
          export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
+         WGPU_BACKEND=vulkan \
          STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir}{extra_exports} && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     )
@@ -1598,8 +1599,8 @@ mod tests {
     }
 
     /// Production path: when no env entries are provided, the VM bash -c
-    /// command is byte-identical to the pre-feature shape (no stray exports
-    /// or trailing whitespace before the trailing `&&`).
+    /// command defaults graphical clients to Vulkan and leaves no stray
+    /// exports or trailing whitespace before the trailing `&&`.
     #[test]
     fn build_vm_launch_cmd_empty_env_unchanged() {
         let env = std::collections::BTreeMap::new();
@@ -1612,8 +1613,12 @@ mod tests {
             ".steampipe-runtime/1v1/heartbeats",
             &env,
         );
-        // No KEY='VAL' shows up between `STEAMPIPE_HEARTBEAT_DIR=...` and the
-        // trailing ` &&`.
+        assert!(
+            cmd.contains("WGPU_BACKEND=vulkan"),
+            "expected Vulkan-first default in VM launch env, got: {cmd}",
+        );
+        // No caller-supplied KEY='VAL' shows up between
+        // `STEAMPIPE_HEARTBEAT_DIR=...` and the trailing ` &&`.
         assert!(
             cmd.contains("STEAMPIPE_HEARTBEAT_DIR=/home/u/cb/.steampipe-runtime/1v1/heartbeats &&"),
             "expected production-shape export tail, got: {cmd}",
@@ -1650,6 +1655,39 @@ mod tests {
         assert!(
             session_idx < nohup_idx,
             "session id must export before launch: {cmd}"
+        );
+    }
+
+    #[test]
+    fn build_vm_launch_cmd_profile_env_can_override_vulkan_default() {
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("GALLIUM_DRIVER".into(), "virgl".into());
+        env.insert("MESA_LOADER_DRIVER_OVERRIDE".into(), "virtio_gpu".into());
+        env.insert("WGPU_BACKEND".into(), "gl".into());
+        let cmd = build_vm_launch_cmd(
+            "/home/u/cb",
+            "chessbender",
+            "u",
+            "game.log",
+            "--auto-join-udp --auto-play",
+            ".steampipe-runtime/1v1-uifull-egl/heartbeats",
+            &env,
+        );
+
+        let default_idx = cmd.find("WGPU_BACKEND=vulkan").unwrap();
+        let override_idx = cmd.find("WGPU_BACKEND='gl'").unwrap();
+        let mesa_idx = cmd
+            .find("MESA_LOADER_DRIVER_OVERRIDE='virtio_gpu'")
+            .unwrap();
+        let gallium_idx = cmd.find("GALLIUM_DRIVER='virgl'").unwrap();
+        let nohup_idx = cmd.find("nohup ").unwrap();
+        assert!(
+            default_idx < override_idx,
+            "profile env must override Vulkan default: {cmd}"
+        );
+        assert!(
+            override_idx < nohup_idx && mesa_idx < nohup_idx && gallium_idx < nohup_idx,
+            "EGL override env must apply to game launch: {cmd}"
         );
     }
 
