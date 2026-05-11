@@ -1,0 +1,11 @@
+--- docs/migration-baseline/network-pre.txt	2026-05-11 12:38:31.999972583 +0200
++++ docs/migration-baseline/network-post.txt	2026-05-11 13:39:05.121457947 +0200
+@@ -5,7 +5,7 @@
+     inet6 ::1/128 scope host noprefixroute 
+        valid_lft forever preferred_lft forever
+ 2: ip6tnl0@NONE: <NOARP> mtu 1452 qdisc noop state DOWN group default qlen 1000
+-    link/tunnel6 :: brd :: permaddr a659:7a19:37f9::
++    link/tunnel6 :: brd :: permaddr 5294:8295:726b::
+ 3: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
+     link/ether 52:54:00:cb:00:01 brd ff:ff:ff:ff:ff:ff
+     altname enp0s4

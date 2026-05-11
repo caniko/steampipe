@@ -1,0 +1,81 @@
+2.716s sys-subsystem-net-devices-ip6tnl0.device
+2.716s sys-devices-virtual-net-ip6tnl0.device
+2.710s dev-ttyS0.device
+2.710s sys-devices-platform-serial8250-serial8250:0-serial8250:0.0-tty-ttyS0.device
+2.707s dev-disk-by\x2ddiskseq-1.device
+2.707s dev-vda.device
+2.707s dev-disk-by\x2dpath-virtio\x2dpci\x2d0000:00:01.0.device
+2.705s dev-disk-by\x2dlabel-nix\x2dstore.device
+2.704s dev-disk-by\x2dpath-pci\x2d0000:00:01.0.device
+2.704s dev-disk-by\x2duuid-5b1ae2e2\x2d9f77\x2d4b79\x2dbcaa\x2dcd12f4b21db2.device
+2.704s sys-devices-pci0000:00-0000:00:01.0-virtio0-block-vda.device
+2.699s sys-devices-pci0000:00-0000:00:02.0-virtio1-block-vdb.device
+2.699s dev-disk-by\x2ddiskseq-2.device
+2.699s dev-disk-by\x2duuid-5c29414e\x2d59c5\x2d4220\x2d9327\x2db0bc8af57621.device
+2.699s dev-disk-by\x2dpath-virtio\x2dpci\x2d0000:00:02.0.device
+2.699s dev-disk-by\x2dpath-pci\x2d0000:00:02.0.device
+2.699s dev-vdb.device
+2.689s sys-module-fuse.device
+1.308s initrd-switch-root.service
+ 608ms sshd-keygen.service
+ 331ms systemd-vconsole-setup.service
+ 175ms systemd-modules-load.service
+ 138ms systemd-udev-trigger.service
+ 104ms systemd-networkd.service
+ 104ms systemd-journald.service
+ 100ms home-chessbender.mount
+  95ms suid-sgid-wrappers.service
+  85ms systemd-oomd.service
+  83ms systemd-timesyncd.service
+  79ms systemd-journalctl.socket
+  70ms systemd-resolved.service
+  70ms dev-hugepages.mount
+  68ms dev-mqueue.mount
+  68ms kmod-static-nodes.service
+  66ms sys-kernel-tracing.mount
+  65ms sys-kernel-debug.mount
+  63ms modprobe@configfs.service
+  59ms sys-fs-fuse-connections.mount
+  55ms systemd-journal-flush.service
+  52ms systemd-tmpfiles-setup-dev-early.service
+  50ms lastlog2-import.service
+  44ms systemd-logind.service
+  41ms user@1000.service
+  41ms systemd-remount-fs.service
+  40ms systemd-udevd.service
+  39ms seatd.service
+  36ms sys-kernel-config.mount
+  35ms systemd-random-seed.service
+  29ms nscd.service
+  28ms post-boot.service
+  25ms logrotate-checkconf.service
+  17ms systemd-fsck@dev-vdb.service
+  16ms systemd-journal-catalog-update.service
+  16ms systemd-tmpfiles-setup-dev.service
+  14ms systemd-sysctl.service
+  13ms dbus-broker.service
+  12ms systemd-user-sessions.service
+  11ms sshd-vsock.socket
+  11ms systemd-tmpfiles-setup.service
+  11ms systemd-networkd-persistent-storage.service
+   9ms user-runtime-dir@1000.service
+   8ms run-wrappers.mount
+   7ms systemd-update-utmp.service
+   7ms sshd.service
+   6ms linger-users.service
+   5ms systemd-update-done.service
+   1ms dbus.socket
+ 478us systemd-coredump.socket
+ 437us sshd-unix-local.socket
+ 314us systemd-bootctl.socket
+ 307us systemd-creds.socket
+  39us systemd-journald.socket
+  38us systemd-oomd.socket
+  36us systemd-journald-dev-log.socket
+  22us systemd-hostnamed.socket
+  21us systemd-udevd-control.socket
+  18us systemd-networkd-varlink-metrics.socket
+  11us systemd-networkd.socket
+  11us systemd-udevd-kernel.socket
+  10us systemd-journald-audit.socket
+   9us systemd-rfkill.socket

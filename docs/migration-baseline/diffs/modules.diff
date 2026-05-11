@@ -1,0 +1,51 @@
+--- docs/migration-baseline/modules-pre.txt	2026-05-11 12:38:31.999941813 +0200
++++ docs/migration-baseline/modules-post.txt	2026-05-11 13:39:05.121431727 +0200
+@@ -13,15 +13,15 @@
+ evdev                  32768  2
+ mac_hid                16384  0
+ irqbypass              16384  1 kvm
+-virtio_net            131072  0
+ polyval_clmulni        12288  0
++virtio_net            131072  0
+ ghash_clmulni_intel    12288  0
+ aesni_intel            98304  0
+-net_failover           24576  1 virtio_net
+ tiny_power_button      12288  0
+-intel_agp              24576  0
++net_failover           24576  1 virtio_net
+ failover               16384  1 net_failover
+ rtc_cmos               28672  1
++intel_agp              24576  0
+ intel_gtt              32768  1 intel_agp
+ button                 28672  0
+ cfg80211             1449984  0
+@@ -45,19 +45,20 @@
+ vsock                  69632  5 vmw_vsock_virtio_transport_common,vsock_loopback,vmw_vsock_virtio_transport
+ virtio_console         49152  0
+ virtio_rng             16384  0
+-autofs4                65536  0
+-erofs                 143360  1
+-virtiofs               40960  0
+-fuse                  278528  2 virtiofs
+-virtio_pci             61440  0
+-virtio_pci_legacy_dev    16384  1 virtio_pci
+-virtio_pci_modern_dev    24576  1 virtio_pci
+ virtio_mmio            28672  0
+ virtio_blk             40960  2
++squashfs              102400  0
++erofs                 143360  1
+ dm_mod                241664  0
+ 9pnet_virtio           24576  0
+-virtio                 32768  10 virtio_rng,virtio_mmio,virtio_console,virtiofs,9pnet_virtio,vmw_vsock_virtio_transport,virtio_gpu,virtio_pci,virtio_blk,virtio_net
+-virtio_ring            61440  11 virtio_rng,virtio_mmio,virtio_console,virtiofs,9pnet_virtio,vmw_vsock_virtio_transport,virtio_gpu,virtio_pci,virtio_blk,virtio,virtio_net
+ 9p                     86016  0
+ 9pnet                 110592  2 9p,9pnet_virtio
+ netfs                 602112  2 9p,9pnet
++virtio_pci             61440  0
++virtio_pci_legacy_dev    16384  1 virtio_pci
++virtio_pci_modern_dev    24576  1 virtio_pci
++virtiofs               40960  0
++virtio                 32768  10 virtio_rng,virtio_mmio,virtio_console,virtiofs,9pnet_virtio,vmw_vsock_virtio_transport,virtio_gpu,virtio_pci,virtio_blk,virtio_net
++virtio_ring            61440  11 virtio_rng,virtio_mmio,virtio_console,virtiofs,9pnet_virtio,vmw_vsock_virtio_transport,virtio_gpu,virtio_pci,virtio_blk,virtio,virtio_net
++fuse                  278528  2 virtiofs
++autofs4                65536  0

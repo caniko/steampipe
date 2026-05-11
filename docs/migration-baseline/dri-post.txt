@@ -1,0 +1,6 @@
+total 0
+drwxr-xr-x  3 root root        100 May 11 11:38 .
+drwxr-xr-x 15 root root       3080 May 11 11:38 ..
+drwxr-xr-x  2 root root         80 May 11 11:38 by-path
+crw-rw----  1 root video  226,   0 May 11 11:38 card0
+crw-rw-rw-  1 root render 226, 128 May 11 11:38 renderD128

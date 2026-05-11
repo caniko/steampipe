@@ -1,0 +1,32 @@
+--- docs/migration-baseline/analyze-chain-pre.txt	2026-05-11 12:38:31.999725433 +0200
++++ docs/migration-baseline/analyze-chain-post.txt	2026-05-11 13:39:05.121365127 +0200
+@@ -1,16 +1,16 @@
+ The time when unit became active or started is printed after the "@" character.
+ The time the unit took to start is printed after the "+" character.
+ 
+-multi-user.target @2.778s
+-└─sshd.service @2.769s +8ms
+-  └─basic.target @2.481s
+-    └─dbus-broker.service @2.459s +15ms
+-      └─dbus.socket @2.448s +2ms
+-        └─sysinit.target @2.442s
+-          └─systemd-update-done.service @2.437s +4ms
+-            └─systemd-journal-catalog-update.service @2.417s +17ms
+-              └─systemd-tmpfiles-setup.service @2.403s +11ms
+-                └─local-fs.target @2.398s
+-                  └─home-chessbender.mount @2.314s +83ms
+-                    └─systemd-fsck@dev-vdb.service @1.653s +60ms
+-                      └─dev-vdb.device @1.650s
++multi-user.target @3.063s
++└─sshd.service @3.054s +7ms
++  └─basic.target @2.421s
++    └─dbus-broker.service @2.401s +13ms
++      └─dbus.socket @2.392s +1ms
++        └─sysinit.target @2.386s
++          └─systemd-update-done.service @2.379s +5ms
++            └─systemd-journal-catalog-update.service @2.361s +16ms
++              └─systemd-tmpfiles-setup.service @2.348s +11ms
++                └─local-fs.target @2.344s
++                  └─home-chessbender.mount @2.242s +100ms
++                    └─systemd-fsck@dev-vdb.service @1.662s +17ms
++                      └─dev-vdb.device

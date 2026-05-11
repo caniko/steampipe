@@ -134,8 +134,14 @@
       nixosModules = microvm.nixosModules // {
         # Host networking (bridge, TAPs, NAT)
         default = import ./nix/module.nix;
+        # VM-side base config for reusable steampipe test clusters.
+        cluster-vm-base = import ./nix/cluster-vm-base.nix;
         # VM-side graphics setup (mesa, virtio-gpu kernel modules, overlay)
         vm-graphics = import ./nix/vm-graphics.nix;
+      };
+
+      lib = {
+        mkTestCluster = import ./nix/lib/test-cluster.nix;
       };
 
       # Overlay providing cloud-hypervisor-graphics (from microvm.nix +
