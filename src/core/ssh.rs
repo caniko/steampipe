@@ -163,4 +163,93 @@ impl SshClient {
         }
         Ok(())
     }
+
+    /// rsync files from a remote source into a local destination directory.
+    pub async fn fetch(&self, ip: &str, source: &str, dest: &Path) -> anyhow::Result<()> {
+        let rsh = format!(
+            "ssh -i {} -o IdentitiesOnly=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR",
+            self.key.display()
+        );
+
+        std::fs::create_dir_all(dest)?;
+        let args: Vec<String> = vec![
+            "-az".into(),
+            "-e".into(),
+            rsh,
+            format!("{}@{}:{}", self.user, ip, source),
+            dest.to_string_lossy().into_owned(),
+        ];
+
+        let output = tokio::process::Command::new("rsync")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("rsync from {ip}:{source} failed: {stderr}");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client() -> SshClient {
+        SshClient::new(Path::new("/tmp/key"), "deploy")
+    }
+
+    #[test]
+    fn ssh_args_includes_key_and_destination() {
+        let args = client().ssh_args("10.0.0.1");
+        // Key is the first value-arg after `-i`
+        let i_pos = args.iter().position(|s| s == "-i").unwrap();
+        assert_eq!(args[i_pos + 1], "/tmp/key");
+        // Destination is the last arg
+        assert_eq!(args.last().unwrap(), "deploy@10.0.0.1");
+    }
+
+    #[test]
+    fn ssh_args_sets_security_and_timeout_options() {
+        let args = client().ssh_args("10.0.0.1");
+        let joined = args.join(" ");
+        assert!(joined.contains("IdentitiesOnly=yes"));
+        assert!(joined.contains("StrictHostKeyChecking=no"));
+        assert!(joined.contains("UserKnownHostsFile=/dev/null"));
+        assert!(joined.contains("ConnectTimeout=2"));
+        assert!(joined.contains("ServerAliveInterval=1"));
+        assert!(joined.contains("ServerAliveCountMax=3"));
+        assert!(joined.contains("LogLevel=ERROR"));
+    }
+
+    #[test]
+    fn ssh_args_extra_inserts_before_destination() {
+        let args = client().ssh_args_extra("10.0.0.1", &["-o", "ConnectTimeout=10"]);
+        let dest_idx = args.iter().position(|s| s == "deploy@10.0.0.1").unwrap();
+        assert_eq!(dest_idx, args.len() - 1);
+        // The extra option appears before the destination
+        let timeout_idx = args
+            .iter()
+            .position(|s| s == "ConnectTimeout=10")
+            .expect("extra opt should be present");
+        assert!(timeout_idx < dest_idx);
+    }
+
+    #[test]
+    fn ssh_args_extra_with_no_extras_matches_ssh_args() {
+        let c = client();
+        assert_eq!(c.ssh_args("1.2.3.4"), c.ssh_args_extra("1.2.3.4", &[]));
+    }
+
+    #[test]
+    fn new_stores_key_path_and_user() {
+        let c = SshClient::new(Path::new("/etc/keys/id_ed25519"), "alice");
+        let args = c.ssh_args("host");
+        assert!(args.contains(&"/etc/keys/id_ed25519".to_string()));
+        assert_eq!(args.last().unwrap(), "alice@host");
+    }
 }

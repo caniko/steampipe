@@ -100,7 +100,7 @@
         pname = "cluster-ctl";
         version = "0.1.0";
         src = ./.;
-        cargoHash = "sha256-9Wdmh9myDM1N2eRFqB1bRuyUL+1RXsYad8Aff9xbdaI=";
+        cargoHash = "sha256-jiTXFRn3MToXj7/Urj/vTO2gVqgcByVNCsnuj/MZR60=";
         nativeBuildInputs = [toolchain pkgs.makeWrapper];
         postInstall = ''
           wrapProgram $out/bin/cluster-ctl \

@@ -95,3 +95,72 @@ fn run_age_decrypt(bin: &str, path: &Path, identity: Option<&Path>) -> anyhow::R
     String::from_utf8(output.stdout)
         .map_err(|e| anyhow::anyhow!("Decrypted output is not valid UTF-8: {e}"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_age_encrypted_matches_age_extension() {
+        assert!(is_age_encrypted(Path::new("secrets.toml.age")));
+        assert!(is_age_encrypted(Path::new("/path/to/foo.age")));
+    }
+
+    #[test]
+    fn is_age_encrypted_rejects_other_extensions() {
+        assert!(!is_age_encrypted(Path::new("secrets.toml")));
+        assert!(!is_age_encrypted(Path::new("foo")));
+        assert!(!is_age_encrypted(Path::new("foo.age.bak")));
+    }
+
+    fn tmp_file(name: &str, content: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("steampipe-cred-test-{name}"));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn load_parses_plain_toml() {
+        let path = tmp_file(
+            "plain.toml",
+            r#"
+[vm.vm-1]
+steam_user = "alice"
+steam_pass = "pw1"
+game_key = "AAA-BBB-CCC"
+
+[vm.vm-2]
+steam_user = "bob"
+steam_pass = "pw2"
+"#,
+        );
+
+        let creds = load(&path, None).unwrap();
+        assert_eq!(creds.len(), 2);
+        let vm1 = &creds["vm-1"];
+        assert_eq!(vm1.steam_user, "alice");
+        assert_eq!(vm1.steam_pass, "pw1");
+        assert_eq!(vm1.game_key.as_deref(), Some("AAA-BBB-CCC"));
+        let vm2 = &creds["vm-2"];
+        assert_eq!(vm2.steam_user, "bob");
+        assert!(vm2.game_key.is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_errors_on_invalid_toml() {
+        let path = tmp_file("invalid.toml", "this is = not valid =? toml [[[");
+        let err = load(&path, None).unwrap_err();
+        assert!(err.to_string().contains("Failed to parse credentials file"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn load_errors_on_missing_file() {
+        let path = std::env::temp_dir().join("steampipe-cred-test-does-not-exist.toml");
+        let _ = std::fs::remove_file(&path);
+        let err = load(&path, None).unwrap_err();
+        assert!(err.to_string().contains("Failed to read credentials file"));
+    }
+}

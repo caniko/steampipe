@@ -4,6 +4,12 @@ use std::path::{Path, PathBuf};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RunVisualSummary {
+    pub passed: usize,
+    pub failed: usize,
+}
+
 /// A single test run result.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TestResult {
@@ -24,6 +30,12 @@ pub struct TestResult {
     pub duration_secs: Option<f64>,
     #[serde(default)]
     pub run_durations: Option<Vec<f64>>,
+    #[serde(default)]
+    pub visual_results: Vec<crate::game::visual::VisualRunResult>,
+    #[serde(default)]
+    pub gpu_preflight: Vec<crate::vm::preflight::GpuPreflightReport>,
+    #[serde(default)]
+    pub readiness: Vec<crate::game::compositor::CompositorStatusRow>,
 }
 
 /// All stored test results.
@@ -69,6 +81,9 @@ pub fn make_result(
     git_sha: Option<String>,
     duration_secs: f64,
     run_durations: Vec<f64>,
+    visual_results: Vec<crate::game::visual::VisualRunResult>,
+    gpu_preflight: Vec<crate::vm::preflight::GpuPreflightReport>,
+    readiness: Vec<crate::game::compositor::CompositorStatusRow>,
 ) -> TestResult {
     TestResult {
         timestamp: Local::now().format("%Y-%m-%dT%H:%M:%S").to_string(),
@@ -85,6 +100,29 @@ pub fn make_result(
         git_sha,
         duration_secs: Some(duration_secs),
         run_durations: Some(run_durations),
+        visual_results,
+        gpu_preflight,
+        readiness,
+    }
+}
+
+pub fn summarize_visual_results(
+    visual_results: &[crate::game::visual::VisualRunResult],
+) -> Option<RunVisualSummary> {
+    if visual_results.is_empty() {
+        return None;
+    }
+    Some(RunVisualSummary {
+        passed: visual_results.iter().filter(|result| result.passed).count(),
+        failed: visual_results.iter().filter(|result| !result.passed).count(),
+    })
+}
+
+fn format_visual_cell(visual_results: &[crate::game::visual::VisualRunResult]) -> String {
+    match summarize_visual_results(visual_results) {
+        Some(summary) if summary.failed == 0 => format!("PASS ({}/{})", summary.passed, summary.passed),
+        Some(summary) => format!("FAIL ({}/{})", summary.failed, summary.passed + summary.failed),
+        None => "─".to_string(),
     }
 }
 
@@ -104,16 +142,16 @@ pub fn show(
     let results = slice_results(&history.results, last_n);
 
     println!(
-        "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<8} {:<10}",
-        "Timestamp", "Net", "P", "VMs", "Pass", "Fail", "T/O", "SHA", "Result"
+        "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<8} {:<12} {:<10}",
+        "Timestamp", "Net", "P", "VMs", "Pass", "Fail", "T/O", "SHA", "Visual", "Result"
     );
-    println!("{}", "─".repeat(78));
+    println!("{}", "─".repeat(92));
 
     for r in results {
         let result_str = if r.failed == 0 { "PASS" } else { "FAIL" };
         let sha = r.git_sha.as_deref().unwrap_or("─");
         println!(
-            "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<8} {:<10}",
+            "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<8} {:<12} {:<10}",
             r.timestamp,
             r.network,
             r.players,
@@ -122,6 +160,7 @@ pub fn show(
             r.failed,
             r.timed_out,
             sha,
+            format_visual_cell(&r.visual_results),
             result_str,
         );
     }
@@ -520,6 +559,9 @@ mod tests {
             git_sha: None,
             duration_secs: None,
             run_durations: None,
+            visual_results: Vec::new(),
+            gpu_preflight: Vec::new(),
+            readiness: Vec::new(),
         }
     }
 
@@ -678,6 +720,9 @@ mod tests {
             Some("abc1234".into()),
             15.5,
             vec![15.5],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         );
         assert_eq!(result.git_sha.as_deref(), Some("abc1234"));
         assert_eq!(result.duration_secs, Some(15.5));
@@ -820,6 +865,9 @@ mod tests {
             Some("deadbeef".into()),
             120.5,
             vec![40.1, 35.2, 45.2],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         );
         let json = serde_json::to_string(&result).unwrap();
         let deserialized: TestResult = serde_json::from_str(&json).unwrap();
@@ -856,6 +904,9 @@ mod tests {
             Some("deadbeef".into()),
             42.0,
             vec![42.0],
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
         );
         save_result(&dir, result).unwrap();
 

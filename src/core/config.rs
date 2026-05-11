@@ -9,7 +9,7 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
@@ -17,7 +17,7 @@ use crate::core::backend::Backend;
 use clap::ValueEnum;
 
 /// Which backend to use for running test instances.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum BackendKind {
     /// NixOS microVMs via microvm-run + SSH (default)
@@ -117,7 +117,7 @@ where
 // ── Config file (steampipe.toml) ──
 
 /// Project-level configuration file structure.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ProjectConfig {
     pub backend: Option<BackendKind>,
@@ -145,6 +145,8 @@ pub struct ProjectConfig {
     pub profile: Option<HashMap<String, TestProfile>>,
     /// Named chaos profiles: `[chaos.unstable-wifi]`, etc.
     pub chaos: Option<HashMap<String, ChaosProfile>>,
+    /// Structured visual golden-image testing configuration.
+    pub visual: Option<VisualConfig>,
     /// Exit code → label mapping (keys are string integers, e.g. "10" = "PHASE_WATCHDOG").
     pub exit_codes: Option<HashMap<String, String>>,
     /// Heartbeat stall threshold in seconds (default: 30).
@@ -153,20 +155,20 @@ pub struct ProjectConfig {
     pub hooks: Option<HooksConfig>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct DockerConfig {
     pub image: Option<String>,
     pub network: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct LocalConfig {
     pub work_dir: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct NetworkFileConfig {
     pub bridge: Option<String>,
@@ -178,7 +180,7 @@ pub struct NetworkFileConfig {
     pub tap_owner: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct ClusterSection {
     pub name: Option<String>,
@@ -187,7 +189,7 @@ pub struct ClusterSection {
 }
 
 /// A named test profile with all test parameters optional (CLI overrides profile).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct TestProfile {
     pub players: Option<u8>,
@@ -205,6 +207,7 @@ pub struct TestProfile {
     pub capture_on_failure: Option<bool>,
     pub screenshot_backend: Option<String>,
     pub visual_validator: Option<String>,
+    pub validator_kind: Option<ValidatorKind>,
     pub filter_pattern: Option<String>,
     pub output_file: Option<String>,
     pub chaos_profile: Option<String>,
@@ -220,6 +223,680 @@ pub struct TestProfile {
     pub env: Option<std::collections::BTreeMap<String, String>>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValidatorKind {
+    Shell,
+    Golden,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VisualBackend {
+    Grim,
+    #[default]
+    Vnc,
+}
+
+impl fmt::Display for VisualBackend {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Grim => f.write_str("grim"),
+            Self::Vnc => f.write_str("vnc"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VisualDiffPaths {
+    pub actual: PathBuf,
+    pub diff: PathBuf,
+    pub golden: PathBuf,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(default)]
+pub struct VisualConfig {
+    pub golden_dir: Option<PathBuf>,
+    pub diff_dir: Option<PathBuf>,
+    pub default_tolerance: Option<Tolerance>,
+    pub default_backend: Option<VisualBackend>,
+    pub scene: Vec<Scene>,
+}
+
+impl<'de> Deserialize<'de> for VisualConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Default, Deserialize)]
+        #[serde(default, deny_unknown_fields)]
+        struct RawVisualConfig {
+            golden_dir: Option<PathBuf>,
+            diff_dir: Option<PathBuf>,
+            default_tolerance: Option<Tolerance>,
+            default_backend: Option<VisualBackend>,
+            scene: Vec<Scene>,
+        }
+
+        let raw = RawVisualConfig::deserialize(deserializer)?;
+        let config = Self {
+            golden_dir: raw.golden_dir,
+            diff_dir: raw.diff_dir,
+            default_tolerance: raw.default_tolerance,
+            default_backend: raw.default_backend,
+            scene: raw.scene,
+        };
+        config.validate().map_err(serde::de::Error::custom)?;
+        Ok(config)
+    }
+}
+
+impl VisualConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.scene.is_empty() && self.golden_dir.is_none() {
+            return Err("visual.golden_dir is required when visual.scene entries exist".into());
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for scene in &self.scene {
+            validate_scene_name(&scene.name)?;
+            if !names.insert(scene.name.as_str()) {
+                return Err(format!("visual scene name '{}' is duplicated", scene.name));
+            }
+            scene.validate()?;
+        }
+        Ok(())
+    }
+
+    pub fn resolve_paths(&mut self, project_root: &Path) {
+        if let Some(path) = &self.golden_dir {
+            self.golden_dir = Some(resolve_project_path(project_root, path));
+        }
+        if let Some(path) = &self.diff_dir {
+            self.diff_dir = Some(resolve_project_path(project_root, path));
+        }
+    }
+
+    pub fn golden_path(&self, scene_name: &str) -> anyhow::Result<PathBuf> {
+        validate_scene_name(scene_name).map_err(anyhow::Error::msg)?;
+        let golden_dir = self
+            .golden_dir
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("visual.golden_dir is required"))?;
+        Ok(golden_dir.join(format!("{scene_name}.png")))
+    }
+
+    pub fn diff_path(&self, scene_name: &str, run_label: &str) -> anyhow::Result<VisualDiffPaths> {
+        validate_scene_name(scene_name).map_err(anyhow::Error::msg)?;
+        validate_scene_name(run_label).map_err(anyhow::Error::msg)?;
+        let diff_dir = self
+            .diff_dir
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| PathBuf::from("tests/visual/diff"));
+        let dir = diff_dir.join(run_label);
+        Ok(VisualDiffPaths {
+            actual: dir.join(format!("{scene_name}.actual.png")),
+            diff: dir.join(format!("{scene_name}.diff.png")),
+            golden: dir.join(format!("{scene_name}.golden.png")),
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn scene(&self, name: &str) -> Option<&Scene> {
+        self.scene.iter().find(|scene| scene.name == name)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Scene {
+    #[serde(deserialize_with = "deserialize_scene_name")]
+    pub name: String,
+    pub description: Option<String>,
+    pub precondition: Option<String>,
+    pub timeout_seconds: Option<u64>,
+    pub window: Option<WindowTarget>,
+    pub resolution: Option<Resolution>,
+    pub backend: Option<VisualBackend>,
+    pub tolerance: Option<Tolerance>,
+    pub mask: Vec<MaskRect>,
+    pub roi: Option<Roi>,
+    pub wait_for: Option<WaitFor>,
+    pub action: Vec<SceneAction>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WindowTarget {
+    pub app_id: Option<String>,
+    pub title: Option<String>,
+    pub class: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Resolution {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Tolerance {
+    pub ssim: Option<f64>,
+    pub max_pixel_delta: Option<u8>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct MaskRect {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Roi {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct WaitFor {
+    pub window_visible: Option<bool>,
+    pub min_age_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SceneAction {
+    pub step: String,
+    pub keys: Option<String>,
+    pub combo: Option<String>,
+    pub focus: Option<String>,
+    pub shell_command: Option<String>,
+    pub delay_ms: Option<u64>,
+    pub sync: Option<SceneSync>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SceneSync {
+    pub window_visible: Option<String>,
+    pub min_age_ms: Option<u64>,
+    pub sway_node_named: Option<String>,
+    pub file_exists: Option<String>,
+    pub log_line_matches: Option<LogLineMatches>,
+    pub fixed_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LogLineMatches {
+    pub path: String,
+    pub regex: String,
+}
+
+impl Scene {
+    #[allow(dead_code)]
+    pub fn timeout_seconds(&self) -> u64 {
+        self.timeout_seconds.unwrap_or(30)
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if let Some(name) = self.precondition.as_deref() {
+            validate_scene_name(name)?;
+        }
+        if let Some(wait_for) = &self.wait_for
+            && wait_for.window_visible == Some(true)
+            && self.window.is_none()
+        {
+            return Err(format!(
+                "visual scene '{}' sets wait_for.window_visible but has no window target",
+                self.name
+            ));
+        }
+        for action in &self.action {
+            action.validate(&self.name)?;
+        }
+        Ok(())
+    }
+}
+
+impl SceneAction {
+    fn validate(&self, scene_name: &str) -> Result<(), String> {
+        if self.step.trim().is_empty() {
+            return Err(format!(
+                "visual scene '{}' has an action with an empty step name",
+                scene_name
+            ));
+        }
+        let kinds = [
+            self.keys.is_some(),
+            self.combo.is_some(),
+            self.focus.is_some(),
+            self.shell_command.is_some(),
+            self.delay_ms.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if kinds != 1 {
+            return Err(format!(
+                "visual scene '{}' action '{}' must define exactly one of keys, combo, focus, shell_command, or delay_ms",
+                scene_name, self.step
+            ));
+        }
+        let sync = self.sync.as_ref().ok_or_else(|| {
+            format!(
+                "visual scene '{}' action '{}' requires a sync predicate",
+                scene_name, self.step
+            )
+        })?;
+        sync.validate(scene_name, &self.step)
+    }
+}
+
+impl SceneSync {
+    fn validate(&self, scene_name: &str, step_name: &str) -> Result<(), String> {
+        let kinds = [
+            self.window_visible.is_some(),
+            self.sway_node_named.is_some(),
+            self.file_exists.is_some(),
+            self.log_line_matches.is_some(),
+            self.fixed_ms.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+        if kinds != 1 {
+            return Err(format!(
+                "visual scene '{}' action '{}' must define exactly one sync predicate",
+                scene_name, step_name
+            ));
+        }
+        if self.min_age_ms.is_some() && self.window_visible.is_none() {
+            return Err(format!(
+                "visual scene '{}' action '{}' sets min_age_ms without window_visible",
+                scene_name, step_name
+            ));
+        }
+        if let Some(log) = &self.log_line_matches
+            && (log.path.trim().is_empty() || log.regex.trim().is_empty())
+        {
+            return Err(format!(
+                "visual scene '{}' action '{}' log_line_matches requires both path and regex",
+                scene_name, step_name
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn resolve_project_path(project_root: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        project_root.join(path)
+    }
+}
+
+fn deserialize_scene_name<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let name = String::deserialize(deserializer)?;
+    validate_scene_name(&name).map_err(serde::de::Error::custom)?;
+    Ok(name)
+}
+
+fn validate_scene_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("visual scene name cannot be empty".into());
+    }
+    if name.len() > 128 {
+        return Err(format!("visual scene name '{name}' is too long"));
+    }
+    if name
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+        && name != "."
+        && name != ".."
+        && !name.contains("..")
+    {
+        Ok(())
+    } else {
+        Err(format!(
+            "visual scene name '{name}' must match [A-Za-z0-9._-]+ and must not contain '..'"
+        ))
+    }
+}
+
+impl ProjectConfig {
+    pub fn effective_validator_kind(&self, profile: Option<&TestProfile>) -> ValidatorKind {
+        if let Some(kind) = profile.and_then(|profile| profile.validator_kind) {
+            return kind;
+        }
+        if self.visual.is_some() {
+            return ValidatorKind::Golden;
+        }
+        if profile
+            .and_then(|profile| profile.visual_validator.as_ref())
+            .is_some()
+        {
+            return ValidatorKind::Shell;
+        }
+        ValidatorKind::None
+    }
+
+    pub fn warn_if_legacy_visual_validator_shadowed(&self, profile_name: Option<&str>) {
+        let Some(profiles) = self.profile.as_ref() else {
+            return;
+        };
+        if self.visual.is_none() {
+            return;
+        }
+        let legacy_present = match profile_name {
+            Some(name) => profiles
+                .get(name)
+                .and_then(|profile| profile.visual_validator.as_ref())
+                .is_some(),
+            None => profiles
+                .values()
+                .any(|profile| profile.visual_validator.as_ref().is_some()),
+        };
+        if legacy_present {
+            eprintln!(
+                "Warning: profile visual_validator is deprecated and ignored when [visual] is configured; validator_kind defaults to golden"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod visual {
+    use super::*;
+
+    const VISUAL_EXAMPLE: &str = r#"
+        [visual]
+        golden_dir = "tests/visual/golden"
+        diff_dir = "tests/visual/diff"
+        default_tolerance = { ssim = 0.985, max_pixel_delta = 8 }
+        default_backend = "vnc"
+
+        [[visual.scene]]
+        name = "main-menu"
+        description = "Steam launches, game shows main menu"
+        window = { app_id = "regicide" }
+        resolution = { width = 1280, height = 720 }
+        backend = "vnc"
+        tolerance = { ssim = 0.97, max_pixel_delta = 16 }
+        mask = [ { x = 0, y = 0, w = 1280, h = 32 } ]
+        roi = { x = 64, y = 64, w = 1152, h = 600 }
+        wait_for = { window_visible = true, min_age_ms = 500 }
+        precondition = "booted"
+        timeout_seconds = 45
+
+        [[visual.scene.action]]
+        step = "press return"
+        keys = "Return"
+        sync = { window_visible = "regicide", min_age_ms = 500 }
+    "#;
+
+    fn parse_visual(input: &str) -> Result<ProjectConfig, toml::de::Error> {
+        toml::from_str(input)
+    }
+
+    #[test]
+    fn example_round_trips_structurally() {
+        let parsed: ProjectConfig = parse_visual(VISUAL_EXAMPLE).unwrap();
+        let encoded = toml::to_string(&parsed).unwrap();
+        let reparsed: ProjectConfig = toml::from_str(&encoded).unwrap();
+        assert_eq!(parsed.visual, reparsed.visual);
+    }
+
+    #[test]
+    fn parses_fully_populated_scene() {
+        let parsed: ProjectConfig = parse_visual(VISUAL_EXAMPLE).unwrap();
+        let visual = parsed.visual.unwrap();
+        assert_eq!(
+            visual.golden_dir.as_deref(),
+            Some(Path::new("tests/visual/golden"))
+        );
+        assert_eq!(visual.scene.len(), 1);
+        let scene = &visual.scene[0];
+        assert_eq!(scene.name, "main-menu");
+        assert_eq!(
+            scene.window.as_ref().unwrap().app_id.as_deref(),
+            Some("regicide")
+        );
+        assert_eq!(scene.resolution.as_ref().unwrap().width, Some(1280));
+        assert_eq!(scene.mask[0].h, 32);
+        assert_eq!(scene.wait_for.as_ref().unwrap().min_age_ms, Some(500));
+        assert_eq!(scene.precondition.as_deref(), Some("booted"));
+        assert_eq!(scene.timeout_seconds, Some(45));
+        assert_eq!(scene.action.len(), 1);
+        assert_eq!(scene.action[0].keys.as_deref(), Some("Return"));
+    }
+
+    #[test]
+    fn golden_and_diff_paths_use_scene_name_contract() {
+        let parsed: ProjectConfig = parse_visual(VISUAL_EXAMPLE).unwrap();
+        let visual = parsed.visual.unwrap();
+        assert_eq!(
+            visual.golden_path("main-menu").unwrap(),
+            PathBuf::from("tests/visual/golden/main-menu.png")
+        );
+        let diff = visual.diff_path("main-menu", "run-7").unwrap();
+        assert_eq!(
+            diff.actual,
+            PathBuf::from("tests/visual/diff/run-7/main-menu.actual.png")
+        );
+        assert_eq!(
+            diff.diff,
+            PathBuf::from("tests/visual/diff/run-7/main-menu.diff.png")
+        );
+        assert_eq!(
+            diff.golden,
+            PathBuf::from("tests/visual/diff/run-7/main-menu.golden.png")
+        );
+    }
+
+    #[test]
+    fn resolve_paths_makes_visual_paths_project_relative() {
+        let parsed: ProjectConfig = parse_visual(VISUAL_EXAMPLE).unwrap();
+        let mut visual = parsed.visual.unwrap();
+        visual.resolve_paths(Path::new("/project/root"));
+        assert_eq!(
+            visual.golden_dir.as_deref(),
+            Some(Path::new("/project/root/tests/visual/golden"))
+        );
+        assert_eq!(
+            visual.diff_dir.as_deref(),
+            Some(Path::new("/project/root/tests/visual/diff"))
+        );
+    }
+
+    #[test]
+    fn unknown_validator_kind_is_rejected() {
+        let err = parse_visual(
+            r#"
+            [profile.visual]
+            validator_kind = "magic"
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("validator_kind"));
+    }
+
+    #[test]
+    fn invalid_mask_negative_width_is_rejected() {
+        let err = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+
+            [[visual.scene]]
+            name = "main-menu"
+            mask = [ { x = 0, y = 0, w = -1, h = 32 } ]
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("invalid value") || err.contains("w"));
+    }
+
+    #[test]
+    fn scene_requires_golden_dir() {
+        let err = parse_visual(
+            r#"
+            [visual]
+
+            [[visual.scene]]
+            name = "main-menu"
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("golden_dir"));
+    }
+
+    #[test]
+    fn duplicate_scene_names_are_rejected() {
+        let err = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+
+            [[visual.scene]]
+            name = "main-menu"
+
+            [[visual.scene]]
+            name = "main-menu"
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("duplicated"));
+    }
+
+    #[test]
+    fn scene_action_requires_exactly_one_kind() {
+        let err = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+
+            [[visual.scene]]
+            name = "main-menu"
+
+            [[visual.scene.action]]
+            step = "bad"
+            keys = "Return"
+            combo = "Ctrl+P"
+            sync = { fixed_ms = 10 }
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("exactly one of keys, combo, focus, shell_command, or delay_ms"));
+    }
+
+    #[test]
+    fn scene_sync_requires_exactly_one_predicate() {
+        let err = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+
+            [[visual.scene]]
+            name = "main-menu"
+
+            [[visual.scene.action]]
+            step = "bad"
+            delay_ms = 0
+            sync = { fixed_ms = 10, file_exists = "/tmp/x" }
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("exactly one sync predicate"));
+    }
+
+    #[test]
+    fn scene_name_rejects_path_traversal() {
+        let err = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+
+            [[visual.scene]]
+            name = "../main-menu"
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("scene name"));
+    }
+
+    #[test]
+    fn scene_name_rejects_shell_metacharacters() {
+        let err = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+
+            [[visual.scene]]
+            name = "main;rm"
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("scene name"));
+    }
+
+    #[test]
+    fn unknown_visual_fields_are_rejected() {
+        let err = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+            tolarance = "typo"
+        "#,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unknown field"));
+    }
+
+    #[test]
+    fn validator_kind_inference_prefers_visual_block() {
+        let parsed: ProjectConfig = parse_visual(
+            r#"
+            [visual]
+            golden_dir = "tests/visual/golden"
+
+            [profile.legacy]
+            visual_validator = "validator --image $STEAMPIPE_VISUAL_IMAGE"
+        "#,
+        )
+        .unwrap();
+        let profile = parsed.profile.as_ref().unwrap().get("legacy").unwrap();
+        assert_eq!(
+            parsed.effective_validator_kind(Some(profile)),
+            ValidatorKind::Golden
+        );
+    }
+}
+
 /// Network emulation parameters for chaos testing.
 #[derive(Debug, Clone, Default, Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -231,7 +908,7 @@ pub struct ChaosProfile {
 }
 
 /// Dynamic chaos injection schedule (stretch goal).
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 #[allow(dead_code)]
 pub struct ChaosSchedule {
@@ -241,7 +918,7 @@ pub struct ChaosSchedule {
 }
 
 /// Notification hooks executed after test runs.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct HooksConfig {
     pub on_complete: Option<String>,
@@ -466,10 +1143,10 @@ pub fn generate_yh_cluster_config(
 // ── Typestate markers for bridge validation ──
 
 /// Bridge has not been checked yet.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct Unchecked;
 /// Bridge existence has been verified.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct BridgeReady;
 
 /// Cluster-wide configuration.

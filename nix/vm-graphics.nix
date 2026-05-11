@@ -84,6 +84,7 @@ in {
 
     environment.systemPackages = with pkgs; [
       vulkan-tools
+      wayland-utils
     ];
   };
 }

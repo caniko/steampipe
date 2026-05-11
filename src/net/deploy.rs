@@ -280,3 +280,72 @@ pub async fn run<S>(
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_file(name: &str, content: &[u8]) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "steampipe-deploy-test-{name}-{}-{}",
+            std::process::id(),
+            chrono::Local::now().timestamp_nanos_opt().unwrap_or(0)
+        ));
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn compute_binary_hash_matches_known_sha256() {
+        let path = tmp_file("hello", b"hello");
+        let h = compute_binary_hash(&path).unwrap();
+        // sha256("hello") — well-known reference value
+        assert_eq!(
+            h,
+            "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn compute_binary_hash_empty_file() {
+        let path = tmp_file("empty", b"");
+        let h = compute_binary_hash(&path).unwrap();
+        // sha256("") — well-known reference value
+        assert_eq!(
+            h,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn compute_binary_hash_is_lowercase_hex_64() {
+        let path = tmp_file("hex", b"some bytes \x00\xff");
+        let h = compute_binary_hash(&path).unwrap();
+        assert_eq!(h.len(), 64);
+        assert!(
+            h.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn compute_binary_hash_changes_with_content() {
+        let a = tmp_file("a", b"alpha");
+        let b = tmp_file("b", b"beta");
+        let ha = compute_binary_hash(&a).unwrap();
+        let hb = compute_binary_hash(&b).unwrap();
+        assert_ne!(ha, hb);
+        let _ = std::fs::remove_file(&a);
+        let _ = std::fs::remove_file(&b);
+    }
+
+    #[test]
+    fn compute_binary_hash_errors_on_missing_file() {
+        let path = std::env::temp_dir().join("steampipe-deploy-test-missing-xyz123");
+        let _ = std::fs::remove_file(&path);
+        assert!(compute_binary_hash(&path).is_err());
+    }
+}

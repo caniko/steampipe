@@ -133,3 +133,167 @@ pub fn default_lock_dir() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
         .join("steampipe")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// Per-test unique lock directory.
+    fn unique_lock_dir(tag: &str) -> PathBuf {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let dir = std::env::temp_dir().join(format!("steampipe-lease-test-{tag}-{pid}-{n}"));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn live_pid() -> u32 {
+        std::process::id()
+    }
+
+    /// Find a PID that is guaranteed not to be alive on this system.
+    fn dead_pid() -> u32 {
+        for candidate in (u32::MAX - 1000..u32::MAX).rev() {
+            if !crate::core::state::is_pid_alive(candidate) {
+                return candidate;
+            }
+        }
+        unreachable!("no dead pid found in scan range");
+    }
+
+    #[test]
+    fn claim_path_is_lock_dir_joined() {
+        let p = claim_path(3, Path::new("/tmp/lock-dir"));
+        assert_eq!(p, PathBuf::from("/tmp/lock-dir/vm-3.claim"));
+    }
+
+    #[test]
+    fn write_then_probe_returns_holder() {
+        let dir = unique_lock_dir("probe");
+        write_claim(1, &dir, "alpha", live_pid()).unwrap();
+        let info = probe_holder(1, &dir).expect("claim should be live");
+        assert_eq!(info.pid, live_pid());
+        assert_eq!(info.cluster, "alpha");
+    }
+
+    #[test]
+    fn probe_holder_none_when_no_claim() {
+        let dir = unique_lock_dir("missing");
+        assert!(probe_holder(7, &dir).is_none());
+    }
+
+    #[test]
+    fn probe_holder_reclaims_stale_pid() {
+        let dir = unique_lock_dir("stale");
+        write_claim(2, &dir, "ghost", dead_pid()).unwrap();
+        assert!(claim_path(2, &dir).exists());
+        assert!(probe_holder(2, &dir).is_none());
+        assert!(
+            !claim_path(2, &dir).exists(),
+            "stale claim file should be removed"
+        );
+    }
+
+    #[test]
+    fn remove_claim_deletes_file() {
+        let dir = unique_lock_dir("remove");
+        write_claim(4, &dir, "c", live_pid()).unwrap();
+        assert!(claim_path(4, &dir).exists());
+        remove_claim(4, &dir);
+        assert!(!claim_path(4, &dir).exists());
+    }
+
+    #[test]
+    fn remove_claim_silent_when_missing() {
+        let dir = unique_lock_dir("remove-missing");
+        // Should not panic.
+        remove_claim(99, &dir);
+    }
+
+    #[test]
+    fn try_reserve_free_slot() {
+        let dir = unique_lock_dir("free");
+        assert!(try_reserve(1, &dir, "alpha").unwrap());
+    }
+
+    #[test]
+    fn try_reserve_same_cluster_is_available() {
+        let dir = unique_lock_dir("same");
+        write_claim(1, &dir, "alpha", live_pid()).unwrap();
+        assert!(try_reserve(1, &dir, "alpha").unwrap());
+    }
+
+    #[test]
+    fn try_reserve_other_cluster_is_blocked() {
+        let dir = unique_lock_dir("other");
+        write_claim(1, &dir, "alpha", live_pid()).unwrap();
+        assert!(!try_reserve(1, &dir, "beta").unwrap());
+    }
+
+    #[test]
+    fn reserve_n_picks_first_n_when_all_free() {
+        let dir = unique_lock_dir("first-n");
+        let ids = reserve_n(3, 5, &dir, "alpha").unwrap();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn reserve_n_skips_other_cluster_holds() {
+        let dir = unique_lock_dir("skip");
+        write_claim(1, &dir, "beta", live_pid()).unwrap();
+        write_claim(3, &dir, "beta", live_pid()).unwrap();
+        let ids = reserve_n(2, 5, &dir, "alpha").unwrap();
+        assert_eq!(ids, vec![2, 4]);
+    }
+
+    #[test]
+    fn reserve_n_fails_when_not_enough_available() {
+        let dir = unique_lock_dir("not-enough");
+        for id in 1..=4 {
+            write_claim(id, &dir, "beta", live_pid()).unwrap();
+        }
+        let err = reserve_n(3, 5, &dir, "alpha").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("only 1 of 3 requested VMs available"), "{msg}");
+        assert!(msg.contains("4 held by other processes"), "{msg}");
+    }
+
+    #[test]
+    fn reserve_n_treats_same_cluster_holds_as_available() {
+        let dir = unique_lock_dir("same-cluster-holds");
+        write_claim(1, &dir, "alpha", live_pid()).unwrap();
+        write_claim(2, &dir, "alpha", live_pid()).unwrap();
+        let ids = reserve_n(3, 5, &dir, "alpha").unwrap();
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn list_cluster_vms_filters_by_cluster() {
+        let dir = unique_lock_dir("list");
+        write_claim(1, &dir, "alpha", live_pid()).unwrap();
+        write_claim(2, &dir, "beta", live_pid()).unwrap();
+        write_claim(3, &dir, "alpha", live_pid()).unwrap();
+        let alpha = list_cluster_vms("alpha", 5, &dir);
+        assert_eq!(alpha, vec![1, 3]);
+        let beta = list_cluster_vms("beta", 5, &dir);
+        assert_eq!(beta, vec![2]);
+        assert!(list_cluster_vms("gamma", 5, &dir).is_empty());
+    }
+
+    #[test]
+    fn probe_holder_ignores_corrupt_claim() {
+        let dir = unique_lock_dir("corrupt");
+        fs::write(claim_path(1, &dir), "not json at all").unwrap();
+        assert!(probe_holder(1, &dir).is_none());
+    }
+
+    #[test]
+    fn default_lock_dir_ends_in_steampipe() {
+        // Avoid env-mutating tests (they would race other tests in the same
+        // binary); just assert the suffix that holds in either branch.
+        assert!(default_lock_dir().ends_with("steampipe"));
+    }
+}

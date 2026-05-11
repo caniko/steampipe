@@ -164,6 +164,15 @@ impl Backend {
         }
     }
 
+    /// Download one remote file or directory into a local destination directory.
+    pub async fn download(&self, ip: &str, source: &str, dest: &Path) -> anyhow::Result<()> {
+        match self {
+            Self::MicroVm(b) => b.ssh.fetch(ip, source, dest).await,
+            Self::Docker(_) => docker_cp_from(source, ip, dest).await,
+            Self::Local(_) => local_fetch(source, dest),
+        }
+    }
+
     /// Check if the instance is reachable.
     pub async fn is_reachable(&self, ip: &str) -> bool {
         match self {
@@ -415,6 +424,25 @@ async fn docker_cp_to(sources: &[&Path], container: &str, dest: &str) -> anyhow:
     Ok(())
 }
 
+async fn docker_cp_from(source: &str, container: &str, dest: &Path) -> anyhow::Result<()> {
+    std::fs::create_dir_all(dest)?;
+    let output = tokio::process::Command::new("docker")
+        .args([
+            "cp",
+            &format!("{container}:{source}"),
+            &dest.to_string_lossy(),
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("docker cp {container}:{source} failed: {stderr}");
+    }
+    Ok(())
+}
+
 // ── Local backend ──
 
 impl LocalBackend {
@@ -452,6 +480,20 @@ fn local_copy(sources: &[&Path], _work_dir: &Path, dest: &str) -> anyhow::Result
         } else if let Some(name) = src.file_name() {
             std::fs::copy(src, dest_path.join(name))?;
         }
+    }
+    Ok(())
+}
+
+fn local_fetch(source: &str, dest: &Path) -> anyhow::Result<()> {
+    let source_path = Path::new(source);
+    std::fs::create_dir_all(dest)?;
+    if source_path.is_dir() {
+        copy_dir_all(
+            source_path,
+            &dest.join(source_path.file_name().unwrap_or_default()),
+        )?;
+    } else if let Some(name) = source_path.file_name() {
+        std::fs::copy(source_path, dest.join(name))?;
     }
     Ok(())
 }

@@ -26,6 +26,26 @@ impl fmt::Display for ScreenshotBackend {
     }
 }
 
+/// Lifecycle for automated screenshot capture during `cluster-ctl test`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CaptureMode {
+    Off,
+    Failure,
+    FailureAndStall,
+    Timelapse,
+}
+
+impl fmt::Display for CaptureMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Off => f.write_str("off"),
+            Self::Failure => f.write_str("failure"),
+            Self::FailureAndStall => f.write_str("failure-and-stall"),
+            Self::Timelapse => f.write_str("timelapse"),
+        }
+    }
+}
+
 /// Network transport layer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum NetworkMode {
@@ -119,9 +139,13 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+#[allow(clippy::large_enum_variant)]
 pub enum Commands {
     /// Show status of all VMs (running, SSH, Steam, game)
     Status,
+
+    /// Show compositor readiness state on all VMs
+    CompositorStatus,
 
     /// Start VMs. Uses --vm-count to determine how many.
     Up {
@@ -197,6 +221,18 @@ pub enum Commands {
         /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
         #[arg(long, default_value = "weston")]
         display: DisplayMode,
+    },
+
+    /// Verify in-VM GPU, Vulkan, and Wayland readiness
+    GpuPreflight {
+        /// Target VM: "all", "3", "vm-3"
+        target: Option<String>,
+        /// Path to directory containing VM runners (used to boot stopped VMs)
+        #[arg(long)]
+        runners_dir: Option<PathBuf>,
+        /// Emit machine-readable JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Start compositor + Steam on VMs
@@ -307,6 +343,26 @@ pub enum Commands {
         /// Capture screenshots on test failure
         #[arg(long)]
         capture_on_failure: bool,
+
+        /// Capture lifecycle mode: off, failure, failure-and-stall, or timelapse
+        #[arg(long)]
+        capture_mode: Option<CaptureMode>,
+
+        /// Timelapse interval in seconds (used with --capture-mode timelapse)
+        #[arg(long)]
+        capture_interval: Option<u32>,
+
+        /// Record a WebM video from each VM during the run
+        #[arg(long)]
+        record_video: bool,
+
+        /// Comma-separated visual scenes to drive and capture during each run
+        #[arg(long, value_delimiter = ',')]
+        scenes: Vec<String>,
+
+        /// VM to drive for scene captures (default: first leased VM)
+        #[arg(long)]
+        scene_vm: Option<String>,
 
         /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
         #[arg(long)]
@@ -445,12 +501,21 @@ pub enum Commands {
         /// Output directory (default: screenshots/<timestamp>)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Visual scene to validate (default: all configured scenes)
+        #[arg(long)]
+        scene: Option<String>,
         /// Screenshot backend: grim or vnc
         #[arg(long = "screenshot-backend", default_value = "grim")]
         screenshot_backend: ScreenshotBackend,
         /// Run the configured project visual validator for each screenshot
         #[arg(long)]
         validate: bool,
+    },
+
+    /// Inspect or manage structured visual golden-image scenes
+    Visual {
+        #[command(subcommand)]
+        action: VisualAction,
     },
 
     /// Show Steam account status across all VMs
@@ -470,6 +535,13 @@ pub enum Commands {
         /// Refresh interval in seconds
         #[arg(short, long, default_value_t = 5)]
         interval: u64,
+    },
+
+    /// Health check and repair
+    Doctor {
+        /// Remove stale PID files, orphaned microvm processes, and leftover sockets
+        #[arg(long)]
+        fix: bool,
     },
 
     /// Generate a steampipe.toml config template
@@ -509,6 +581,64 @@ pub enum HistoryAction {
         /// Limit analysis to last N sessions
         #[arg(short = 'n', long)]
         last: Option<usize>,
+    },
+}
+
+/// Visual golden-image testing subcommands.
+#[derive(Subcommand)]
+pub enum VisualAction {
+    /// List configured visual scenes
+    List,
+    /// Drive a scripted scene on one VM, then capture and validate it
+    Capture {
+        /// Scene name from [[visual.scene]]
+        scene: String,
+        /// Target VM: "vm-1" or "1" (default: first VM)
+        #[arg(long)]
+        vm: Option<String>,
+        /// Output directory for the captured frame
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+    /// Capture the current frame and write it as the scene golden image
+    Record {
+        /// Either <scene> or <vm> <scene>
+        #[arg(value_name = "VM_OR_SCENE", num_args = 1..=2)]
+        args: Vec<String>,
+        /// Overwrite an existing golden image
+        #[arg(long)]
+        force: bool,
+    },
+    /// Promote an actual frame from a previous run to the scene golden image
+    Bless {
+        /// Scene name from [[visual.scene]]
+        scene: String,
+        /// Failed run label to bless from
+        #[arg(long = "from")]
+        from: Option<String>,
+        /// Skip interactive confirmation
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Re-run comparison against an already-captured actual frame
+    Diff {
+        /// Scene name from [[visual.scene]]
+        scene: String,
+        /// Run label containing the captured actual frame
+        #[arg(long = "from")]
+        from: Option<String>,
+    },
+    /// Generate an HTML report from stored visual artifacts
+    Report {
+        /// Run label to render (default: most recent run with visual results)
+        #[arg(long = "run")]
+        run_label: Option<String>,
+        /// Output directory for the generated report
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Inline images and videos as data URLs
+        #[arg(long)]
+        single_file: bool,
     },
 }
 
@@ -694,6 +824,64 @@ mod tests {
                 assert!(validate);
             }
             _ => panic!("expected Screenshot command"),
+        }
+    }
+
+    #[test]
+    fn compositor_status_parses() {
+        let cli = parse(&["--vm-count", "7", "compositor-status"]);
+        match cli.command {
+            Commands::CompositorStatus => {}
+            _ => panic!("expected CompositorStatus command"),
+        }
+    }
+
+    #[test]
+    fn visual_list_parses_without_vm_count() {
+        let cli = parse(&["visual", "list"]);
+        match cli.command {
+            Commands::Visual {
+                action: VisualAction::List,
+            } => {}
+            _ => panic!("expected Visual list"),
+        }
+    }
+
+    #[test]
+    fn visual_record_accepts_vm_and_scene() {
+        let cli = parse(&["visual", "record", "vm-1", "main-menu"]);
+        match cli.command {
+            Commands::Visual {
+                action: VisualAction::Record { args, .. },
+            } => {
+                assert_eq!(args, vec!["vm-1", "main-menu"]);
+            }
+            _ => panic!("expected Visual record"),
+        }
+    }
+
+    #[test]
+    fn visual_capture_accepts_scene_and_vm() {
+        let cli = parse(&["visual", "capture", "main-menu", "--vm", "vm-2"]);
+        match cli.command {
+            Commands::Visual {
+                action: VisualAction::Capture { scene, vm, .. },
+            } => {
+                assert_eq!(scene, "main-menu");
+                assert_eq!(vm.as_deref(), Some("vm-2"));
+            }
+            _ => panic!("expected Visual capture"),
+        }
+    }
+
+    #[test]
+    fn test_accepts_scene_list() {
+        let cli = parse(&["--vm-count", "7", "test", "--scenes", "a,b,c"]);
+        match cli.command {
+            Commands::Test { scenes, .. } => {
+                assert_eq!(scenes, vec!["a", "b", "c"]);
+            }
+            _ => panic!("expected Test"),
         }
     }
 

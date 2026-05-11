@@ -12,11 +12,12 @@ use std::time::{Duration, Instant};
 
 use regex::Regex;
 use serde::Deserialize;
+use tokio::sync::{Mutex, watch};
 
 use crate::core::backend::Backend;
 use crate::core::config::{ChaosProfile, ClusterConfig, IpAddr, VmName};
 use crate::harness::output::{OutputFormat, RunResult, RunStatus, TestSession, TimeoutKind};
-use crate::ui::cli::NetworkMode;
+use crate::ui::cli::{CaptureMode, NetworkMode};
 
 /// Configuration for a test run.
 ///
@@ -37,9 +38,14 @@ pub struct TestConfig {
     pub build: bool,
     pub filter_pattern: Option<String>,
     pub output_file: Option<PathBuf>,
-    pub capture_on_failure: bool,
+    pub capture_mode: CaptureMode,
+    pub capture_interval_secs: Option<u32>,
     pub screenshot_backend: crate::cli::ScreenshotBackend,
     pub visual_validator: Option<String>,
+    pub visual_config: Option<crate::core::config::VisualConfig>,
+    pub scenes: Vec<String>,
+    pub scene_vm: Option<String>,
+    pub record_video: bool,
     /// VM display mode: headless (game gets `--headless`), weston, or sway.
     pub display: crate::cli::DisplayMode,
     /// When false, suppress `println!` output (for MCP tools where stdout is JSON-RPC).
@@ -68,6 +74,7 @@ pub struct TestConfig {
 
 const DEFAULT_HARD_TIMEOUT_MIN_SECS: u64 = 1_800;
 const DEFAULT_HARD_TIMEOUT_MULTIPLIER: u64 = 5;
+const CAPTURE_WARN_BYTES: u64 = 500 * 1024 * 1024;
 
 pub fn resolve_hard_timeout(timeout: Duration, explicit: Option<Duration>) -> Duration {
     explicit.unwrap_or_else(|| {
@@ -510,6 +517,258 @@ fn heartbeat_context(snapshot: &HeartbeatSnapshot) -> String {
     )
 }
 
+async fn run_configured_scenes<S>(
+    config: &ClusterConfig<S>,
+    project_root: &Path,
+    test_config: &TestConfig,
+    target_vms: &[crate::core::config::VmDef],
+    run_num: u32,
+    output: &mut String,
+) -> anyhow::Result<Vec<crate::game::visual::VisualRunResult>> {
+    if test_config.scenes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let visual = test_config.visual_config.as_ref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "--scenes requires validator_kind = \"golden\" and a configured [visual] block"
+        )
+    })?;
+    let vm = find_scene_vm(target_vms, test_config.scene_vm.as_deref())?;
+    let run_label = format!("run-{run_num}");
+    let output_dir = project_root
+        .join("logs")
+        .join("scenes")
+        .join(&run_label)
+        .join(&vm.name);
+    let mut visual_results = Vec::new();
+
+    print_and_push(output, "=== SCENE CAPTURES ===", test_config.verbose);
+    for scene_name in &test_config.scenes {
+        let scene = visual
+            .scene(scene_name)
+            .ok_or_else(|| anyhow::anyhow!("visual scene '{scene_name}' not found"))?;
+        let backend = scene_capture_backend(visual, scene);
+        validate_visual_capture_config(test_config.display, backend)?;
+        if backend == crate::cli::ScreenshotBackend::Vnc {
+            crate::capture::ensure_wayvnc(&config.backend, vm, &config.vm_user, true).await?;
+        }
+        crate::game::scene::runner::run_scene_named(
+            &config.backend,
+            vm,
+            &config.vm_user,
+            visual,
+            scene_name,
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+        let options = crate::capture::ScreenshotOptions {
+            backend,
+            validator: test_config.visual_validator.clone(),
+            golden: test_config.visual_config.clone(),
+            scene: Some(scene_name.clone()),
+            run_label: Some(run_label.clone()),
+            window_target: scene.window.clone(),
+            allow_vnc_input: true,
+        };
+        let (image_path, mut scene_results) =
+            crate::capture::capture_single_vm(config, vm, &output_dir, &options).await?;
+        if scene_results.is_empty() {
+            print_and_push(
+                output,
+                &format!(
+                    "  {} on {}: captured {}",
+                    scene.name,
+                    vm.name,
+                    image_path.display()
+                ),
+                test_config.verbose,
+            );
+        } else {
+            for result in &scene_results {
+                print_and_push(
+                    output,
+                    &format!(
+                        "  {} on {}: {} (ssim {:.5}, max_delta {})",
+                        result.scene,
+                        vm.name,
+                        if result.passed { "passed" } else { "failed" },
+                        result.ssim,
+                        result.max_delta
+                    ),
+                    test_config.verbose,
+                );
+            }
+        }
+        visual_results.append(&mut scene_results);
+    }
+    output.push('\n');
+    Ok(visual_results)
+}
+
+#[derive(Clone)]
+struct StallCaptureContext {
+    backend: Backend,
+    vm_user: String,
+    target_vms: Vec<crate::core::config::VmDef>,
+    output_root: PathBuf,
+    run_label: String,
+    capture_lock: std::sync::Arc<Mutex<()>>,
+    screenshot_backend: crate::cli::ScreenshotBackend,
+}
+
+async fn capture_reason_frames(context: &StallCaptureContext, reason: &str, stamp: &str) -> anyhow::Result<()> {
+    let _guard = context.capture_lock.lock().await;
+    if context.screenshot_backend == crate::cli::ScreenshotBackend::Vnc {
+        for vm in &context.target_vms {
+            crate::capture::ensure_wayvnc(&context.backend, vm, &context.vm_user, false).await?;
+        }
+    }
+    for vm in &context.target_vms {
+        let dir = context
+            .output_root
+            .join(&context.run_label)
+            .join(reason)
+            .join(&vm.name);
+        std::fs::create_dir_all(&dir)?;
+        let captured = crate::capture::screenshot_vm(
+            &context.backend,
+            vm,
+            &dir,
+            context.screenshot_backend,
+            None,
+        )
+        .await?;
+        let final_path = dir.join(format!("{stamp}.png"));
+        std::fs::rename(captured, final_path)?;
+    }
+    warn_if_capture_storage_exceeds_budget(&context.output_root.join(&context.run_label));
+    Ok(())
+}
+
+async fn run_timelapse_task(
+    context: StallCaptureContext,
+    interval_seconds: u32,
+    mut stop_rx: watch::Receiver<bool>,
+) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(interval_seconds as u64));
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut seq = 0u64;
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {
+                seq += 1;
+                let stamp = format!("{seq:06}");
+                if let Err(error) = capture_reason_frames(&context, "timelapse", &stamp).await {
+                    eprintln!("Warning: timelapse capture failed: {error}");
+                }
+            }
+            changed = stop_rx.changed() => {
+                if changed.is_err() || *stop_rx.borrow() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+async fn start_video_capture<S>(
+    config: &ClusterConfig<S>,
+    target_vms: &[crate::core::config::VmDef],
+) -> Vec<String> {
+    let mut started = Vec::new();
+    for vm in target_vms {
+        let command = r#"if ! command -v wf-recorder >/dev/null 2>&1; then
+    echo MISSING
+    exit 0
+fi
+export XDG_RUNTIME_DIR="/tmp/runtime-$(whoami)"
+export WAYLAND_DISPLAY=wayland-1
+rm -f /tmp/steampipe-run.webm /tmp/steampipe-wf-recorder.log
+pkill -INT -x wf-recorder >/dev/null 2>&1 || true
+nohup sh -lc 'wf-recorder -f /tmp/steampipe-run.webm >/tmp/steampipe-wf-recorder.log 2>&1' >/dev/null 2>&1 &
+sleep 2
+pgrep -x wf-recorder >/dev/null && echo STARTED || echo FAILED"#;
+        let output = config.backend.run_cmd(&vm.ip, command).await;
+        match output.stdout.trim() {
+            "STARTED" => started.push(vm.name.to_string()),
+            "MISSING" => eprintln!("Warning: {} missing wf-recorder; skipping video", vm.name),
+            _ => eprintln!("Warning: {} failed to start wf-recorder", vm.name),
+        }
+    }
+    started
+}
+
+async fn stop_video_capture<S>(
+    config: &ClusterConfig<S>,
+    target_vms: &[crate::core::config::VmDef],
+    run_root: &Path,
+    started: &[String],
+) {
+    let video_dir = run_root.join("video");
+    let _ = std::fs::create_dir_all(&video_dir);
+    for vm in target_vms {
+        if !started.iter().any(|name| name == &vm.name.to_string()) {
+            continue;
+        }
+        let stop = config
+            .backend
+            .run_cmd(
+                &vm.ip,
+                r#"pkill -INT -x wf-recorder >/dev/null 2>&1 || true
+sleep 1
+[ -s /tmp/steampipe-run.webm ] && echo READY || echo EMPTY"#,
+            )
+            .await;
+        if !stop.stdout.contains("READY") {
+            eprintln!(
+                "Warning: {} video capture empty; inspect /tmp/steampipe-wf-recorder.log in guest",
+                vm.name
+            );
+            continue;
+        }
+        if let Err(error) = config
+            .backend
+            .download(&vm.ip, "/tmp/steampipe-run.webm", &video_dir)
+            .await
+        {
+            eprintln!("Warning: failed to download video from {}: {error}", vm.name);
+            continue;
+        }
+        let downloaded = video_dir.join("steampipe-run.webm");
+        let final_path = video_dir.join(format!("{}.webm", vm.name));
+        if downloaded.exists() {
+            let _ = std::fs::rename(downloaded, final_path);
+        }
+    }
+}
+
+fn warn_if_capture_storage_exceeds_budget(run_root: &Path) {
+    let mut total = 0u64;
+    let mut stack = vec![run_root.to_path_buf()];
+    while let Some(path) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(metadata) = entry.metadata() {
+                total = total.saturating_add(metadata.len());
+            }
+        }
+    }
+    if total > CAPTURE_WARN_BYTES {
+        eprintln!(
+            "Warning: capture artifacts for {} exceed {} MiB",
+            run_root.display(),
+            CAPTURE_WARN_BYTES / 1024 / 1024
+        );
+    }
+}
+
 // ── Main test orchestration ──
 
 /// Run the end-to-end test orchestration loop.
@@ -521,8 +780,15 @@ pub async fn run<S>(
     if test_config.players < 2 || test_config.players > 8 {
         anyhow::bail!("players must be 2-8, got {}", test_config.players);
     }
-    if test_config.capture_on_failure || test_config.visual_validator.is_some() {
+    if test_config.capture_mode != CaptureMode::Off
+        || test_config.visual_validator.is_some()
+        || test_config.visual_config.is_some()
+    {
         validate_visual_capture_config(test_config.display, test_config.screenshot_backend)?;
+    }
+    if test_config.capture_mode == CaptureMode::Timelapse && test_config.capture_interval_secs.is_none()
+    {
+        anyhow::bail!("--capture-mode timelapse requires --capture-interval");
     }
 
     let vm_count = (test_config.players as usize)
@@ -562,10 +828,16 @@ pub async fn run<S>(
         output.push('\n');
     }
 
+    let mut gpu_preflight = Vec::new();
+    let mut readiness = Vec::new();
+
     // Pre-flight: verify VMs have a GPU device if using a GPU display mode
     if test_config.display.requires_gpu() {
         print_and_push(&mut output, "=== GPU CHECK ===", verbose);
         crate::vm::preflight::ensure_vm_gpu(backend, target_vms, test_config.display).await?;
+        gpu_preflight = crate::vm::preflight::gpu_preflight_reports_for_targets(config, target_vms)
+            .await
+            .unwrap_or_default();
         print_and_push(&mut output, "  All VMs have a DRM device", verbose);
         output.push('\n');
     }
@@ -596,6 +868,9 @@ pub async fn run<S>(
             }
         }
         output.push('\n');
+        readiness = crate::game::compositor::status_rows(config)
+            .await
+            .unwrap_or_default();
     }
 
     // Step 2b: Ensure Steam on VMs if steam network
@@ -709,6 +984,7 @@ pub async fn run<S>(
     let mut failed = 0u32;
     let mut timed_out_count = 0u32;
     let mut exit_codes: Vec<Option<i32>> = Vec::new();
+    let mut visual_results: Vec<crate::game::visual::VisualRunResult> = Vec::new();
     let mut consecutive_fail_code: Option<i32> = None;
     let mut consecutive_fail_count = 0u32;
     const REPEAT_FAILURE_LIMIT: u32 = 3;
@@ -721,6 +997,7 @@ pub async fn run<S>(
 
     for run_num in 1..=test_config.max_runs {
         let run_start = Instant::now();
+        let run_label = format!("run-{run_num}");
         print_and_push(
             &mut output,
             &format!("=== RUN {run_num}/{} ===", test_config.max_runs),
@@ -834,6 +1111,68 @@ pub async fn run<S>(
         }
         eprintln!("[cluster-ctl] VMs launched OK");
 
+        let capture_root = test_config
+            .visual_config
+            .as_ref()
+            .and_then(|visual| visual.diff_dir.clone())
+            .unwrap_or_else(|| project_root.join("logs").join("visual"));
+        let capture_lock = std::sync::Arc::new(Mutex::new(()));
+        let stall_capture_context = StallCaptureContext {
+            backend: config.backend.clone(),
+            vm_user: config.vm_user.clone(),
+            target_vms: target_vms.to_vec(),
+            output_root: capture_root.clone(),
+            run_label: run_label.clone(),
+            capture_lock: capture_lock.clone(),
+            screenshot_backend: test_config.screenshot_backend,
+        };
+
+        let video_started = if test_config.record_video {
+            start_video_capture(config, target_vms).await
+        } else {
+            Vec::new()
+        };
+
+        match run_configured_scenes(
+            config,
+            project_root,
+            &test_config,
+            target_vms,
+            run_num,
+            &mut output,
+        )
+        .await {
+            Ok(mut scene_results) => visual_results.append(&mut scene_results),
+            Err(error) => {
+                failed += 1;
+                print_and_push(
+                    &mut output,
+                    &format!("--- FAIL (scene capture failed: {error}) ---"),
+                    verbose,
+                );
+                crate::run::kill_games(backend, target_vms, binary_name).await;
+                kill_process_group(&mut child, test_config.shutdown_timeout);
+                stop_video_capture(config, target_vms, &capture_root.join(&run_label), &video_started)
+                    .await;
+                if test_config.stop_on_failure {
+                    break;
+                }
+                output.push('\n');
+                continue;
+            }
+        }
+
+        let (stop_tx, stop_rx) = watch::channel(false);
+        let timelapse_task = if test_config.capture_mode == CaptureMode::Timelapse {
+            Some(tokio::spawn(run_timelapse_task(
+                stall_capture_context.clone(),
+                test_config.capture_interval_secs.unwrap_or(5),
+                stop_rx,
+            )))
+        } else {
+            None
+        };
+
         // Monitor with heartbeat detection
         cleanup_heartbeat_files(&local_heartbeat_dir);
 
@@ -850,6 +1189,7 @@ pub async fn run<S>(
 
         let hb_stall = test_config.heartbeat_stall_secs;
         let hard_timeout = test_config.hard_timeout;
+        let stall_capture_context_for_monitor = stall_capture_context.clone();
         let (combined, exit_code, monitor_failure) = tokio::task::spawn_blocking(move || {
             monitor_local_process(
                 &mut child,
@@ -862,9 +1202,21 @@ pub async fn run<S>(
                 &remote_dir_owned,
                 &vm_heartbeat_subdir_owned,
                 hb_stall,
+                if test_config.capture_mode == CaptureMode::FailureAndStall
+                    || test_config.capture_mode == CaptureMode::Timelapse
+                {
+                    Some(stall_capture_context_for_monitor)
+                } else {
+                    None
+                },
             )
         })
         .await??;
+        let _ = stop_tx.send(true);
+        if let Some(task) = timelapse_task {
+            let _ = task.await;
+        }
+        stop_video_capture(config, target_vms, &capture_root.join(&run_label), &video_started).await;
 
         cleanup_heartbeat_files(&local_heartbeat_dir);
 
@@ -977,15 +1329,24 @@ pub async fn run<S>(
             }
 
             // Capture screenshots on failure
-            if test_config.capture_on_failure {
+            if matches!(
+                test_config.capture_mode,
+                CaptureMode::Failure | CaptureMode::FailureAndStall | CaptureMode::Timelapse
+            ) {
                 let screenshot_dir = project_root.join("logs");
                 let options = crate::capture::ScreenshotOptions {
                     backend: test_config.screenshot_backend,
                     validator: test_config.visual_validator.clone(),
+                    golden: test_config.visual_config.clone(),
+                    scene: None,
                     run_label: None,
+                    window_target: None,
+                    allow_vnc_input: false,
                 };
-                crate::capture::capture_on_failure(config, &screenshot_dir, run_num, &options)
-                    .await;
+                let run_visual_results =
+                    crate::capture::capture_on_failure(config, &screenshot_dir, run_num, &options)
+                        .await;
+                visual_results.extend(run_visual_results);
             }
 
             crate::run::kill_games(backend, target_vms, binary_name).await;
@@ -1150,6 +1511,9 @@ pub async fn run<S>(
         git_sha,
         session.total_duration.as_secs_f64(),
         run_durations,
+        visual_results,
+        gpu_preflight.clone(),
+        readiness.clone(),
     );
     if let Err(e) = crate::history::save_result(&config.state_dir, result) {
         eprintln!("Warning: failed to save test history: {e}");
@@ -1201,6 +1565,47 @@ fn print_and_push(output: &mut String, msg: &str, verbose: bool) {
     }
     output.push_str(msg);
     output.push('\n');
+}
+
+fn find_scene_vm<'a>(
+    target_vms: &'a [crate::core::config::VmDef],
+    scene_vm: Option<&str>,
+) -> anyhow::Result<&'a crate::core::config::VmDef> {
+    match scene_vm {
+        Some(target) => {
+            let normalized = target
+                .strip_prefix("vm-")
+                .map(|id| format!("vm-{id}"))
+                .unwrap_or_else(|| {
+                    if target.bytes().all(|b| b.is_ascii_digit()) {
+                        format!("vm-{target}")
+                    } else {
+                        target.to_string()
+                    }
+                });
+            target_vms
+                .iter()
+                .find(|vm| vm.name.0 == normalized)
+                .ok_or_else(|| anyhow::anyhow!("scene VM '{target}' not found in this run"))
+        }
+        None => target_vms
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("scene capture requires at least one VM")),
+    }
+}
+
+fn scene_capture_backend(
+    visual: &crate::core::config::VisualConfig,
+    scene: &crate::core::config::Scene,
+) -> crate::cli::ScreenshotBackend {
+    scene
+        .backend
+        .or(visual.default_backend)
+        .map(|backend| match backend {
+            crate::core::config::VisualBackend::Grim => crate::cli::ScreenshotBackend::Grim,
+            crate::core::config::VisualBackend::Vnc => crate::cli::ScreenshotBackend::Vnc,
+        })
+        .unwrap_or(crate::cli::ScreenshotBackend::Vnc)
 }
 
 /// Launch game on an instance (detached via nohup).
@@ -1372,6 +1777,7 @@ fn monitor_local_process(
     remote_dir: &str,
     vm_heartbeat_subdir: &str,
     heartbeat_stall_secs: u64,
+    stall_capture: Option<StallCaptureContext>,
 ) -> anyhow::Result<(String, Option<i32>, Option<MonitorFailure>)> {
     use std::io::Read as _;
 
@@ -1445,6 +1851,10 @@ fn monitor_local_process(
                         timeout,
                         now_ms() as u64,
                     ) {
+                        if let Some(context) = &stall_capture {
+                            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                            let _ = rt.block_on(capture_reason_frames(context, "stall", &stamp));
+                        }
                         exit_code = kill_and_reap(child, shutdown_timeout);
                         failure = Some(stall);
                         break;
@@ -1461,6 +1871,10 @@ fn monitor_local_process(
                         timeout,
                         now_ms() as u64,
                     ) {
+                        if let Some(context) = &stall_capture {
+                            let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                            let _ = rt.block_on(capture_reason_frames(context, "stall", &stamp));
+                        }
                         exit_code = kill_and_reap(child, shutdown_timeout);
                         failure = Some(stall);
                         break;

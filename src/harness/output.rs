@@ -469,6 +469,9 @@ mod tests {
             git_sha: None,
             duration_secs: None,
             run_durations: None,
+            visual_results: Vec::new(),
+            gpu_preflight: Vec::new(),
+            readiness: Vec::new(),
         }];
         let empty = HashMap::new();
         let xml = emit_junit_from_history(&results, &empty);
@@ -606,6 +609,9 @@ mod tests {
             git_sha: None,
             duration_secs: None,
             run_durations: None,
+            visual_results: Vec::new(),
+            gpu_preflight: Vec::new(),
+            readiness: Vec::new(),
         }];
         let empty = HashMap::new();
         let xml = emit_junit_from_history(&results, &empty);
@@ -640,6 +646,9 @@ mod tests {
             git_sha: None,
             duration_secs: None,
             run_durations: None,
+            visual_results: Vec::new(),
+            gpu_preflight: Vec::new(),
+            readiness: Vec::new(),
         }];
         let empty = HashMap::new();
         let xml = emit_junit_from_history(&results, &empty);
@@ -666,6 +675,9 @@ mod tests {
             git_sha: None,
             duration_secs: None,
             run_durations: None,
+            visual_results: Vec::new(),
+            gpu_preflight: Vec::new(),
+            readiness: Vec::new(),
         }];
         let mut custom = HashMap::new();
         custom.insert(42, "CUSTOM_FAIL".to_string());
@@ -692,6 +704,9 @@ mod tests {
                 git_sha: None,
                 duration_secs: None,
                 run_durations: None,
+                visual_results: Vec::new(),
+                gpu_preflight: Vec::new(),
+                readiness: Vec::new(),
             },
             crate::history::TestResult {
                 timestamp: "2024-01-02T00:00:00".into(),
@@ -708,6 +723,9 @@ mod tests {
                 git_sha: None,
                 duration_secs: None,
                 run_durations: None,
+                visual_results: Vec::new(),
+                gpu_preflight: Vec::new(),
+                readiness: Vec::new(),
             },
         ];
         let empty = HashMap::new();

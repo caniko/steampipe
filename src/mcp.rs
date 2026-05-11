@@ -564,9 +564,18 @@ impl SteampipeMcp {
             build: input.build.unwrap_or(true),
             filter_pattern: input.filter_pattern,
             output_file: input.output_file.map(std::path::PathBuf::from),
-            capture_on_failure: input.capture_on_failure.unwrap_or(false),
+            capture_mode: if input.capture_on_failure.unwrap_or(false) {
+                crate::ui::cli::CaptureMode::Failure
+            } else {
+                crate::ui::cli::CaptureMode::Off
+            },
+            capture_interval_secs: None,
             screenshot_backend,
             visual_validator: input.visual_validator,
+            visual_config: None,
+            scenes: Vec::new(),
+            scene_vm: None,
+            record_video: false,
             display,
             verbose: false, // suppress println to avoid corrupting MCP transport
             chaos: None,
@@ -626,16 +635,25 @@ impl SteampipeMcp {
         };
 
         let mut text = format!(
-            "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<10}\n",
-            "Timestamp", "Net", "P", "VMs", "Pass", "Fail", "T/O", "Result"
+            "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<12} {:<10}\n",
+            "Timestamp", "Net", "P", "VMs", "Pass", "Fail", "T/O", "Visual", "Result"
         );
-        text.push_str(&"─".repeat(70));
+        text.push_str(&"─".repeat(86));
         text.push('\n');
 
         for r in results {
             let result_str = if r.failed == 0 { "PASS" } else { "FAIL" };
+            let visual = crate::history::summarize_visual_results(&r.visual_results)
+                .map(|summary| {
+                    if summary.failed == 0 {
+                        format!("PASS ({}/{})", summary.passed, summary.passed)
+                    } else {
+                        format!("FAIL ({}/{})", summary.failed, summary.passed + summary.failed)
+                    }
+                })
+                .unwrap_or_else(|| "─".to_string());
             text.push_str(&format!(
-                "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<10}\n",
+                "{:<20} {:<7} {:<4} {:<4} {:<6} {:<6} {:<6} {:<12} {:<10}\n",
                 r.timestamp,
                 r.network,
                 r.players,
@@ -643,6 +661,7 @@ impl SteampipeMcp {
                 r.passed,
                 r.failed,
                 r.timed_out,
+                visual,
                 result_str,
             ));
         }

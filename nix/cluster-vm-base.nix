@@ -111,8 +111,12 @@ in {
             fi
             exec ${weston}/bin/weston --backend=drm "$@"
           '')
+          # nixpkgs pins sway 1.11 here; that release exposes the get_outputs /
+          # get_tree IPC fields this repo consumes for compositor readiness.
           sway
+          grim
           foot
+          wf-recorder
           xkeyboard_config
           tmux
           wayvnc

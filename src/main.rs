@@ -9,15 +9,18 @@ mod vm;
 use std::path::PathBuf;
 
 use clap::Parser;
-use core::config::{self, BackendKind, ClusterConfig, detect_project_root};
+use core::config::{self, BackendKind, ClusterConfig, VisualConfig, detect_project_root};
 use core::credentials;
 use core::state;
-use game::{accounts, capture, run, steam};
+use game::{accounts, capture, compositor, run, steam};
 use harness::{bisect, history, output::OutputFormat, runner as test};
 use net::{bridge, deploy, netem};
-use ui::cli::{self, Cli, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend};
+use ui::cli::{
+    self, CaptureMode, Cli, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend,
+    VisualAction,
+};
 use ui::{logs, watch};
-use vm::{lifecycle, snapshot, status};
+use vm::{lifecycle, preflight, snapshot, status};
 
 /// Resolve the env-var table passed to both peers for this test run.
 ///
@@ -52,6 +55,7 @@ fn resolve_screenshot_backend_from_profile(
 }
 
 fn select_visual_validator(project_config: core::config::ProjectConfig) -> anyhow::Result<String> {
+    project_config.warn_if_legacy_visual_validator_shadowed(None);
     let validators: Vec<String> = project_config
         .profile
         .unwrap_or_default()
@@ -66,6 +70,305 @@ fn select_visual_validator(project_config: core::config::ProjectConfig) -> anyho
         _ => anyhow::bail!(
             "--validate found multiple profile visual_validator values; use a test profile for disambiguation"
         ),
+    }
+}
+
+#[derive(Debug, Clone)]
+enum ValidatorPlan {
+    Shell(String),
+    Golden(VisualConfig),
+    None,
+}
+
+fn select_validator_plan(
+    project_root: &std::path::Path,
+    profile: Option<&core::config::TestProfile>,
+) -> anyhow::Result<ValidatorPlan> {
+    let Some(mut project_config) = config::load_project_config(project_root) else {
+        return Ok(ValidatorPlan::None);
+    };
+    project_config.warn_if_legacy_visual_validator_shadowed(None);
+    match project_config.effective_validator_kind(profile) {
+        core::config::ValidatorKind::Shell => profile
+            .and_then(|profile| profile.visual_validator.clone())
+            .map(ValidatorPlan::Shell)
+            .ok_or_else(|| anyhow::anyhow!("validator_kind = \"shell\" requires visual_validator")),
+        core::config::ValidatorKind::Golden => {
+            let visual = project_config.visual.as_mut().ok_or_else(|| {
+                anyhow::anyhow!("validator_kind = \"golden\" requires a [visual] block")
+            })?;
+            visual.resolve_paths(project_root);
+            Ok(ValidatorPlan::Golden(visual.clone()))
+        }
+        core::config::ValidatorKind::None => Ok(ValidatorPlan::None),
+    }
+}
+
+fn load_visual_config(project_root: &std::path::Path) -> anyhow::Result<VisualConfig> {
+    let mut project_config = config::load_project_config(project_root)
+        .ok_or_else(|| anyhow::anyhow!("visual command requires steampipe.toml"))?;
+    let visual = project_config
+        .visual
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("visual command requires a [visual] block"))?;
+    visual.resolve_paths(project_root);
+    Ok(visual.clone())
+}
+
+fn print_visual_scenes(project_root: &std::path::Path) -> anyhow::Result<()> {
+    let visual = load_visual_config(project_root)?;
+
+    println!("Name | Window | Backend | Tolerance | Golden");
+    println!("--- | --- | --- | --- | ---");
+    for scene in &visual.scene {
+        let golden_path = visual.golden_path(&scene.name)?;
+        let _diff_paths = visual.diff_path(&scene.name, "manual")?;
+        let window = scene
+            .window
+            .as_ref()
+            .map(|window| {
+                window
+                    .app_id
+                    .as_ref()
+                    .map(|app_id| format!("app_id={app_id}"))
+                    .or_else(|| window.title.as_ref().map(|title| format!("title={title}")))
+                    .or_else(|| window.class.as_ref().map(|class| format!("class={class}")))
+                    .unwrap_or_else(|| "-".into())
+            })
+            .unwrap_or_else(|| "-".into());
+        let backend = scene
+            .backend
+            .or(visual.default_backend)
+            .map(|backend| backend.to_string())
+            .unwrap_or_else(|| "-".into());
+        let tolerance = scene
+            .tolerance
+            .as_ref()
+            .or(visual.default_tolerance.as_ref())
+            .map(|tolerance| {
+                let ssim = tolerance
+                    .ssim
+                    .map(|ssim| format!("{ssim:.3}"))
+                    .unwrap_or_else(|| "-".into());
+                let max_delta = tolerance
+                    .max_pixel_delta
+                    .map(|delta| delta.to_string())
+                    .unwrap_or_else(|| "-".into());
+                format!("ssim={ssim}, max_pixel_delta={max_delta}")
+            })
+            .unwrap_or_else(|| "-".into());
+        let golden = if golden_path.exists() {
+            "yes"
+        } else {
+            "missing"
+        };
+        println!(
+            "{} | {window} | {backend} | {tolerance} | {golden}",
+            scene.name
+        );
+    }
+    Ok(())
+}
+
+fn resolve_visual_scene<'a>(
+    visual: &'a VisualConfig,
+    scene_name: &str,
+) -> anyhow::Result<&'a core::config::Scene> {
+    visual
+        .scene(scene_name)
+        .ok_or_else(|| anyhow::anyhow!("visual scene '{scene_name}' not found"))
+}
+
+fn scene_capture_backend(visual: &VisualConfig, scene: &core::config::Scene) -> ScreenshotBackend {
+    scene
+        .backend
+        .or(visual.default_backend)
+        .map(|backend| match backend {
+            core::config::VisualBackend::Grim => ScreenshotBackend::Grim,
+            core::config::VisualBackend::Vnc => ScreenshotBackend::Vnc,
+        })
+        .unwrap_or(ScreenshotBackend::Vnc)
+}
+
+fn parse_record_args(args: &[String]) -> anyhow::Result<(Option<&str>, &str)> {
+    match args {
+        [scene] => Ok((None, scene.as_str())),
+        [vm, scene] => Ok((Some(vm.as_str()), scene.as_str())),
+        _ => anyhow::bail!("visual record expects <scene> or <vm> <scene>"),
+    }
+}
+
+fn find_vm<'a, S>(
+    config: &'a ClusterConfig<S>,
+    target: Option<&str>,
+) -> anyhow::Result<&'a core::config::VmDef> {
+    match target {
+        Some(target) => {
+            let normalized = target
+                .strip_prefix("vm-")
+                .map(|id| format!("vm-{id}"))
+                .unwrap_or_else(|| {
+                    if target.bytes().all(|b| b.is_ascii_digit()) {
+                        format!("vm-{target}")
+                    } else {
+                        target.to_string()
+                    }
+                });
+            config
+                .vms
+                .iter()
+                .find(|vm| vm.name.0 == normalized)
+                .ok_or_else(|| anyhow::anyhow!("VM '{target}' not found"))
+        }
+        None => config
+            .vms
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("no VMs configured")),
+    }
+}
+
+async fn record_visual_scene<S>(
+    config: &ClusterConfig<S>,
+    project_root: &std::path::Path,
+    args: &[String],
+    force: bool,
+) -> anyhow::Result<()> {
+    let visual = load_visual_config(project_root)?;
+    let (vm_target, scene_name) = parse_record_args(args)?;
+    let scene = resolve_visual_scene(&visual, scene_name)?;
+    let vm = find_vm(config, vm_target)?;
+    let backend = scene_capture_backend(&visual, scene);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "steampipe-visual-record-{}-{}",
+        std::process::id(),
+        scene.name
+    ));
+    std::fs::create_dir_all(&temp_dir)?;
+    let options = capture::ScreenshotOptions {
+        backend,
+        window_target: scene.window.clone(),
+        ..Default::default()
+    };
+    let (actual, _) = capture::capture_single_vm(config, vm, &temp_dir, &options).await?;
+    let golden = game::visual::record_scene(&visual, scene, &actual, force)?;
+    println!(
+        "Recorded {} from {} to {}",
+        scene.name,
+        vm.name,
+        golden.display()
+    );
+    let _ = std::fs::remove_dir_all(temp_dir);
+    Ok(())
+}
+
+async fn capture_visual_scene<S>(
+    config: &ClusterConfig<S>,
+    project_root: &std::path::Path,
+    scene_name: &str,
+    vm_target: Option<&str>,
+    output: Option<&std::path::Path>,
+) -> anyhow::Result<()> {
+    let visual = load_visual_config(project_root)?;
+    let scene = resolve_visual_scene(&visual, scene_name)?;
+    let vm = find_vm(config, vm_target)?;
+    let backend = scene_capture_backend(&visual, scene);
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let run_label = format!("manual-{ts}");
+    let output_dir = output
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| project_root.join(format!("screenshots/{run_label}")));
+
+    if backend == ScreenshotBackend::Vnc {
+        capture::ensure_wayvnc(&config.backend, vm, &config.vm_user, true).await?;
+    }
+
+    crate::game::scene::runner::run_scene_named(
+        &config.backend,
+        vm,
+        &config.vm_user,
+        &visual,
+        scene_name,
+    )
+    .await
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
+
+    let golden = visual
+        .golden_path(scene_name)
+        .ok()
+        .filter(|path| path.exists())
+        .map(|_| visual.clone());
+    let options = capture::ScreenshotOptions {
+        backend,
+        validator: None,
+        golden,
+        scene: Some(scene_name.to_string()),
+        run_label: Some(run_label),
+        window_target: scene.window.clone(),
+        allow_vnc_input: true,
+    };
+    let (image_path, visual_results) =
+        capture::capture_single_vm(config, vm, &output_dir, &options).await?;
+    println!(
+        "Captured {} on {} to {}",
+        scene.name,
+        vm.name,
+        image_path.display()
+    );
+    for result in visual_results {
+        println!(
+            "{}: {} (ssim {:.5}, max_delta {}, result {})",
+            result.scene,
+            if result.passed { "passed" } else { "failed" },
+            result.ssim,
+            result.max_delta,
+            result.result_path.display()
+        );
+    }
+    Ok(())
+}
+
+fn bless_visual_scene(
+    project_root: &std::path::Path,
+    scene_name: &str,
+    run_label: Option<&str>,
+    yes: bool,
+) -> anyhow::Result<()> {
+    let visual = load_visual_config(project_root)?;
+    let scene = resolve_visual_scene(&visual, scene_name)?;
+    let run_label =
+        run_label.ok_or_else(|| anyhow::anyhow!("visual bless requires --from <run-label>"))?;
+    let golden = game::visual::bless_scene(&visual, scene, run_label, yes)?;
+    println!(
+        "Blessed {} from {run_label} to {}",
+        scene.name,
+        golden.display()
+    );
+    Ok(())
+}
+
+fn diff_visual_scene(
+    project_root: &std::path::Path,
+    scene_name: &str,
+    run_label: Option<&str>,
+) -> anyhow::Result<()> {
+    let visual = load_visual_config(project_root)?;
+    let scene = resolve_visual_scene(&visual, scene_name)?;
+    let run_label =
+        run_label.ok_or_else(|| anyhow::anyhow!("visual diff requires --from <run-label>"))?;
+    let engine = game::visual::Engine::new(visual.clone());
+    let result = game::visual::diff_scene(&visual, &engine, scene, run_label)?;
+    println!(
+        "{}: {} (ssim {:.5}, max_delta {}, result {})",
+        result.scene,
+        if result.passed { "passed" } else { "failed" },
+        result.ssim,
+        result.max_delta,
+        result.result_path.display()
+    );
+    if result.passed {
+        Ok(())
+    } else {
+        anyhow::bail!("visual diff failed for {}", result.scene)
     }
 }
 
@@ -165,6 +468,14 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if let Commands::Visual {
+        action: VisualAction::List,
+    } = &cli.command
+    {
+        print_visual_scenes(&project_root)?;
+        return Ok(());
+    }
+
     let vm_count = cli
         .vm_count
         .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
@@ -233,6 +544,24 @@ async fn main() -> anyhow::Result<()> {
             let validated = config.validate_or_skip_bridge()?;
             steam::check(&validated, target.as_deref(), &runners_dir, display).await?;
         }
+        Commands::GpuPreflight {
+            target,
+            runners_dir,
+            json,
+        } => {
+            if let Some(runners_dir) = runners_dir {
+                let validated = config.validate_or_skip_bridge()?;
+                preflight::gpu_preflight_with_boot(
+                    &validated,
+                    target.as_deref(),
+                    &runners_dir,
+                    json,
+                )
+                .await?;
+            } else {
+                preflight::gpu_preflight(&config, target.as_deref(), json).await?;
+            }
+        }
         Commands::SteamLogin {
             target,
             continue_from,
@@ -258,6 +587,7 @@ async fn main() -> anyhow::Result<()> {
 
         // Commands that work on any config state
         Commands::Status => status::run(&config).await?,
+        Commands::CompositorStatus => compositor::status_all(&config).await?,
         Commands::Down => lifecycle::down(&config),
         Commands::NetUp { nft } => bridge::up(&config, &nft)?,
         Commands::NetDown { nft } => bridge::down(&config, &nft)?,
@@ -308,13 +638,19 @@ async fn main() -> anyhow::Result<()> {
             filter_pattern,
             output_file,
             capture_on_failure,
+            capture_mode,
+            capture_interval,
+            scenes,
+            scene_vm,
             display,
             chaos_profile,
             heartbeat_stall_secs,
             output_format,
             on_complete,
             on_failure,
+            record_video,
             strace,
+            ..
         } => {
             // Load test profile if specified
             let prof = profile
@@ -371,6 +707,12 @@ async fn main() -> anyhow::Result<()> {
 
             let resolved_screenshot_backend =
                 resolve_screenshot_backend_from_profile(prof.as_ref());
+            let validator_plan = select_validator_plan(&project_root, prof.as_ref())?;
+            let (visual_validator, visual_config) = match validator_plan {
+                ValidatorPlan::Shell(validator) => (Some(validator), None),
+                ValidatorPlan::Golden(visual) => (None, Some(visual)),
+                ValidatorPlan::None => (None, None),
+            };
 
             // Resolve chaos profile
             let chaos = chaos_profile
@@ -422,13 +764,25 @@ async fn main() -> anyhow::Result<()> {
                             .and_then(|p| p.output_file.as_ref())
                             .map(PathBuf::from)
                     }),
-                    capture_on_failure: capture_on_failure
-                        || prof
-                            .as_ref()
-                            .and_then(|p| p.capture_on_failure)
-                            .unwrap_or(false),
+                    capture_mode: capture_mode.unwrap_or_else(|| {
+                        if capture_on_failure
+                            || prof
+                                .as_ref()
+                                .and_then(|p| p.capture_on_failure)
+                                .unwrap_or(false)
+                        {
+                            CaptureMode::Failure
+                        } else {
+                            CaptureMode::Off
+                        }
+                    }),
+                    capture_interval_secs: capture_interval,
                     screenshot_backend: resolved_screenshot_backend,
-                    visual_validator: prof.as_ref().and_then(|p| p.visual_validator.clone()),
+                    visual_validator,
+                    visual_config,
+                    scenes,
+                    scene_vm,
+                    record_video,
                     display: resolved_display,
                     verbose: true,
                     chaos,
@@ -541,6 +895,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::SnapshotDelete { name } => snapshot::delete(&config, &name)?,
         Commands::Screenshot {
             output,
+            scene,
             screenshot_backend,
             validate,
         } => {
@@ -548,21 +903,76 @@ async fn main() -> anyhow::Result<()> {
                 let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
                 project_root.join(format!("screenshots/{ts}"))
             });
-            let validator = if validate {
-                let project_config = config::load_project_config(&project_root)
-                    .ok_or_else(|| anyhow::anyhow!("--validate requires steampipe.toml"))?;
-                Some(select_visual_validator(project_config)?)
+            let (validator, golden) = if validate {
+                match select_validator_plan(&project_root, None)? {
+                    ValidatorPlan::Shell(validator) => (Some(validator), None),
+                    ValidatorPlan::Golden(visual) => (None, Some(visual)),
+                    ValidatorPlan::None => {
+                        let project_config = config::load_project_config(&project_root)
+                            .ok_or_else(|| anyhow::anyhow!("--validate requires steampipe.toml"))?;
+                        (Some(select_visual_validator(project_config)?), None)
+                    }
+                }
             } else {
-                None
+                (None, None)
             };
+            let window_target = golden.as_ref().and_then(|visual| {
+                scene.as_deref().and_then(|scene_name| {
+                    visual
+                        .scene
+                        .iter()
+                        .find(|scene| scene.name == scene_name)
+                        .and_then(|scene| scene.window.clone())
+                })
+            });
             let options = capture::ScreenshotOptions {
                 backend: screenshot_backend,
                 validator,
+                golden,
+                scene,
                 run_label: None,
+                window_target,
+                allow_vnc_input: false,
             };
             capture::screenshot_all(&config, &output_dir, &options).await?;
         }
         Commands::Accounts => accounts::show(&config).await?,
+        Commands::Visual { action } => match action {
+            VisualAction::List => unreachable!(),
+            VisualAction::Capture { scene, vm, output } => {
+                capture_visual_scene(
+                    &config,
+                    &project_root,
+                    &scene,
+                    vm.as_deref(),
+                    output.as_deref(),
+                )
+                .await?
+            }
+            VisualAction::Record { args, force } => {
+                record_visual_scene(&config, &project_root, &args, force).await?
+            }
+            VisualAction::Bless { scene, from, yes } => {
+                bless_visual_scene(&project_root, &scene, from.as_deref(), yes)?
+            }
+            VisualAction::Diff { scene, from } => {
+                diff_visual_scene(&project_root, &scene, from.as_deref())?
+            }
+            VisualAction::Report {
+                run_label,
+                output,
+                single_file,
+            } => {
+                let index = ui::report::generate(
+                    &config,
+                    &project_root,
+                    run_label.as_deref(),
+                    output.as_deref(),
+                    single_file,
+                )?;
+                println!("{}", index.display());
+            }
+        },
         Commands::CleanLogins {
             target,
             login_state_dir,
@@ -570,6 +980,7 @@ async fn main() -> anyhow::Result<()> {
             steam::clean_logins(&config.vms, login_state_dir.as_deref(), target.as_deref())?;
         }
         Commands::Watch { interval } => watch::run(&config, interval).await?,
+        Commands::Doctor { fix } => preflight::doctor(&config, fix).await?,
         Commands::Init
         | Commands::YhConfig { .. }
         | Commands::Completions { .. }
