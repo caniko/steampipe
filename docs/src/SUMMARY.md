@@ -24,6 +24,15 @@
 - [Cluster Network](./networking/cluster-network.md)
 - [Network Simulation](./networking/network-simulation.md)
 
+# Plan: Flexible VM scheduling
+
+- [Overview](./planning/vm-scheduling-flexibility/README.md)
+- [Phase A — Audit and design](./planning/vm-scheduling-flexibility/01-audit-and-design.md)
+- [Phase B — Generalize lease allocation](./planning/vm-scheduling-flexibility/02-generalize-lease.md)
+- [Phase C — Build runner-dir for full slot range](./planning/vm-scheduling-flexibility/03-runner-dir-full-range.md)
+- [Phase D — Lifecycle integration sweep](./planning/vm-scheduling-flexibility/04-lifecycle-integration.md)
+- [Phase E — Tests, docs, fixture cleanup](./planning/vm-scheduling-flexibility/05-tests-docs-cleanup.md)
+
 # Plan: In-tree test bed
 
 - [Overview](./planning/in-tree-test-bed/README.md)

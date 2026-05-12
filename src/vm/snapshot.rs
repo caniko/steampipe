@@ -195,6 +195,20 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::ClusterConfig;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn temp_snapshot_dir(tag: &str) -> PathBuf {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "steampipe-snapshot-test-{tag}-{}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn validate_snapshot_name_rejects_empty() {
@@ -214,5 +228,30 @@ mod tests {
         assert!(validate_snapshot_name("my-snapshot").is_ok());
         assert!(validate_snapshot_name("before-update").is_ok());
         assert!(validate_snapshot_name("v1.0").is_ok());
+    }
+
+    #[test]
+    fn snapshot_round_trip_with_non_sequential_vm() {
+        let root = temp_snapshot_dir("round-trip");
+        let state_dir = root.join("state");
+        let vm_state_dir = state_dir.join("vm-3");
+        std::fs::create_dir_all(&vm_state_dir).unwrap();
+        std::fs::write(vm_state_dir.join("save.dat"), "before").unwrap();
+
+        let mut config = ClusterConfig::for_test_ids(&[3]);
+        config.state_dir = state_dir.clone();
+
+        save(&config, "after-login").unwrap();
+
+        assert!(root.join("state/snapshots/after-login/vm-3/save.dat").exists());
+        assert!(!root.join("state/snapshots/after-login/vm-1").exists());
+
+        std::fs::write(vm_state_dir.join("save.dat"), "after").unwrap();
+        restore(&config, "after-login").unwrap();
+
+        let restored = std::fs::read_to_string(vm_state_dir.join("save.dat")).unwrap();
+        assert_eq!(restored, "before");
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

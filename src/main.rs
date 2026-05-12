@@ -1,4 +1,6 @@
 mod core;
+#[cfg(feature = "fixture-tools")]
+mod fixture;
 mod game;
 mod harness;
 mod mcp;
@@ -19,6 +21,8 @@ use ui::cli::{
     self, CaptureMode, Cli, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend,
     VisualAction,
 };
+#[cfg(feature = "fixture-tools")]
+use ui::cli::{FixtureAction, FixtureGoldenAction};
 use ui::{logs, watch};
 use vm::{lifecycle, preflight, snapshot, status};
 
@@ -476,11 +480,38 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    #[cfg(feature = "fixture-tools")]
+    if let Commands::Fixture { action } = &cli.command {
+        match action {
+            FixtureAction::Golden { action } => match action {
+                FixtureGoldenAction::Verify {
+                    golden_dir,
+                    manifest,
+                } => fixture::golden::verify(
+                    &project_root,
+                    golden_dir.clone(),
+                    manifest.clone(),
+                )?,
+                FixtureGoldenAction::Regenerate {
+                    fixture,
+                    output,
+                    allow_dirty,
+                } => fixture::golden::regenerate(
+                    &project_root,
+                    fixture.clone(),
+                    output.clone(),
+                    *allow_dirty,
+                )?,
+            },
+        }
+        return Ok(());
+    }
+
     let vm_count = cli
         .vm_count
         .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
     let mut config =
-        ClusterConfig::new(&project_root, vm_count, cli.cluster.as_deref(), cli.backend)?;
+        ClusterConfig::from_vm_count(&project_root, vm_count, cli.cluster.as_deref(), cli.backend)?;
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
@@ -499,21 +530,59 @@ async fn main() -> anyhow::Result<()> {
 
     state::ensure_state_dir(&config.state_dir)?;
 
-    // For commands that operate on VMs, prefer leased VMs over the static 1..N list
-    match &cli.command {
-        Commands::Deploy { .. }
+    let claimed_vm_ids =
+        crate::vm::lease::list_cluster_vms(&config.cluster_name, config.max_vms, &config.lock_dir);
+
+    // Commands that act on an existing cluster should use the live claimed set,
+    // not a synthetic contiguous prefix.
+    if matches!(
+        &cli.command,
+        Commands::Restart { .. }
+        | Commands::SteamCheck { .. }
+        | Commands::SteamLogin { .. }
+        | Commands::SteamGuard { .. }
+        | Commands::Status
+        | Commands::CompositorStatus
+        | Commands::Down
+        | Commands::NetDown { .. }
+        | Commands::Deploy { .. }
+        | Commands::Logs { .. }
+        | Commands::SteamStart { .. }
         | Commands::Run { .. }
         | Commands::StopGame { .. }
         | Commands::Test { .. }
-        | Commands::Bisect { .. } => {
-            config.vms = config.leased_vms();
+        | Commands::Bisect { .. }
+        | Commands::Netem { .. }
+        | Commands::NetemShow
+        | Commands::NetemReset { .. }
+        | Commands::SnapshotSave { .. }
+        | Commands::SnapshotRestore { .. }
+        | Commands::SnapshotList
+        | Commands::SnapshotDelete { .. }
+        | Commands::Screenshot { .. }
+        | Commands::Accounts
+        | Commands::Visual {
+            action: VisualAction::Capture { .. }
+                | VisualAction::Record { .. }
+                | VisualAction::Report { .. },
         }
-        _ => {}
+        | Commands::Watch { .. }
+        | Commands::CleanLogins { .. }
+    ) {
+        config = config.with_vm_ids(&claimed_vm_ids)?;
     }
 
     match cli.command {
         // Commands that require a validated bridge (or skip for non-microvm)
         Commands::Up { runners_dir } => {
+            println!("==> Reserving {} VM(s)...", config.requested_vm_count);
+            let reserved_ids = crate::vm::lease::reserve_n(
+                config.requested_vm_count,
+                config.max_vms,
+                &config.lock_dir,
+                &config.cluster_name,
+            )?;
+            config = config.with_vm_ids(&reserved_ids)?;
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
             bridge::ensure_bridge(&config, &project_root)?;
             let validated = config.validate_or_skip_bridge()?;
@@ -690,7 +759,7 @@ async fn main() -> anyhow::Result<()> {
                             _ => None,
                         })
                 })
-                .unwrap_or(DisplayMode::Weston);
+                .unwrap_or(DisplayMode::Sway);
 
             // Resolve output format
             let resolved_format = output_format
@@ -981,10 +1050,11 @@ async fn main() -> anyhow::Result<()> {
         }
         Commands::Watch { interval } => watch::run(&config, interval).await?,
         Commands::Doctor { fix } => preflight::doctor(&config, fix).await?,
-        Commands::Init
-        | Commands::YhConfig { .. }
-        | Commands::Completions { .. }
-        | Commands::Mcp => {
+        Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } | Commands::Mcp => {
+            unreachable!()
+        }
+        #[cfg(feature = "fixture-tools")]
+        Commands::Fixture { .. } => {
             unreachable!()
         }
     }

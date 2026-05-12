@@ -75,7 +75,8 @@ fn build_config(
         "1v1" => 1,
         _ => 7,
     });
-    let mut config = ClusterConfig::new(&project_root, vm_count, Some(&params.cluster), None)
+    let config =
+        ClusterConfig::from_vm_count(&project_root, vm_count, Some(&params.cluster), None)
         .map_err(|e| ErrorData::internal_error(format!("Config error: {e}"), None))?;
 
     state::ensure_state_dir(&config.state_dir)
@@ -84,9 +85,11 @@ fn build_config(
     // Self-heal: clean up stale PIDs, orphaned processes, leftover sockets
     let cleanup_msg = crate::vm::preflight::cleanup_stale_state(&config);
 
-    // Prefer leased VMs (those actually running) over the static 1..N list
-    // (must happen after cleanup so stale claims are already gone)
-    config.vms = config.leased_vms();
+    // Use the active claimed set (must happen after cleanup so stale claims are gone).
+    let claimed_vm_ids =
+        crate::vm::lease::list_cluster_vms(&config.cluster_name, config.max_vms, &config.lock_dir);
+    let config = ClusterConfig::new(&project_root, &claimed_vm_ids, Some(&params.cluster), None)
+        .map_err(|e| ErrorData::internal_error(format!("Config error: {e}"), None))?;
 
     Ok((config, cleanup_msg))
 }
@@ -206,7 +209,7 @@ pub struct ClusterTestInput {
     /// Build before deploying (default: true).
     #[serde(default)]
     pub build: Option<bool>,
-    /// VM display mode: "headless", "weston" (default), "sway", "weston-gpu", or "sway-gpu".
+    /// VM display mode: "headless", "sway" (default), "weston", "weston-gpu", or "sway-gpu".
     #[serde(default)]
     pub display: Option<String>,
     /// Capture screenshots on failure (default: false).
@@ -303,7 +306,7 @@ impl SteampipeMcp {
     // ── Cluster tools ───────────────────────────────────────────────────
 
     #[tool(
-        description = "Check status of all VMs in the cluster. Shows SSH reachability, whether the game/Steam/Weston processes are running, and which cluster holds the VM lease."
+        description = "Check status of the VMs currently leased by this cluster. Shows SSH reachability, whether the game/Steam/Weston processes are running, and which cluster holds the VM lease."
     )]
     async fn cluster_status(
         &self,
@@ -520,7 +523,7 @@ impl SteampipeMcp {
             _ => 8,
         };
 
-        let display = match input.display.as_deref().unwrap_or("weston") {
+        let display = match input.display.as_deref().unwrap_or("sway") {
             "headless" => crate::cli::DisplayMode::Headless,
             "weston" => crate::cli::DisplayMode::Weston,
             "sway" => crate::cli::DisplayMode::Sway,

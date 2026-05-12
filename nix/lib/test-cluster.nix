@@ -1,7 +1,9 @@
 # Test cluster: NixOS microVMs for multiplayer testing
 #
 # Hypervisor and graphics are configured in steampipe.toml [cluster]:
-#   hypervisor = "qemu"   - qemu, cloud-hypervisor, firecracker, crosvm, etc.
+#   hypervisor = "crosvm" - crosvm is the supported default. cloud-hypervisor,
+#                           qemu, firecracker, stratovirt, etc. are experimental
+#                           and may break without notice.
 #   graphics   = true     - enable virtio-gpu (mesa/DRI in guest)
 #
 # Two first-class modes:
@@ -19,6 +21,7 @@
   projectRoot,
   projectConfig ? builtins.fromTOML (builtins.readFile (projectRoot + "/steampipe.toml")),
   extraVmOverlays ? [],
+  extraVmModules ? [],
   # Enable NixOS-level integration: reads config from /etc/steampipe/module.json
   # written by the steampipe NixOS module. Provides loginStateDir and credentials
   # path automatically. Must be turned on explicitly.
@@ -46,7 +49,7 @@ in
   assert lib.assertMsg (!(nixosIntegration && credentials != null))
   "credentials cannot be set when nixosIntegration is enabled - the NixOS module provides credentials"; let
     clusterConfig = projectConfig.cluster or {};
-    vmHypervisor = clusterConfig.hypervisor or "cloud-hypervisor";
+    vmHypervisor = clusterConfig.hypervisor or "crosvm";
     vmGraphics = clusterConfig.graphics or true;
     vmUser = projectConfig.vm_user or "cluster";
     sshKey = projectConfig.ssh_key or "nix/test-cluster/cluster_key";
@@ -243,7 +246,7 @@ in
               '';
             };
           })
-        ];
+        ] ++ extraVmModules;
       })
     .config
     .microvm
@@ -280,10 +283,14 @@ in
             --replace-fail '"context-types":"virgl:virgl2:cross-domain"' '"backend":"virglrenderer","context-types":"virgl:virgl2:venus:cross-domain","external-blob":true,"system-blob":true,"udmabuf":true,"implicit-render-server":true'
         '';
 
-    takeFirstVMs = count:
-      lib.filterAttrs (_name: vm: vm.index <= count) linuxVMs;
-
-    mkRunnersDir = flavorName: flavor: count:
+    # mkRunnersDir always builds runners for vm-1..vmCount, regardless of
+    # the mode's `--vm-count` (which controls how many slots cluster-ctl
+    # reserves at boot). Under flexible scheduling the lease may pick any
+    # slot; the wrapper's runner-dir must contain a microvm-run for every
+    # slot the lease can return, not just the lowest N.
+    #
+    # See docs/src/planning/vm-scheduling-flexibility/03-runner-dir-full-range.md
+    mkRunnersDir = flavorName: flavor: _count:
       pkgs.linkFarm "cluster-vm-runners-${flavorName}"
       (lib.mapAttrsToList (name: vm: {
           inherit name;
@@ -292,7 +299,7 @@ in
             then patchCrosvmGpuParams flavor (mkMicroVM flavor vmLoginMount name vm)
             else mkMicroVM flavor vmLoginMount name vm;
         })
-        (takeFirstVMs count));
+        linuxVMs);
 
     # Full default runner set for utilities that operate on the whole cluster.
     vmRunnersDir = mkRunnersDir "default" flavors.default vmCount;

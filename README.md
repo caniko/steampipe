@@ -255,7 +255,7 @@ log_file = "game.log"              # game log filename on VMs
 # ─── Network ───
 [network]
 bridge = "br-cluster"
-subnet = "10.0.100"                # VMs get .1 through .N
+subnet = "10.0.100"                # vm-N gets .N within the pool
 prefix = 24
 host_ip = "10.0.100.254"
 udp_port = 27100
@@ -333,6 +333,10 @@ sudo cluster-ctl --vm-count 7 net-up --nft /run/current-system/sw/bin/nft
 cluster-ctl --vm-count 7 up --runners-dir ./result
 ```
 
+`up` reserves `N` free slots from the pool and prints the actual leased set,
+for example `Reserved: vm-2, vm-4`. Those are the VM names every follow-up
+command operates on.
+
 For each VM:
 1. Stops any existing instance (PID file + orphan cleanup)
 2. Launches `<runners-dir>/vm-N/bin/microvm-run`
@@ -365,12 +369,14 @@ cluster-ctl --vm-count 7 status
 ```
 
 ```
-VM       IP             VM     SSH    Steam  Game
-────────────────────────────────────────────────────────
-vm-1     10.0.100.1     UP     OK     OK     OK
-vm-2     10.0.100.2     UP     OK     OK     ─
-vm-3     10.0.100.3     ─      ─      ─      ─
+VM       IP             Held By          PID    VM     SSH    Steam    Game
+────────────────────────────────────────────────────────────────────────
+vm-2     10.0.100.2     fixture          4242   UP     OK     OK       OK
+vm-4     10.0.100.4     fixture          4249   UP     OK     OK       ─
 ```
+
+`status` shows only the VMs currently claimed by this cluster. Unowned slots and
+slots leased by other clusters are omitted.
 
 All checks run in parallel.
 
@@ -497,8 +503,8 @@ against `sha256sum` on each VM. Catches partial transfers or corruption.
 cluster-ctl --vm-count 7 run -- --mode lan --port 27100
 ```
 
-Starts weston + Steam + your game binary on each VM. Trailing arguments are
-passed to the game.
+Starts sway + Steam + your game binary on each VM. Trailing arguments are
+passed to the game. (Weston is available as `--display weston` but experimental.)
 
 ### Stop the game
 
@@ -727,7 +733,7 @@ cluster-ctl --vm-count 7 screenshot
 cluster-ctl --vm-count 7 screenshot -o ./captures
 ```
 
-Requires `grim` installed in the VMs and weston/sway running.
+Requires `grim` installed in the VMs and sway running (weston is experimental).
 
 ---
 
@@ -841,15 +847,18 @@ operations (starting VMs, Steam login/check) can only happen after the
 network bridge has been verified:
 
 ```rust
-ClusterConfig<Unchecked>           // from ::new()
+ClusterConfig<Unchecked>           // from ::from_vm_count()
     │
-    ├── status(), down(), deploy() // work on any state
+    ├── with_vm_ids(list_cluster_vms(...))? // existing-cluster commands
+    ├── status(), down(), deploy()          // work on any state
     │
-    └── validate_bridge()?         // checks bridge exists
+    └── reserve_n(...) + with_vm_ids(...)   // choose actual slots for `up`
         │
-        └── ClusterConfig<BridgeReady>
+        └── validate_bridge()?              // checks bridge exists
             │
-            └── up(), restart(), steam_login(), steam_check()
+            └── ClusterConfig<BridgeReady>
+                │
+                └── up(), restart(), steam_login(), steam_check()
 ```
 
 This is zero-cost — `PhantomData` is zero-sized, both states have identical
@@ -871,25 +880,29 @@ let results = par_each_vm(&config.vms, |vm| {
 
 ### State management
 
-Runtime state is stored in `$XDG_STATE_HOME/steampipe/` (typically
-`~/.local/state/steampipe/`):
+Runtime state is stored per cluster under `$XDG_STATE_HOME/steampipe/`
+(typically `~/.local/state/steampipe/`):
 
 ```
 steampipe/
-├── vm-1.pid            # PID files
-├── vm-2.pid
-├── vm-1/
-│   ├── vm.log          # microVM stdout/stderr
-│   └── *.sock          # VM socket files (auto-cleaned)
-├── vm-2/
-│   └── ...
-├── test_history.json   # test result history
-└── snapshots/
-    └── after-login/    # named snapshots
-        ├── snapshot.json
-        ├── vm-1/
-        └── vm-2/
+└── nightly/
+    ├── vm-2.pid            # PID files for the leased set
+    ├── vm-4.pid
+    ├── vm-2/
+    │   ├── vm.log          # microVM stdout/stderr
+    │   └── *.sock          # VM socket files (auto-cleaned)
+    ├── vm-4/
+    │   └── ...
+    ├── test_history.json   # test result history
+    └── snapshots/
+        └── after-login/    # named snapshots
+            ├── snapshot.json
+            ├── vm-2/
+            └── vm-4/
 ```
+
+Snapshot directories key off the actual leased VM names, so a one-VM cluster
+may legitimately store state under `vm-7/` rather than `vm-1/`.
 
 ### SSH transport
 
@@ -933,7 +946,7 @@ Deployment:
 Steam:
   steam-login [TARGET] --login-runners-dir <DIR>  Interactive login
   steam-check [TARGET] --runners-dir <DIR>        Verify logins
-  steam-start [TARGET]     Start weston + Steam
+  steam-start [TARGET]     Start sway + Steam (--display weston for experimental)
   accounts                 Show Steam account status
 
 Game:

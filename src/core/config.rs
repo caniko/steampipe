@@ -1152,7 +1152,7 @@ pub struct BridgeReady;
 /// Cluster-wide configuration.
 ///
 /// The type parameter `S` tracks whether the network bridge has been validated:
-/// - `ClusterConfig<Unchecked>` (default from `new()`) — bridge not yet verified
+/// - `ClusterConfig<Unchecked>` (default from `from_vm_count()`) — bridge not yet verified
 /// - `ClusterConfig<BridgeReady>` (from `validate_bridge()`) — safe to start VMs
 #[derive(Debug, Clone)]
 pub struct ClusterConfig<S = Unchecked> {
@@ -1172,8 +1172,10 @@ pub struct ClusterConfig<S = Unchecked> {
     pub log_file: String,
     pub state_dir: PathBuf,
     pub cluster_name: String,
+    /// Number of VMs requested by the caller before lease resolution.
+    pub requested_vm_count: u8,
     /// Total VM pool size (from `steampipe.toml`'s `max_vms`, default 7).
-    /// `vms` is the *requested* slice; `max_vms` is the pool to lease from.
+    /// `vms` is the operational VM set for this command; `max_vms` is the pool to lease from.
     pub max_vms: u8,
     pub vms: Vec<VmDef>,
     pub backend: Backend,
@@ -1203,8 +1205,26 @@ pub fn bridge_exists(name: &str) -> bool {
 }
 
 impl ClusterConfig<Unchecked> {
-    /// Build config from steampipe.toml, requiring project-specific fields.
+    /// Build config from steampipe.toml for a specific VM ID set.
     pub fn new(
+        project_root: &Path,
+        vm_ids: &[u8],
+        cluster_name: Option<&str>,
+        backend_override: Option<BackendKind>,
+    ) -> anyhow::Result<Self> {
+        let proj = load_project_config(project_root);
+        Self::from_parts_with_vm_ids(
+            project_root,
+            proj,
+            vm_ids,
+            cluster_name,
+            backend_override,
+            None,
+        )
+    }
+
+    /// Build config from steampipe.toml for a requested VM count.
+    pub fn from_vm_count(
         project_root: &Path,
         vm_count: u8,
         cluster_name: Option<&str>,
@@ -1229,6 +1249,48 @@ impl ClusterConfig<Unchecked> {
         project_root: &Path,
         proj: Option<ProjectConfig>,
         vm_count: u8,
+        cluster_name: Option<&str>,
+        backend_override: Option<BackendKind>,
+        lock_dir_override: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        Self::from_parts_inner(
+            project_root,
+            proj,
+            vm_count,
+            None,
+            cluster_name,
+            backend_override,
+            lock_dir_override,
+        )
+    }
+
+    /// Build config from an explicit VM ID set with an already-loaded `ProjectConfig`.
+    pub fn from_parts_with_vm_ids(
+        project_root: &Path,
+        proj: Option<ProjectConfig>,
+        vm_ids: &[u8],
+        cluster_name: Option<&str>,
+        backend_override: Option<BackendKind>,
+        lock_dir_override: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        let requested_vm_count = u8::try_from(vm_ids.len())
+            .map_err(|_| anyhow::anyhow!("too many VM IDs requested: {}", vm_ids.len()))?;
+        Self::from_parts_inner(
+            project_root,
+            proj,
+            requested_vm_count,
+            Some(vm_ids),
+            cluster_name,
+            backend_override,
+            lock_dir_override,
+        )
+    }
+
+    fn from_parts_inner(
+        project_root: &Path,
+        proj: Option<ProjectConfig>,
+        requested_vm_count: u8,
+        vm_ids: Option<&[u8]>,
         cluster_name: Option<&str>,
         backend_override: Option<BackendKind>,
         lock_dir_override: Option<&Path>,
@@ -1260,19 +1322,18 @@ impl ClusterConfig<Unchecked> {
             });
 
         let max_vms = proj.as_ref().and_then(|p| p.max_vms).unwrap_or(7);
-        let vm_count = vm_count.clamp(1, max_vms);
+        let requested_vm_count = requested_vm_count.clamp(1, max_vms);
         let subnet = proj
             .as_ref()
             .and_then(|p| p.network.as_ref()?.subnet.clone())
             .unwrap_or_else(|| "10.0.100".into());
 
-        let vms = (1..=vm_count)
-            .map(|i| VmDef {
-                name: VmName(format!("vm-{i}")),
-                ip: IpAddr(format!("{subnet}.{i}")),
-                index: i,
-            })
-            .collect();
+        let vms = if let Some(vm_ids) = vm_ids {
+            Self::vm_defs_for_ids(&subnet, max_vms, vm_ids)?
+        } else {
+            let vm_ids: Vec<u8> = (1..=requested_vm_count).collect();
+            Self::vm_defs_for_ids(&subnet, max_vms, &vm_ids)?
+        };
 
         let ssh_key = proj
             .as_ref()
@@ -1350,6 +1411,7 @@ impl ClusterConfig<Unchecked> {
             log_file: proj.as_ref().and_then(|p| p.log_file.clone()).unwrap_or_else(|| "game.log".into()),
             state_dir,
             cluster_name,
+            requested_vm_count,
             max_vms,
             vms,
             backend,
@@ -1401,6 +1463,23 @@ impl ClusterConfig<Unchecked> {
 
 /// Methods available on any config state (both Unchecked and BridgeReady).
 impl<S> ClusterConfig<S> {
+    fn vm_defs_for_ids(subnet: &str, max_vms: u8, vm_ids: &[u8]) -> anyhow::Result<Vec<VmDef>> {
+        vm_ids
+            .iter()
+            .copied()
+            .map(|id| {
+                if id == 0 || id > max_vms {
+                    anyhow::bail!("vm-{id} is outside the configured pool 1..={max_vms}");
+                }
+                Ok(VmDef {
+                    name: VmName(format!("vm-{id}")),
+                    ip: IpAddr(format!("{subnet}.{id}")),
+                    index: id,
+                })
+            })
+            .collect()
+    }
+
     /// Transition to a different typestate.
     fn into_state<T>(self) -> ClusterConfig<T> {
         ClusterConfig {
@@ -1420,6 +1499,7 @@ impl<S> ClusterConfig<S> {
             log_file: self.log_file,
             state_dir: self.state_dir,
             cluster_name: self.cluster_name,
+            requested_vm_count: self.requested_vm_count,
             max_vms: self.max_vms,
             vms: self.vms,
             backend: self.backend,
@@ -1435,6 +1515,12 @@ impl<S> ClusterConfig<S> {
         }
     }
 
+    /// Replace the operational VM set with an explicit list of VM IDs.
+    pub fn with_vm_ids(mut self, vm_ids: &[u8]) -> anyhow::Result<Self> {
+        self.vms = Self::vm_defs_for_ids(&self.subnet, self.max_vms, vm_ids)?;
+        Ok(self)
+    }
+
     /// Look up a VM by name ("vm-3") or index ("3").
     pub fn find_vm(&self, target: &str) -> Option<&VmDef> {
         if let Ok(i) = target.parse::<u8>() {
@@ -1443,21 +1529,11 @@ impl<S> ClusterConfig<S> {
         self.vms.iter().find(|vm| vm.name == target)
     }
 
-    /// Return VMs currently leased by this cluster, or fall back to `self.vms`
-    /// if no leases are held (backward compat for setups without leasing).
-    pub fn leased_vms(&self) -> Vec<VmDef> {
+    /// Return VMs currently leased by this cluster.
+    pub fn claimed_vms(&self) -> Vec<VmDef> {
         let ids =
             crate::vm::lease::list_cluster_vms(&self.cluster_name, self.max_vms, &self.lock_dir);
-        if ids.is_empty() {
-            return self.vms.clone();
-        }
-        ids.iter()
-            .map(|&id| VmDef {
-                name: VmName(format!("vm-{id}")),
-                ip: IpAddr(format!("{}.{id}", self.subnet)),
-                index: id,
-            })
-            .collect()
+        Self::vm_defs_for_ids(&self.subnet, self.max_vms, &ids).unwrap_or_default()
     }
 
     /// Parse a target string into a list of VMs.
@@ -1470,8 +1546,17 @@ impl<S> ClusterConfig<S> {
             None | Some("all") => Ok(self.vms.clone()),
             Some(t) => {
                 let vm = self.find_vm(t).ok_or_else(|| {
-                    let max = self.vms.len();
-                    anyhow::anyhow!("Unknown VM: {t} (expected vm-1..vm-{max} or 1..{max})")
+                    let expected = self
+                        .vms
+                        .iter()
+                        .map(|vm| format!("{} ({})", vm.name, vm.index))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    if expected.is_empty() {
+                        anyhow::anyhow!("Unknown VM: {t} (this cluster has no active VM set)")
+                    } else {
+                        anyhow::anyhow!("Unknown VM: {t} (expected one of: {expected})")
+                    }
                 })?;
                 if continue_from {
                     Ok(self
@@ -1492,14 +1577,15 @@ impl<S> ClusterConfig<S> {
 impl ClusterConfig<Unchecked> {
     /// Build a minimal config for testing. No filesystem access.
     pub fn for_test(vm_count: u8) -> Self {
+        let vm_ids: Vec<u8> = (1..=vm_count).collect();
+        Self::for_test_ids(&vm_ids)
+    }
+
+    /// Build a minimal config for testing from explicit VM IDs.
+    pub fn for_test_ids(vm_ids: &[u8]) -> Self {
         let subnet = "10.0.100";
-        let vms = (1..=vm_count)
-            .map(|i| VmDef {
-                name: VmName(format!("vm-{i}")),
-                ip: IpAddr(format!("{subnet}.{i}")),
-                index: i,
-            })
-            .collect();
+        let max_vms = vm_ids.iter().copied().max().unwrap_or(1);
+        let vms = Self::vm_defs_for_ids(subnet, max_vms, vm_ids).expect("test vm ids");
 
         Self {
             bridge: "br-test".into(),
@@ -1518,7 +1604,8 @@ impl ClusterConfig<Unchecked> {
             log_file: "game.log".into(),
             state_dir: std::env::temp_dir().join("steampipe-test"),
             cluster_name: "test".into(),
-            max_vms: vm_count.max(1),
+            requested_vm_count: u8::try_from(vm_ids.len()).expect("test vm count"),
+            max_vms,
             vms,
             backend: Backend::new_local(std::env::temp_dir()),
             backend_kind: BackendKind::Local,
@@ -1603,6 +1690,20 @@ mod tests {
     fn resolve_targets_unknown_vm_errors() {
         let config = ClusterConfig::for_test(3);
         assert!(config.resolve_targets(Some("vm-99"), false).is_err());
+    }
+
+    #[test]
+    fn resolve_targets_continue_from_non_contiguous_set() {
+        let config = ClusterConfig::for_test_ids(&[2, 4, 6]);
+        let targets = config.resolve_targets(Some("vm-4"), true).unwrap();
+        assert_eq!(targets.iter().map(|vm| vm.index).collect::<Vec<_>>(), vec![4, 6]);
+    }
+
+    #[test]
+    fn with_vm_ids_replaces_operational_vm_set() {
+        let config = ClusterConfig::for_test(4).with_vm_ids(&[2, 4]).unwrap();
+        assert_eq!(config.requested_vm_count, 4);
+        assert_eq!(config.vms.iter().map(|vm| vm.index).collect::<Vec<_>>(), vec![2, 4]);
     }
 
     #[test]

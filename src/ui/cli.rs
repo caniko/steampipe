@@ -67,10 +67,10 @@ impl fmt::Display for NetworkMode {
 pub enum DisplayMode {
     /// No compositor — game binary gets `--headless`
     Headless,
-    /// Start Weston (headless backend) — game renders to virtual display
-    Weston,
-    /// Start Sway compositor
+    /// Start Sway compositor (default)
     Sway,
+    /// Start Weston (headless backend) — experimental
+    Weston,
     /// Start Weston on virtio-gpu DRM device (VM needs microvm.graphics.enable)
     WestonGpu,
     /// Start Sway on virtio-gpu DRM device (VM needs microvm.graphics.enable)
@@ -141,7 +141,7 @@ pub struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum Commands {
-    /// Show status of all VMs (running, SSH, Steam, game)
+    /// Show status of the VMs currently leased by this cluster
     Status,
 
     /// Show compositor readiness state on all VMs
@@ -218,8 +218,8 @@ pub enum Commands {
         /// Path to directory containing VM runners (required for microvm backend)
         #[arg(long)]
         runners_dir: Option<PathBuf>,
-        /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
-        #[arg(long, default_value = "weston")]
+        /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "sway")]
         display: DisplayMode,
     },
 
@@ -239,15 +239,15 @@ pub enum Commands {
     SteamStart {
         /// Target VM: "all", "3", "vm-3"
         target: Option<String>,
-        /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
-        #[arg(long, default_value = "weston")]
+        /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "sway")]
         display: DisplayMode,
     },
 
     /// Start compositor + Steam + game on all VMs
     Run {
-        /// VM display mode: headless, weston (default), sway, weston-gpu, or sway-gpu
-        #[arg(long, default_value = "weston")]
+        /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "sway")]
         display: DisplayMode,
         /// Args passed to the game binary on VMs
         #[arg(trailing_var_arg = true)]
@@ -557,10 +557,55 @@ pub enum Commands {
     /// Start MCP server (JSON-RPC over stdio)
     Mcp,
 
+    /// Fixture-only maintenance commands
+    #[cfg(feature = "fixture-tools")]
+    Fixture {
+        #[command(subcommand)]
+        action: FixtureAction,
+    },
+
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for
         shell: Shell,
+    },
+}
+
+/// Fixture-only maintenance command groups.
+#[cfg(feature = "fixture-tools")]
+#[derive(Subcommand)]
+pub enum FixtureAction {
+    /// Manage the in-tree fixture golden image set
+    Golden {
+        #[command(subcommand)]
+        action: FixtureGoldenAction,
+    },
+}
+
+/// In-tree fixture golden image commands.
+#[cfg(feature = "fixture-tools")]
+#[derive(Subcommand)]
+pub enum FixtureGoldenAction {
+    /// Verify committed fixture goldens against MANIFEST.toml
+    Verify {
+        /// Golden directory containing MANIFEST.toml and PNGs
+        #[arg(long)]
+        golden_dir: Option<PathBuf>,
+        /// Manifest path; defaults to <golden-dir>/MANIFEST.toml
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+    },
+    /// Regenerate candidate fixture golden PNGs without promoting them
+    Regenerate {
+        /// Fixture directory
+        #[arg(long)]
+        fixture: Option<PathBuf>,
+        /// Output directory for candidate PNGs
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Allow non-canonical capture from a dirty checkout or fixture lockfile
+        #[arg(long)]
+        allow_dirty: bool,
     },
 }
 
@@ -888,11 +933,11 @@ mod tests {
     // ── Run command display mode ──────────────────────────────────────────
 
     #[test]
-    fn run_display_default_is_weston() {
+    fn run_display_default_is_sway() {
         let cli = parse(&["--vm-count", "7", "run"]);
         match cli.command {
             Commands::Run { display, .. } => {
-                assert!(matches!(display, DisplayMode::Weston));
+                assert!(matches!(display, DisplayMode::Sway));
             }
             _ => panic!("expected Run"),
         }
@@ -923,11 +968,11 @@ mod tests {
     // ── SteamStart display mode ─────────────────────────────────────────
 
     #[test]
-    fn steam_start_display_default_is_weston() {
+    fn steam_start_display_default_is_sway() {
         let cli = parse(&["--vm-count", "7", "steam-start"]);
         match cli.command {
             Commands::SteamStart { display, .. } => {
-                assert!(matches!(display, DisplayMode::Weston));
+                assert!(matches!(display, DisplayMode::Sway));
             }
             _ => panic!("expected SteamStart"),
         }
@@ -947,11 +992,11 @@ mod tests {
     // ── SteamCheck display mode ─────────────────────────────────────────
 
     #[test]
-    fn steam_check_display_default_is_weston() {
+    fn steam_check_display_default_is_sway() {
         let cli = parse(&["--vm-count", "7", "steam-check"]);
         match cli.command {
             Commands::SteamCheck { display, .. } => {
-                assert!(matches!(display, DisplayMode::Weston));
+                assert!(matches!(display, DisplayMode::Sway));
             }
             _ => panic!("expected SteamCheck"),
         }

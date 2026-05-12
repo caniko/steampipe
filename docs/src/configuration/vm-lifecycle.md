@@ -38,13 +38,19 @@ cluster-ctl --vm-count 7 restart vm-3 --runners-dir ./result
 cluster-ctl --vm-count 7 status
 ```
 
+`up` reserves `N` free slots from the pool and prints the actual leased set,
+for example `Reserved: vm-2, vm-4`. Follow-up commands use that leased set,
+not a synthetic `vm-1..vm-N` prefix.
+
 ```
-VM       IP             VM     SSH    Steam  Game
---------------------------------------------------------
-vm-1     10.0.100.1     UP     OK     OK     OK
-vm-2     10.0.100.2     UP     OK     OK     -
-vm-3     10.0.100.3     -      -      -      -
+VM       IP             Held By          PID    VM     SSH    Steam    Game
+────────────────────────────────────────────────────────────────────────
+vm-2     10.0.100.2     fixture          4242   UP     OK     OK       OK
+vm-4     10.0.100.4     fixture          4249   UP     OK     OK       -
 ```
+
+`status` shows only the VMs currently claimed by this cluster. Unowned slots and
+slots leased by other clusters are omitted.
 
 All checks run in parallel.
 

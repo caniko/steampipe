@@ -27,7 +27,7 @@ log_file = "game.log"              # game log filename on VMs
 # Network
 [network]
 bridge = "br-cluster"
-subnet = "10.0.100"                # VMs get .1 through .N
+subnet = "10.0.100"                # vm-N gets .N within the pool
 prefix = 24
 host_ip = "10.0.100.254"
 udp_port = 27100
@@ -35,6 +35,9 @@ udp_port = 27100
 # Cluster identity (for multi-cluster setups)
 [cluster]
 name = "default"
+hypervisor = "crosvm"              # default; cloud-hypervisor / qemu /
+                                   # firecracker / stratovirt are experimental
+graphics = true                    # virtio-gpu (mesa/DRI in guest)
 
 # Per-VM resource overrides
 [[vm]]
@@ -50,3 +53,21 @@ Values are resolved in order: **CLI flags > steampipe.toml > built-in defaults**
 - `--project-root` overrides auto-detection
 - `--ssh-key` overrides the config file value
 - `--cluster` overrides `[cluster].name`
+
+## Supported display + screenshot-backend matrix
+
+The compositor and screenshot backend are not independent. `cluster-ctl` rejects
+incompatible combinations at startup with a pointer to the right pair.
+
+| `--display`   | `--screenshot-backend grim` | `--screenshot-backend vnc` | Notes                                                      |
+| ------------- | --------------------------- | -------------------------- | ---------------------------------------------------------- |
+| `headless`    | n/a                         | n/a                        | No compositor; visual testing disabled.                    |
+| `sway`        | ✅ supported (default)      | ✅ supported               | Default for non-GPU runs. Captures via the Wayland socket. |
+| `sway-gpu`    | ❌ rejected                 | ✅ supported               | GPU display modes have no host-visible Wayland socket; use VNC. |
+| `weston`      | ❌ rejected                 | ❌ rejected                | Experimental — the visual harness has no Weston readiness probe. |
+| `weston-gpu`  | ❌ rejected                 | ❌ rejected                | Experimental — same reason as `weston`.                    |
+
+Visual scenes (`[visual]` block in `steampipe.toml`, `cluster-ctl visual ...`)
+and the fixture golden regenerator require **sway**: readiness checks call
+`swaymsg -t get_outputs/get_tree`, and `wayvnc` only attaches to a wlroots
+compositor.

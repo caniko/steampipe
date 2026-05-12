@@ -32,15 +32,14 @@ const GPU_REQUIRED_WAYLAND_INTERFACES: &[&str] = &[
 
 /// Clean up stale state: dead PIDs, orphaned processes, leftover sockets.
 ///
-/// Scans all VM slots (1..=7) regardless of which VMs the current config targets,
-/// since orphans may exist on slots outside the current cluster.
+/// Scans the full configured VM pool regardless of which VMs the current config
+/// targets, since orphans may exist on slots outside the current cluster.
 ///
 /// Returns a summary of what was cleaned, or `None` if everything was clean.
 pub fn cleanup_stale_state<S>(config: &ClusterConfig<S>) -> Option<String> {
-    let max_vms = 7u8;
     let mut cleaned = Vec::new();
 
-    for id in 1..=max_vms {
+    for id in 1..=config.max_vms {
         let vm_name = format!("vm-{id}");
 
         if let Some(pid) = state::read_pid(&config.state_dir, &vm_name)

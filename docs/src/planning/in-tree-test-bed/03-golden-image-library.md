@@ -35,7 +35,7 @@ tests/fixture/golden/
 Each PNG was captured from a healthy fixture VM at a pinned commit;
 `MANIFEST.toml` records the commit SHA, the nixpkgs revision, the
 capture date, the sha256 of each file, and the human reviewer who
-blessed the frame. `tests/fixture/golden/regenerate.sh` produces
+blessed the frame. `cluster-ctl fixture golden regenerate` produces
 candidate replacement PNGs that a human reviews before committing.
 
 ## Why this matters now
@@ -82,39 +82,16 @@ into "this used to work but nobody can say when it broke."
    - The host's nixpkgs is identical to the fixture's pinned
      input (or note any divergence).
    Record all three in a one-line note at the top of the run.
-2. **Write `tests/fixture/golden/regenerate.sh`.** Shape:
+2. **Add the feature-gated Rust regeneration command.** The canonical entrypoint is:
    ```bash
-   #!/usr/bin/env bash
-   set -euo pipefail
-   FIXTURE=tests/fixture
-   OUT=$FIXTURE/golden/.candidate
-   mkdir -p "$OUT"
-   nix run "./$FIXTURE#cluster-1v1-up" &
-   trap 'cargo run --release -- --project-root "$FIXTURE" --vm-count 1 down' EXIT
-   cargo run --release -- --project-root "$FIXTURE" --vm-count 1 \
-     up --runners-dir ./result-default # adjust attr name to match phase A
-   # ssh wait
-   for workload in foot-banner vkcube-frozen wgpu-checker; do
-     ssh -i $FIXTURE/cluster_key fixture@10.0.100.1 \
-       "workload-stop || true; workload-run $workload"
-     sleep 3   # readiness wait — replace with sway-IPC gate once Phase B
-               # of vnc-visual-testing lands
-     # Capture with grim (more reliable than VNC pre-Phase A of
-     # vnc-visual-testing). VNC capture is exercised in Phase D
-     # of this plan, not here.
-     ssh -i $FIXTURE/cluster_key fixture@10.0.100.1 \
-       'XDG_RUNTIME_DIR=/tmp/runtime-fixture WAYLAND_DISPLAY=wayland-1 \
-        grim /tmp/grim.png'
-     rsync -e "ssh -i $FIXTURE/cluster_key" \
-       fixture@10.0.100.1:/tmp/grim.png \
-       "$OUT/$workload-1280x720.png"
-   done
+   cargo run --features fixture-tools -- fixture golden regenerate
    ```
-   The script writes candidates to `golden/.candidate/`, never
+   `tests/fixture/golden/regenerate.sh` may remain as a compatibility
+   shim around this command. The command writes candidates to `golden/.candidate/`, never
    directly to `golden/`. Promotion to canonical requires a
    manual `mv` (or, when Phase E of `vnc-visual-testing` lands,
    `cluster-ctl visual bless`).
-3. **Run the script.** Produce three candidate PNGs. Verify each:
+3. **Run the command.** Produce three candidate PNGs. Verify each:
    - Opens in `feh`, `xdg-open`, or a browser without errors.
    - Has dimensions exactly 1280×720.
    - Contains the expected content (banner text legible; cube
@@ -152,11 +129,13 @@ into "this used to work but nobody can say when it broke."
 
    # … same for vkcube-frozen and wgpu-checker
    ```
-7. **Add a `golden-verify.sh`** companion script that reads
+7. **Add the feature-gated Rust verification command**
+   (`cargo run --features fixture-tools -- fixture golden verify`) that reads
    `MANIFEST.toml`, computes sha256 of each listed file, and
    fails if any drift. Useful in CI later (Phase E of
    `vnc-visual-testing` will replace this with a real SSIM run,
-   but the hash check is the cheap canary).
+   but the hash check is the cheap canary). `golden-verify.sh`
+   may remain as a compatibility shim around this command.
 8. **Commit.** Single commit titled "tests/fixture: add golden
    image library v1" with the three PNGs, the manifest, the
    regenerate script, and the verify script. Reviewer in commit
@@ -164,22 +143,22 @@ into "this used to work but nobody can say when it broke."
 9. **Document.** In `tests/fixture/README.md` add a
    `## Golden images` section explaining: what they're for, how
    to regenerate, why direct edits are forbidden (always go
-   through `regenerate.sh` + manual review), and how to bump
+   through `cluster-ctl fixture golden regenerate` + manual review), and how to bump
    the manifest when goldens legitimately change.
 
 ## Acceptance criteria
 
-- [ ] `tests/fixture/golden/` contains exactly the four files
-      listed in Goal (three PNGs + MANIFEST.toml) plus the two
-      scripts (`regenerate.sh`, `golden-verify.sh`).
+- [ ] `tests/fixture/golden/` contains exactly the four committed artifacts
+      listed in Goal (three PNGs + MANIFEST.toml), plus optional compatibility
+      shims (`regenerate.sh`, `golden-verify.sh`).
 - [ ] Each PNG opens, is 1280×720, and visually contains the
       expected content for its workload (manual review;
       reviewer name recorded in MANIFEST).
 - [ ] `sha256sum tests/fixture/golden/*.png` matches the
       `sha256` fields in `MANIFEST.toml`.
-- [ ] `bash tests/fixture/golden/golden-verify.sh` exits 0.
+- [ ] `cargo run --features fixture-tools -- fixture golden verify` exits 0.
 - [ ] Each PNG is under 800 KB after `oxipng -o4` / `optipng -o5`.
-- [ ] `tests/fixture/golden/regenerate.sh` runs end-to-end on a
+- [ ] `cargo run --features fixture-tools -- fixture golden regenerate` runs end-to-end on a
       clean machine and produces candidates under
       `golden/.candidate/` without touching committed files.
 - [ ] `.gitignore` excludes `tests/fixture/golden/.candidate/`.
@@ -195,8 +174,8 @@ into "this used to work but nobody can say when it broke."
 - `tests/fixture/golden/vkcube-frozen-1280x720.png` (new, binary).
 - `tests/fixture/golden/wgpu-checker-1280x720.png` (new, binary).
 - `tests/fixture/golden/MANIFEST.toml` (new).
-- `tests/fixture/golden/regenerate.sh` (new).
-- `tests/fixture/golden/golden-verify.sh` (new).
+- `tests/fixture/golden/regenerate.sh` (optional compatibility shim).
+- `tests/fixture/golden/golden-verify.sh` (optional compatibility shim).
 - `tests/fixture/README.md` (extend with `## Golden images`).
 - `.gitignore` — add `tests/fixture/golden/.candidate/`.
 

@@ -1,4 +1,5 @@
-use crate::core::config::ClusterConfig;
+use crate::core::config::{ClusterConfig, VmDef};
+use crate::vm::lease;
 
 pub(crate) fn validate_netem_params(
     latency_ms: Option<u32>,
@@ -61,6 +62,58 @@ pub(crate) fn build_netem_args(
     Some(args)
 }
 
+fn explicit_vm_id(target: &str) -> Option<u8> {
+    if target.eq_ignore_ascii_case("all") {
+        return None;
+    }
+    target
+        .strip_prefix("vm-")
+        .unwrap_or(target)
+        .parse::<u8>()
+        .ok()
+}
+
+fn resolve_netem_targets<S>(
+    config: &ClusterConfig<S>,
+    target: Option<&str>,
+) -> anyhow::Result<Vec<VmDef>> {
+    match target {
+        None | Some("all") => config.resolve_targets(target, false),
+        Some(target) => {
+            if let Some(vm) = config.find_vm(target) {
+                return Ok(vec![vm.clone()]);
+            }
+
+            if let Some(vm_id) = explicit_vm_id(target) {
+                return match lease::probe_holder(vm_id, &config.lock_dir) {
+                    Some(info) if info.cluster == config.cluster_name => config
+                        .claimed_vms()
+                        .into_iter()
+                        .find(|vm| vm.index == vm_id)
+                        .map(|vm| vec![vm])
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "vm-{vm_id} is owned by cluster '{}' but is missing from the active VM set",
+                                config.cluster_name
+                            )
+                        }),
+                    Some(info) => anyhow::bail!(
+                        "vm-{vm_id} is not owned by cluster '{}' (owned by '{}')",
+                        config.cluster_name,
+                        info.cluster
+                    ),
+                    None => anyhow::bail!(
+                        "vm-{vm_id} is not owned by cluster '{}' (slot is unowned)",
+                        config.cluster_name
+                    ),
+                };
+            }
+
+            config.resolve_targets(Some(target), false)
+        }
+    }
+}
+
 /// Apply network emulation (latency, packet loss, jitter, bandwidth limit) to a VM's TAP device.
 pub fn apply<S>(
     config: &ClusterConfig<S>,
@@ -72,7 +125,7 @@ pub fn apply<S>(
 ) -> anyhow::Result<()> {
     validate_netem_params(latency_ms, jitter_ms, loss_percent)?;
 
-    let targets = config.resolve_targets(Some(target), false)?;
+    let targets = resolve_netem_targets(config, Some(target))?;
 
     for vm in &targets {
         let tap = format!("tap-{}", vm.name);
@@ -147,7 +200,7 @@ pub fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
 
 /// Reset (remove) all netem rules from VM TAP devices.
 pub fn reset<S>(config: &ClusterConfig<S>, target: Option<&str>) -> anyhow::Result<()> {
-    let targets = config.resolve_targets(target, false)?;
+    let targets = resolve_netem_targets(config, target)?;
     for vm in &targets {
         let tap = format!("tap-{}", vm.name);
         let _ = std::process::Command::new("tc")
@@ -163,6 +216,20 @@ pub fn reset<S>(config: &ClusterConfig<S>, target: Option<&str>) -> anyhow::Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::ClusterConfig;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn temp_lock_dir(tag: &str) -> std::path::PathBuf {
+        static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
+        let n = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "steampipe-netem-test-{tag}-{}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn netem_args_latency_only() {
@@ -231,5 +298,46 @@ mod tests {
     #[test]
     fn validate_valid_params_ok() {
         assert!(validate_netem_params(Some(50), Some(10), Some(1.0)).is_ok());
+    }
+
+    #[test]
+    fn resolve_netem_target_accepts_non_contiguous_owned_vm() {
+        let config = ClusterConfig::for_test_ids(&[2, 4]);
+        let targets = resolve_netem_targets(&config, Some("vm-4")).unwrap();
+        assert_eq!(targets.iter().map(|vm| vm.index).collect::<Vec<_>>(), vec![4]);
+    }
+
+    #[test]
+    fn resolve_netem_target_rejects_slot_owned_by_other_cluster() {
+        let lock_dir = temp_lock_dir("foreign-owner");
+        lease::write_claim(3, &lock_dir, "regicide", std::process::id()).unwrap();
+
+        let mut config = ClusterConfig::for_test_ids(&[2, 4]);
+        config.cluster_name = "fixture".into();
+        config.lock_dir = lock_dir.clone();
+
+        let err = resolve_netem_targets(&config, Some("vm-3")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "vm-3 is not owned by cluster 'fixture' (owned by 'regicide')"
+        );
+
+        let _ = std::fs::remove_dir_all(lock_dir);
+    }
+
+    #[test]
+    fn resolve_netem_target_rejects_unowned_slot() {
+        let lock_dir = temp_lock_dir("unowned");
+        let mut config = ClusterConfig::for_test_ids(&[2, 4]);
+        config.cluster_name = "fixture".into();
+        config.lock_dir = lock_dir.clone();
+
+        let err = resolve_netem_targets(&config, Some("vm-3")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "vm-3 is not owned by cluster 'fixture' (slot is unowned)"
+        );
+
+        let _ = std::fs::remove_dir_all(lock_dir);
     }
 }

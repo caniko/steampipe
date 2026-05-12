@@ -254,13 +254,18 @@ fn microvm_start(
     std::fs::create_dir_all(&vm_dir)?;
 
     let log_file = std::fs::File::create(microvm_log_path(&config.state_dir, vm))?;
+    let runtime_dir = host_xdg_runtime_dir();
 
     let mut command = std::process::Command::new(&runner);
     command
         .current_dir(&vm_dir)
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
         .stdin(Stdio::null())
         .stdout(log_file.try_clone()?)
         .stderr(log_file);
+    if let Some(wayland_display) = host_wayland_display(&runtime_dir) {
+        command.env("WAYLAND_DISPLAY", wayland_display);
+    }
     #[cfg(unix)]
     command.process_group(0);
 
@@ -299,6 +304,48 @@ pub fn microvm_state_dir(state_dir: &Path, vm: &VmDef) -> std::path::PathBuf {
 
 pub fn microvm_log_path(state_dir: &Path, vm: &VmDef) -> std::path::PathBuf {
     microvm_state_dir(state_dir, vm).join("vm.log")
+}
+
+fn host_xdg_runtime_dir() -> PathBuf {
+    host_xdg_runtime_dir_from(std::env::var_os("XDG_RUNTIME_DIR"), host_uid())
+}
+
+fn host_uid() -> Option<String> {
+    std::process::Command::new("id")
+        .arg("-u")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|stdout| stdout.trim().to_owned())
+        .filter(|stdout| !stdout.is_empty())
+}
+
+fn host_xdg_runtime_dir_from(
+    runtime_dir: Option<std::ffi::OsString>,
+    uid: Option<String>,
+) -> PathBuf {
+    if let Some(runtime_dir) = runtime_dir
+        && !runtime_dir.is_empty()
+    {
+        return PathBuf::from(runtime_dir);
+    }
+
+    uid.map(|uid| PathBuf::from(format!("/run/user/{uid}")))
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+}
+
+fn host_wayland_display(runtime_dir: &Path) -> Option<String> {
+    if let Some(display) = std::env::var_os("WAYLAND_DISPLAY")
+        && !display.is_empty()
+    {
+        return Some(display.to_string_lossy().into_owned());
+    }
+
+    ["wayland-1", "wayland-0"]
+        .into_iter()
+        .find(|socket| runtime_dir.join(socket).exists())
+        .map(str::to_owned)
 }
 
 pub fn cleanup_microvm_sockets(vm_dir: &Path) {
@@ -562,6 +609,49 @@ mod tests {
         assert!(!vsock.exists());
         assert!(log.exists());
         assert!(image.exists());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn host_xdg_runtime_dir_prefers_environment() {
+        let expected = PathBuf::from("/tmp/steampipe-xdg-test");
+        assert_eq!(
+            host_xdg_runtime_dir_from(Some(expected.as_os_str().to_owned()), Some("999".into())),
+            expected
+        );
+    }
+
+    #[test]
+    fn host_xdg_runtime_dir_falls_back_when_missing() {
+        assert_eq!(
+            host_xdg_runtime_dir_from(None, Some("999".into())),
+            PathBuf::from("/run/user/999")
+        );
+    }
+
+    #[test]
+    fn host_xdg_runtime_dir_uses_tmp_without_env_or_uid() {
+        assert_eq!(host_xdg_runtime_dir_from(None, None), PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn host_wayland_display_prefers_environment() {
+        assert_eq!(
+            host_wayland_display(Path::new("/does/not/matter")),
+            std::env::var("WAYLAND_DISPLAY").ok().filter(|value| !value.is_empty())
+        );
+    }
+
+    #[test]
+    fn host_wayland_display_discovers_socket_names() {
+        let dir = std::env::temp_dir().join(format!(
+            "steampipe-wayland-detect-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("wayland-1"), "").unwrap();
+        assert_eq!(host_wayland_display(&dir), Some("wayland-1".into()));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

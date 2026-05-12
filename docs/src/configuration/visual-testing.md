@@ -25,6 +25,27 @@ wait_for    = { window_visible = true, min_age_ms = 500 }
 Goldens live at `{golden_dir}/{scene}.png`. Diff artifacts live at
 `{diff_dir}/{run_label}/{scene}.{actual,diff,golden}.png`.
 
+## Compositor / backend requirements
+
+Visual testing only runs against **sway**. Both supported backends depend on
+wlroots:
+
+- **`grim`** drives the in-VM Wayland socket — works with `--display sway`
+  only. Combining it with a `*-gpu` display is rejected (`grim` cannot reach
+  the virtio-gpu DRM render path).
+- **`vnc`** drives `wayvnc`, which attaches to wlroots — works with
+  `--display sway` *or* `--display sway-gpu`.
+
+`--display weston` / `weston-gpu` are experimental and not supported by the
+visual harness: there is no Weston readiness probe and `wayvnc` will not
+attach. `cluster-ctl` rejects these combinations at startup. See the matrix
+in [steampipe.toml](./steampipe-toml.md#supported-display--screenshot-backend-matrix).
+
+Fixture golden regeneration (`scripts/regenerate.sh` →
+`cluster-ctl fixture golden regenerate`) brings up the **default** fixture
+flavor, which is crosvm + sway; regenerating against any other flavor is
+out of scope.
+
 Scene names are filesystem-safe identifiers. They may contain ASCII letters,
 digits, `.`, `_`, and `-`; `/`, `..`, NUL, whitespace, and shell metacharacters
 are rejected at parse time.

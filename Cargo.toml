@@ -7,6 +7,10 @@ edition = "2024"
 license = "EUPL-1.2"
 rust-version = "1.87"
 
+[features]
+default = []
+fixture-tools = []
+
 [[bin]]
 name = "cluster-ctl"
 path = "src/main.rs"

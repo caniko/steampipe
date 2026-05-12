@@ -15,3 +15,12 @@ update-hash:
     # Patch in the correct hash
     sed -i "s|$fake|sha256-$hash|" flake.nix
     echo "Updated cargoHash to sha256-$hash"
+
+# Run the in-tree fixture diagnostic ladder. Bridge must be up beforehand
+# (sudo nix run ./tests/fixture#cluster-fixture-net-up).
+diag-fixture *ARGS:
+    nix develop -c bash tests/fixture/diagnose/run.sh {{ARGS}}
+
+# Same as diag-fixture but leaves the VM running for follow-up SSH inspection.
+diag-fixture-keep *ARGS:
+    nix develop -c bash tests/fixture/diagnose/run.sh --keep-up {{ARGS}}

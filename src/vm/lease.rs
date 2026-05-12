@@ -48,8 +48,12 @@ pub fn try_reserve(vm_id: u8, lock_dir: &Path, cluster: &str) -> anyhow::Result<
     }
 }
 
-/// Reserve `count` VMs from the pool, skipping ones held by other clusters.
-/// Returns the VM IDs that are available.
+/// Reserve `count` VM IDs from the pool in ascending slot order.
+///
+/// Held slots owned by other live clusters are skipped. Returns exactly
+/// `count` free IDs when enough capacity exists. Callers must not assume the
+/// returned IDs are contiguous or that they start at `1`.
+#[must_use = "the reserved VM IDs define the cluster's operational VM set"]
 pub fn reserve_n(
     count: u8,
     max_vms: u8,
@@ -241,24 +245,52 @@ mod tests {
     }
 
     #[test]
-    fn reserve_n_skips_other_cluster_holds() {
-        let dir = unique_lock_dir("skip");
+    fn reserve_n_returns_non_contiguous_when_vm1_held() {
+        let dir = unique_lock_dir("skip-vm1");
         write_claim(1, &dir, "beta", live_pid()).unwrap();
-        write_claim(3, &dir, "beta", live_pid()).unwrap();
-        let ids = reserve_n(2, 5, &dir, "alpha").unwrap();
-        assert_eq!(ids, vec![2, 4]);
+        let ids = reserve_n(1, 7, &dir, "alpha").unwrap();
+        assert_eq!(ids, vec![2]);
     }
 
     #[test]
-    fn reserve_n_fails_when_not_enough_available() {
-        let dir = unique_lock_dir("not-enough");
+    fn reserve_n_skips_multiple_held_slots() {
+        let dir = unique_lock_dir("skip-multiple");
+        write_claim(1, &dir, "beta", live_pid()).unwrap();
+        write_claim(3, &dir, "beta", live_pid()).unwrap();
+        write_claim(5, &dir, "beta", live_pid()).unwrap();
+        let ids = reserve_n(3, 7, &dir, "alpha").unwrap();
+        assert_eq!(ids, vec![2, 4, 6]);
+    }
+
+    #[test]
+    fn reserve_n_can_fill_the_entire_pool() {
+        let dir = unique_lock_dir("full-pool");
+        let ids = reserve_n(5, 5, &dir, "alpha").unwrap();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn reserve_n_errors_when_pool_is_empty() {
+        let dir = unique_lock_dir("empty-pool");
         for id in 1..=4 {
             write_claim(id, &dir, "beta", live_pid()).unwrap();
         }
-        let err = reserve_n(3, 5, &dir, "alpha").unwrap_err();
+        let err = reserve_n(1, 4, &dir, "alpha").unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("only 1 of 3 requested VMs available"), "{msg}");
+        assert!(msg.contains("only 0 of 1 requested VMs available"), "{msg}");
         assert!(msg.contains("4 held by other processes"), "{msg}");
+    }
+
+    #[test]
+    fn reserve_n_errors_when_pool_insufficient() {
+        let dir = unique_lock_dir("pool-insufficient");
+        for id in 1..=6 {
+            write_claim(id, &dir, "beta", live_pid()).unwrap();
+        }
+        let err = reserve_n(2, 7, &dir, "alpha").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("only 1 of 2 requested VMs available"), "{msg}");
+        assert!(msg.contains("6 held by other processes"), "{msg}");
     }
 
     #[test]

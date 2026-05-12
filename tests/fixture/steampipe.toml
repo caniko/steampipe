@@ -1,0 +1,28 @@
+binary_name = "steampipe-fixture-noop"
+cargo_package = "steampipe-fixture-noop"
+vm_user = "fixture"
+remote_dir = "/home/fixture/work"
+ssh_key = "cluster_key"
+max_vms = 8
+
+# Shares br-cluster + tap-vm-1 with the production regicide cluster
+# (declared by services.steampipe-cluster on atlas). The two cannot
+# run simultaneously — bring regicide cluster down before invoking
+# the fixture diagnostic.
+[network]
+bridge = "br-cluster"
+subnet = "10.0.100"
+prefix = 24
+host_ip = "10.0.100.254"
+udp_port = 27200
+
+[cluster]
+name = "fixture"
+graphics = true
+
+[cluster.flavors.uifull]
+hypervisor = "crosvm"
+graphics = true
+gpu_profile = "vulkan"
+memory = 4096
+use_systemd_stage1 = false

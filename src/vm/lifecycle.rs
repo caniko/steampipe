@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use crate::core::config::{BridgeReady, ClusterConfig, IpAddr, VmDef, VmName, par_each_vm};
+use crate::core::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
 use crate::core::state;
 use crate::vm::lease;
 use crate::vm::resources::{self, RamRequirements};
@@ -37,35 +37,19 @@ async fn wait_and_report(config: &ClusterConfig<BridgeReady>, vms: &[VmDef]) {
     }
 }
 
-/// Run the `up` subcommand: reserve VMs, check RAM, start instances, wait for connectivity.
+/// Run the `up` subcommand: start the configured VM set, wait for connectivity,
+/// and persist lease claims for the started instances.
 pub async fn up(
     config: &ClusterConfig<BridgeReady>,
     runners_dir: &Path,
 ) -> anyhow::Result<Vec<VmDef>> {
     state::ensure_state_dir(&config.state_dir)?;
 
-    let vm_count = config.vms.len() as u8;
-    let max_vms = config.max_vms.max(vm_count);
-
-    // Reserve VM slots (checks for claims held by other clusters)
-    println!("==> Reserving {vm_count} VM(s)...");
-    let ids = lease::reserve_n(vm_count, max_vms, &config.lock_dir, &config.cluster_name)?;
-
-    // Build VmDefs from the reserved IDs (which may differ from 1..N)
-    let vms: Vec<VmDef> = ids
-        .iter()
-        .map(|&id| VmDef {
-            name: VmName(format!("vm-{id}")),
-            ip: IpAddr(format!("{}.{id}", config.subnet)),
-            index: id,
-        })
-        .collect();
-
-    let reserved_names: Vec<&str> = vms.iter().map(|v| v.name.as_ref()).collect();
+    let reserved_names: Vec<&str> = config.vms.iter().map(|v| v.name.as_ref()).collect();
     println!("  Reserved: {}", reserved_names.join(", "));
 
     // Stop any existing instances on these VMs
-    for vm in &vms {
+    for vm in &config.vms {
         config.backend.stop_instance(config, vm);
     }
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -77,7 +61,7 @@ pub async fn up(
 
     // Start instances with RAM check before each
     let mut started = Vec::new();
-    for vm in &vms {
+    for vm in &config.vms {
         match resources::check_ram(&ram_req) {
             Ok(avail) => match config.backend.start_instance(config, vm, runners_dir) {
                 Ok(pid) => {
@@ -103,11 +87,11 @@ pub async fn up(
         anyhow::bail!("no VMs were started — check RAM availability and runner paths");
     }
 
-    if started.len() < vms.len() {
+    if started.len() < config.vms.len() {
         eprintln!(
             "==> Started {} of {} requested VMs (insufficient RAM for the rest)",
             started.len(),
-            vms.len()
+            config.vms.len()
         );
     }
 
@@ -118,8 +102,7 @@ pub async fn up(
 
 /// Run the `down` subcommand: stop all instances and remove claim files.
 pub fn down<S>(config: &ClusterConfig<S>) {
-    // Use leased VMs if available, otherwise fall back to static config
-    let vms = config.leased_vms();
+    let vms = config.claimed_vms();
     println!("==> Stopping {} VM(s)...", vms.len());
     for vm in &vms {
         let had_pid = state::read_pid(&config.state_dir, &vm.name).is_some();

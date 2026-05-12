@@ -50,7 +50,7 @@ pub async fn screenshot_wayland_vm(
     );
     let result = backend.run_cmd(&vm.ip, &cmd).await;
     if !result.stdout.trim().contains("OK") {
-        anyhow::bail!("{}: screenshot failed (is weston/sway running?)", vm.name);
+        anyhow::bail!("{}: grim returned no output (is sway running?)", vm.name);
     }
 
     // Download via upload (rsync reverse direction)

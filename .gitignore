@@ -1,3 +1,7 @@
 /target
 docs/book/
 website/public/
+tests/fixture/result*
+tests/fixture/.direnv
+tests/fixture/golden/.candidate/
+tests/fixture/diagnose/_run-*

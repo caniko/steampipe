@@ -91,14 +91,17 @@ pub fn validate_visual_capture_config(
     display: crate::cli::DisplayMode,
     screenshot_backend: crate::cli::ScreenshotBackend,
 ) -> anyhow::Result<()> {
-    if screenshot_backend == crate::cli::ScreenshotBackend::Vnc
-        && !matches!(
-            display,
-            crate::cli::DisplayMode::Sway | crate::cli::DisplayMode::SwayGpu
-        )
+    use crate::cli::{DisplayMode, ScreenshotBackend};
+    if screenshot_backend == ScreenshotBackend::Vnc
+        && !matches!(display, DisplayMode::Sway | DisplayMode::SwayGpu)
     {
         anyhow::bail!(
-            "VNC screenshots require display \"sway\" or \"sway-gpu\" because wayvnc requires a wlroots compositor; got \"{display}\""
+            "VNC capture requires --display sway or sway-gpu; wayvnc needs a wlroots compositor and weston is experimental, got \"{display}\""
+        );
+    }
+    if screenshot_backend == ScreenshotBackend::Grim && display.requires_gpu() {
+        anyhow::bail!(
+            "grim capture is not supported with --display {display}; GPU display modes render to virtio-gpu without a host-visible Wayland socket, use --screenshot-backend vnc"
         );
     }
     Ok(())
@@ -130,8 +133,11 @@ struct LocalDisplay {
 }
 
 impl LocalDisplay {
-    fn maybe_start(host_args: &str) -> anyhow::Result<Option<Self>> {
-        if !should_auto_start_local_display(host_args, local_display_exists()) {
+    fn maybe_start(
+        display: crate::cli::DisplayMode,
+        host_args: &str,
+    ) -> anyhow::Result<Option<Self>> {
+        if !should_auto_start_local_display(display, host_args, local_display_exists()) {
             return Ok(None);
         }
 
@@ -207,8 +213,14 @@ fn local_display_exists() -> bool {
         || std::env::var_os("WAYLAND_SOCKET").is_some()
 }
 
-fn should_auto_start_local_display(host_args: &str, has_display: bool) -> bool {
-    !has_display && !host_args.split_whitespace().any(|arg| arg == "--headless")
+fn should_auto_start_local_display(
+    display: crate::cli::DisplayMode,
+    host_args: &str,
+    has_display: bool,
+) -> bool {
+    display != crate::cli::DisplayMode::Headless
+        && !has_display
+        && !host_args.split_whitespace().any(|arg| arg == "--headless")
 }
 
 fn first_wayland_socket(runtime: &Path) -> anyhow::Result<Option<String>> {
@@ -958,7 +970,7 @@ pub async fn run<S>(
         .host_args
         .as_deref()
         .unwrap_or(&default_host_args);
-    let local_display = LocalDisplay::maybe_start(host_args)?;
+    let local_display = LocalDisplay::maybe_start(test_config.display, host_args)?;
     if let Some(display) = &local_display {
         print_and_push(
             &mut output,
@@ -1971,12 +1983,26 @@ mod tests {
 
     #[test]
     fn local_display_auto_start_gates_on_headless_and_existing_display() {
-        assert!(should_auto_start_local_display("--auto-host-steam", false));
+        assert!(should_auto_start_local_display(
+            crate::cli::DisplayMode::Sway,
+            "--auto-host-steam",
+            false
+        ));
         assert!(!should_auto_start_local_display(
+            crate::cli::DisplayMode::Sway,
             "--auto-host-steam --headless",
             false
         ));
-        assert!(!should_auto_start_local_display("--auto-host-steam", true));
+        assert!(!should_auto_start_local_display(
+            crate::cli::DisplayMode::Sway,
+            "--auto-host-steam",
+            true
+        ));
+        assert!(!should_auto_start_local_display(
+            crate::cli::DisplayMode::Headless,
+            "--auto-host-steam",
+            false
+        ));
     }
 
     /// Empty env table → empty inline-export string. Production runs that
@@ -2310,6 +2336,25 @@ mod tests {
         validate_visual_capture_config(
             crate::cli::DisplayMode::SwayGpu,
             crate::cli::ScreenshotBackend::Vnc,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn grim_backend_rejects_gpu_display() {
+        let err = validate_visual_capture_config(
+            crate::cli::DisplayMode::SwayGpu,
+            crate::cli::ScreenshotBackend::Grim,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("vnc"));
+    }
+
+    #[test]
+    fn grim_backend_accepts_non_gpu_sway() {
+        validate_visual_capture_config(
+            crate::cli::DisplayMode::Sway,
+            crate::cli::ScreenshotBackend::Grim,
         )
         .unwrap();
     }

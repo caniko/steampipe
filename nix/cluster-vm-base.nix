@@ -78,8 +78,12 @@ in {
       nixpkgs.config.allowUnfree = lib.mkIf cfg.enableSteam true;
       programs.steam.enable = lib.mkIf cfg.enableSteam true;
 
-      # weston: headless Wayland compositor for Steam runtime.
-      # sway + wayvnc: one-time VNC login for Steam Guard setup.
+      # sway: default Wayland compositor for Steam runtime + VNC Steam Guard
+      # login. Visual testing (grim screenshots, wayvnc, swaymsg readiness
+      # probes, fixture golden regen) all require sway specifically — wlroots
+      # IPC is the only readiness interface the harness knows.
+      # weston: experimental alternate compositor, kept for parity testing only;
+      # not supported by the visual capture pipeline.
       services.seatd.enable = true;
 
       environment.sessionVariables = {
