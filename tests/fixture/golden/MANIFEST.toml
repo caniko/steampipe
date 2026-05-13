@@ -1,0 +1,21 @@
+[meta]
+captured_at = "2026-05-12"
+steampipe_commit = "ff6143bad56c9387ce40665b39ee6cc072d65a03"
+fixture_flake_lock_sha = "e05fa82c477801179f8cacfeb513bb8b52f448f3"
+reviewer = "auto-captured-via-just-diag-fixture"
+notes = """
+Captured against the uifull flavor (crosvm direct + venus-vulkan runner-dir)
+on vm-2 because vm-1 was held by an unrelated firecracker microvm. Flexible
+scheduling routed automatically. grim capture path on the in-VM wlroots
+session; same-boot determinism verified across two consecutive diag runs
+(both hashed 6e736d65d77d9dbe466aba7a03f1d3ee6dc872c351de19474d6ff1bd36d4c913
+pre-optimisation).
+"""
+
+[[golden]]
+name = "foot-banner-1280x720"
+path = "foot-banner-1280x720.png"
+sha256 = "ac4022355358798fe0888d29788f729f097e5c10071b16bf1500d977959817df"
+resolution = { width = 1280, height = 1024 }   # crosvm default; sway `output * mode 1280x720` is being ignored
+workload = "foot-banner"
+capture_backend = "grim"

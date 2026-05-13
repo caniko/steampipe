@@ -39,7 +39,7 @@ if [ ! -f "$TMP/$VM_NAME.png" ]; then
 fi
 cp "$TMP/$VM_NAME.png" "$OUT"
 
-HASH=$(nix shell nixpkgs#python3 -c python3 -c "
+HASH=$(python3 -c "
 from PIL import Image
 import hashlib
 img = Image.open('$OUT').convert('RGBA')
@@ -52,7 +52,7 @@ if [ ! -f "$GOLDEN" ]; then
     exit 6
 fi
 
-G_HASH=$(nix shell nixpkgs#python3 -c python3 -c "
+G_HASH=$(python3 -c "
 from PIL import Image
 import hashlib
 img = Image.open('$GOLDEN').convert('RGBA')

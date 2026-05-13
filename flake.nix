@@ -123,6 +123,7 @@
           pkgs.mdbook
           pkgs.zola
           cluster-ctl
+          (pkgs.python3.withPackages (ps: [ps.pillow]))
         ];
         shellHook = ''
           echo "Website: cd website && zola serve"

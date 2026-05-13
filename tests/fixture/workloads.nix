@@ -8,7 +8,7 @@
   workloadLibPath = config.steampipe.vmGraphics.runtimeLibraryPath;
   homeDir = "/home/${vmUser}";
   workloadHome = "${homeDir}/.workload";
-  workloadStateDir = "${homeDir}/.local/state/workload";
+  workloadStateDir = "${homeDir}/.workload/state";
 
   workloadCommon = ''
     export HOME=${homeDir}
@@ -103,7 +103,7 @@
           case "$name" in
             foot-banner)
               target='${workloads.footBanner}/bin/foot-banner'
-              pattern='"title"[[:space:]]*:[[:space:]]*"workload-foot-banner"'
+              pattern='"app_id"[[:space:]]*:[[:space:]]*"workload-foot-banner"'
               ;;
             vkcube-frozen)
               target='${workloads.vkcubeFrozen}/bin/vkcube-frozen'
@@ -111,7 +111,7 @@
               ;;
             wgpu-checker)
               target='${workloads.wgpuChecker}/bin/wgpu-checker'
-              pattern='"title"[[:space:]]*:[[:space:]]*"workload-wgpu-checker"'
+              pattern='"app_id"[[:space:]]*:[[:space:]]*"workload-wgpu-checker"'
               ;;
             *)
               echo "unknown workload: $name" >&2
@@ -127,11 +127,11 @@
           pid="$!"
           printf '%s\n' "$pid" > "$pid_file"
 
-          for _ in $(seq 1 30); do
+          for _ in $(seq 1 120); do
             if tree_contains "$pattern"; then
               exit 0
             fi
-            sleep 0.1
+            sleep 0.25
           done
 
           echo "workload window did not appear: $name" >&2

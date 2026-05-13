@@ -357,8 +357,9 @@ fn next_ppm_token<'a>(bytes: &'a [u8], index: &mut usize) -> Option<&'a [u8]> {
 async fn run_sway_output_samples(backend: &Backend, vm: &VmDef) -> anyhow::Result<CmdOutput> {
     let cmd = format!(
         "set -eu\n\
-         export XDG_RUNTIME_DIR=\"${{XDG_RUNTIME_DIR:-/tmp/runtime-$(whoami)}}\"\n\
+         export XDG_RUNTIME_DIR=\"/tmp/runtime-$(whoami)\"\n\
          export WAYLAND_DISPLAY=\"${{WAYLAND_DISPLAY:-wayland-1}}\"\n\
+         export SWAYSOCK=\"${{SWAYSOCK:-$(find \"$XDG_RUNTIME_DIR\" -maxdepth 1 -type s -name 'sway-ipc.*.sock' 2>/dev/null | head -n1)}}\"\n\
          swaymsg -r -t get_outputs\n\
          printf '\\n__STEAMPIPE_OUTPUTS_SECOND__\\n'\n\
          sleep {OUTPUT_STABILITY_GAP_SECS}\n\
@@ -372,8 +373,9 @@ async fn run_sway_output_samples(backend: &Backend, vm: &VmDef) -> anyhow::Resul
 
 async fn run_tree_query(backend: &Backend, vm: &VmDef) -> anyhow::Result<CmdOutput> {
     let cmd = "set -eu\n\
-         export XDG_RUNTIME_DIR=\"${XDG_RUNTIME_DIR:-/tmp/runtime-$(whoami)}\"\n\
+         export XDG_RUNTIME_DIR=\"/tmp/runtime-$(whoami)\"\n\
          export WAYLAND_DISPLAY=\"${WAYLAND_DISPLAY:-wayland-1}\"\n\
+         export SWAYSOCK=\"${SWAYSOCK:-$(find \"$XDG_RUNTIME_DIR\" -maxdepth 1 -type s -name 'sway-ipc.*.sock' 2>/dev/null | head -n1)}\"\n\
          swaymsg -r -t get_tree\n";
     let output = backend
         .run_cmd_timeout(&vm.ip, cmd, SWAY_QUERY_TIMEOUT)
@@ -384,7 +386,7 @@ async fn run_tree_query(backend: &Backend, vm: &VmDef) -> anyhow::Result<CmdOutp
 async fn run_commit_probe(backend: &Backend, vm: &VmDef) -> anyhow::Result<CmdOutput> {
     let cmd = format!(
         "set -eu\n\
-         export XDG_RUNTIME_DIR=\"${{XDG_RUNTIME_DIR:-/tmp/runtime-$(whoami)}}\"\n\
+         export XDG_RUNTIME_DIR=\"/tmp/runtime-$(whoami)\"\n\
          export WAYLAND_DISPLAY=\"${{WAYLAND_DISPLAY:-wayland-1}}\"\n\
          probe_path=\"/tmp/steampipe-compositor-probe-$$.ppm\"\n\
          rm -f \"$probe_path\"\n\

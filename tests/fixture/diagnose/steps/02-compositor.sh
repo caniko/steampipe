@@ -23,6 +23,7 @@ LOG="$RUN_DIR/02-compositor.log"
 
 ssh $SSH_OPTS "$VM_USER@$VM_IP" \
     "export XDG_RUNTIME_DIR=/tmp/runtime-$VM_USER; \
+     export SWAYSOCK=\$(find \"\$XDG_RUNTIME_DIR\" -maxdepth 1 -type s -name 'sway-ipc.*.sock' | head -n1); \
      echo '{\"outputs\":'; swaymsg -t get_outputs 2>/dev/null || echo null; \
      echo ',\"tree\":'; swaymsg -t get_tree 2>/dev/null || echo null; \
      echo '}'" >"$OUT" 2>"$LOG" || {
@@ -31,13 +32,13 @@ ssh $SSH_OPTS "$VM_USER@$VM_IP" \
 }
 
 # Validate JSON
-if ! nix shell nixpkgs#python3 -c python3 -c "import json,sys; json.load(open('$OUT'))" 2>>"$LOG"; then
+if ! python3 -c "import json,sys; json.load(open('$OUT'))" 2>>"$LOG"; then
     echo "FAIL: SWAY_UNREACHABLE — invalid JSON in 02-compositor.json" >&2
     exit 4
 fi
 
 # Active outputs?
-ACTIVE=$(nix shell nixpkgs#python3 -c python3 -c "
+ACTIVE=$(python3 -c "
 import json
 d = json.load(open('$OUT'))
 outs = d.get('outputs') or []
@@ -49,7 +50,7 @@ if [ "$ACTIVE" -lt 1 ]; then
 fi
 
 # Workload window present?
-FOUND=$(nix shell nixpkgs#python3 -c python3 -c "
+FOUND=$(python3 -c "
 import json
 d = json.load(open('$OUT'))
 def walk(n):

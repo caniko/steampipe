@@ -134,7 +134,7 @@ ssh $SSH_OPTS "$VM_USER@$VM_IP" "workload-stop || true; workload-run $WORKLOAD" 
 log "waiting for workload window to appear in sway tree"
 for i in $(seq 1 15); do
     if ssh $SSH_OPTS "$VM_USER@$VM_IP" \
-        "export XDG_RUNTIME_DIR=/tmp/runtime-$VM_USER; swaymsg -t get_tree 2>/dev/null" \
+        "export XDG_RUNTIME_DIR=/tmp/runtime-$VM_USER; export SWAYSOCK=\$(find \"\$XDG_RUNTIME_DIR\" -maxdepth 1 -type s -name 'sway-ipc.*.sock' | head -n1); swaymsg -t get_tree 2>/dev/null" \
         | grep -qi "workload-$WORKLOAD\|workload-${WORKLOAD%-*}"
     then
         log "workload window visible after ${i}s"
