@@ -202,6 +202,36 @@ fn parse_record_args(args: &[String]) -> anyhow::Result<(Option<&str>, &str)> {
     }
 }
 
+fn command_requires_claimed_vms(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::Restart { .. }
+            | Commands::CompositorStatus
+            | Commands::Deploy { .. }
+            | Commands::Logs { .. }
+            | Commands::SteamStart { .. }
+            | Commands::Run { .. }
+            | Commands::StopGame { .. }
+            | Commands::Test { .. }
+            | Commands::Bisect { .. }
+            | Commands::Netem { .. }
+            | Commands::NetemShow
+            | Commands::NetemReset { .. }
+            | Commands::SnapshotSave { .. }
+            | Commands::SnapshotRestore { .. }
+            | Commands::SnapshotList
+            | Commands::SnapshotDelete { .. }
+            | Commands::Screenshot { .. }
+            | Commands::Accounts
+            | Commands::Visual {
+                action: VisualAction::Capture { .. }
+                    | VisualAction::Record { .. }
+                    | VisualAction::Report { .. },
+            }
+            | Commands::Watch { .. }
+    )
+}
+
 fn find_vm<'a, S>(
     config: &'a ClusterConfig<S>,
     target: Option<&str>,
@@ -538,38 +568,41 @@ async fn main() -> anyhow::Result<()> {
     if matches!(
         &cli.command,
         Commands::Restart { .. }
-        | Commands::SteamCheck { .. }
-        | Commands::SteamLogin { .. }
-        | Commands::SteamGuard { .. }
-        | Commands::Status
-        | Commands::CompositorStatus
-        | Commands::Down
-        | Commands::NetDown { .. }
-        | Commands::Deploy { .. }
-        | Commands::Logs { .. }
-        | Commands::SteamStart { .. }
-        | Commands::Run { .. }
-        | Commands::StopGame { .. }
-        | Commands::Test { .. }
-        | Commands::Bisect { .. }
-        | Commands::Netem { .. }
-        | Commands::NetemShow
-        | Commands::NetemReset { .. }
-        | Commands::SnapshotSave { .. }
-        | Commands::SnapshotRestore { .. }
-        | Commands::SnapshotList
-        | Commands::SnapshotDelete { .. }
-        | Commands::Screenshot { .. }
-        | Commands::Accounts
-        | Commands::Visual {
-            action: VisualAction::Capture { .. }
-                | VisualAction::Record { .. }
-                | VisualAction::Report { .. },
-        }
-        | Commands::Watch { .. }
-        | Commands::CleanLogins { .. }
+            | Commands::Status
+            | Commands::CompositorStatus
+            | Commands::Down
+            | Commands::NetDown { .. }
+            | Commands::Deploy { .. }
+            | Commands::Logs { .. }
+            | Commands::SteamStart { .. }
+            | Commands::Run { .. }
+            | Commands::StopGame { .. }
+            | Commands::Test { .. }
+            | Commands::Bisect { .. }
+            | Commands::Netem { .. }
+            | Commands::NetemShow
+            | Commands::NetemReset { .. }
+            | Commands::SnapshotSave { .. }
+            | Commands::SnapshotRestore { .. }
+            | Commands::SnapshotList
+            | Commands::SnapshotDelete { .. }
+            | Commands::Screenshot { .. }
+            | Commands::Accounts
+            | Commands::Visual {
+                action: VisualAction::Capture { .. }
+                    | VisualAction::Record { .. }
+                    | VisualAction::Report { .. },
+            }
+            | Commands::Watch { .. }
+            | Commands::CleanLogins { .. }
     ) {
         config = config.with_vm_ids(&claimed_vm_ids)?;
+        if command_requires_claimed_vms(&cli.command) && config.vms.is_empty() {
+            anyhow::bail!(
+                "cluster '{}' has no claimed VMs. Start the cluster first, e.g. `nix run .#cluster-1v1-up` or `nix run .#cluster-tournament-up`.",
+                config.cluster_name
+            );
+        }
     }
 
     match cli.command {

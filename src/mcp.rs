@@ -116,6 +116,38 @@ fn require_bridge(config: &ClusterConfig<Unchecked>) -> Result<(), ErrorData> {
     Ok(())
 }
 
+fn require_claimed_vms(config: &ClusterConfig<Unchecked>, action: &str) -> Result<(), ErrorData> {
+    if config.vms.is_empty() {
+        return Err(ErrorData::internal_error(
+            format!(
+                "Cannot {action}: cluster '{}' has no claimed VMs.\n\
+                 Start the cluster first: nix run .#cluster-1v1-up\n\
+                 Or for tournaments: nix run .#cluster-tournament-up",
+                config.cluster_name
+            ),
+            None,
+        ));
+    }
+    Ok(())
+}
+
+fn require_vm_capacity(config: &ClusterConfig<Unchecked>, players: u8) -> Result<(), ErrorData> {
+    let required_vms = players.saturating_sub(1) as usize;
+    if config.vms.len() < required_vms {
+        return Err(ErrorData::internal_error(
+            format!(
+                "Cannot run test: cluster '{}' has {} claimed VM(s), but {players} player(s) require {required_vms} VM(s).\n\
+                 Start the matching cluster first: nix run .#cluster-1v1-up\n\
+                 Or: nix run .#cluster-tournament-up",
+                config.cluster_name,
+                config.vms.len()
+            ),
+            None,
+        ));
+    }
+    Ok(())
+}
+
 // ── Input types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -369,6 +401,7 @@ impl SteampipeMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let (config, _cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
+        require_claimed_vms(&config, "read logs")?;
         let lines = input.max_lines.unwrap_or(100);
         let head = !input.tail.unwrap_or(true);
 
@@ -404,6 +437,7 @@ impl SteampipeMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let (config, _cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
+        require_claimed_vms(&config, "deploy")?;
         let root = project_root()?;
         let do_build = input.build.unwrap_or(true);
         let do_verify = input.verify.unwrap_or(false);
@@ -465,6 +499,7 @@ impl SteampipeMcp {
     ) -> Result<CallToolResult, ErrorData> {
         let (config, cleanup_msg) = build_config(&input.cluster)?;
         require_bridge(&config)?;
+        require_claimed_vms(&config, "stop games")?;
         let kill_steam = input.kill_steam.unwrap_or(false);
 
         crate::run::kill_games(&config.backend, &config.vms, &config.binary_name).await;
@@ -550,9 +585,12 @@ impl SteampipeMcp {
             }
         };
 
+        let players = input.players.unwrap_or(default_players);
+        require_vm_capacity(&config, players)?;
+
         let test_config = crate::test::TestConfig {
             network,
-            players: input.players.unwrap_or(default_players),
+            players,
             vm_args: input.vm_args,
             host_args: input.host_args,
             max_runs: input.max_runs.unwrap_or(1).min(50),

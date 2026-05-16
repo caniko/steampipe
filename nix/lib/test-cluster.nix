@@ -351,6 +351,7 @@ in
           export WAYLAND_DISPLAY=wayland-0
         fi
       fi
+      export PATH=${lib.makeBinPath [pkgs.sway]}''${PATH:+:$PATH}
       export LD_LIBRARY_PATH=${hostOpenGLDriverPath}/lib:${hostRuntimeLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
       export LIBGL_DRIVERS_PATH=${hostOpenGLDriverPath}/lib/dri''${LIBGL_DRIVERS_PATH:+:$LIBGL_DRIVERS_PATH}
       export __EGL_VENDOR_LIBRARY_DIRS=${hostOpenGLDriverPath}/share/glvnd/egl_vendor.d''${__EGL_VENDOR_LIBRARY_DIRS:+:$__EGL_VENDOR_LIBRARY_DIRS}
@@ -381,6 +382,13 @@ in
         fi
         exec ${pkgs.nix}/bin/nix develop -c \
           ${ctl} --vm-count ${toString count} ${credsFlag} --cluster ${clusterName} test --players ${toString players} "$@"
+      '';
+
+    mkSteamTestWrapper = name: count: clusterName: players:
+      pkgs.writeShellScript "cluster-${name}" ''
+        ${hostClusterEnv}
+        exec ${pkgs.nix}/bin/nix develop -c \
+          ${ctl} --vm-count ${toString count} ${credsFlag} --cluster ${clusterName} test --network steam --players ${toString players} "$@"
       '';
 
     mkSteamLoginWrapper = name: count: args:
@@ -452,14 +460,14 @@ in
       # -- Mode-specific scripts (one set per flavor declared in steampipe.toml) --
       (mkAllFlavorScripts "1v1" 1 2)
       // {
-        "cluster-1v1-steam-test" = mkWrapper "1v1-steam-test" 1 "--cluster 1v1 test --network steam --players 2";
+        "cluster-1v1-steam-test" = mkSteamTestWrapper "1v1-steam-test" 1 "1v1" 2;
         "cluster-1v1-steam-login" = mkSteamLoginWrapper "1v1-steam-login" 1 "--cluster 1v1 steam-login --login-runners-dir ${loginVMRunnersDir}";
         "cluster-1v1-steam-guard" = mkSteamLoginWrapper "1v1-steam-guard" 1 "--cluster 1v1 steam-guard";
         "cluster-1v1-test-wayland" = cluster1v1WaylandTest;
       }
       // (mkAllFlavorScripts "tournament" vmCount 8)
       // {
-        "cluster-tournament-steam-test" = mkWrapper "tournament-steam-test" vmCount "--cluster tournament test --network steam --players 8";
+        "cluster-tournament-steam-test" = mkSteamTestWrapper "tournament-steam-test" vmCount "tournament" 8;
       }
       # -- Shared utilities (full cluster) --
       // {

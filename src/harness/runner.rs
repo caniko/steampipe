@@ -143,7 +143,7 @@ impl LocalDisplay {
 
         Self::start()
             .map(Some)
-            .map_err(|err| anyhow::anyhow!("failed to start local Weston display: {err}"))
+            .map_err(|err| anyhow::anyhow!("failed to start local Sway display: {err}"))
     }
 
     fn start() -> anyhow::Result<Self> {
@@ -157,16 +157,13 @@ impl LocalDisplay {
             std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o700))?;
         }
 
-        let mut child = Command::new("weston")
-            .args([
-                "--backend=headless",
-                "--renderer=gl",
-                "--width=1280",
-                "--height=720",
-                "--idle-time=0",
-                "--no-config",
-            ])
+        let mut child = Command::new("sway")
             .env("XDG_RUNTIME_DIR", &runtime)
+            .env("WLR_BACKENDS", "headless")
+            .env("WLR_LIBINPUT_NO_DEVICES", "1")
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("WAYLAND_SOCKET")
+            .env_remove("DISPLAY")
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -178,7 +175,7 @@ impl LocalDisplay {
                 break display;
             }
             if let Some(status) = child.try_wait()? {
-                anyhow::bail!("Weston exited before Wayland socket was ready: {status}");
+                anyhow::bail!("Sway exited before Wayland socket was ready: {status}");
             }
             if Instant::now() > deadline {
                 anyhow::bail!("timed out waiting for Wayland socket");
@@ -214,13 +211,11 @@ fn local_display_exists() -> bool {
 }
 
 fn should_auto_start_local_display(
-    display: crate::cli::DisplayMode,
+    _display: crate::cli::DisplayMode,
     host_args: &str,
     has_display: bool,
 ) -> bool {
-    display != crate::cli::DisplayMode::Headless
-        && !has_display
-        && !host_args.split_whitespace().any(|arg| arg == "--headless")
+    !has_display && !host_args.split_whitespace().any(|arg| arg == "--headless")
 }
 
 fn first_wayland_socket(runtime: &Path) -> anyhow::Result<Option<String>> {
@@ -803,9 +798,15 @@ pub async fn run<S>(
         anyhow::bail!("--capture-mode timelapse requires --capture-interval");
     }
 
-    let vm_count = (test_config.players as usize)
-        .saturating_sub(1)
-        .min(config.vms.len());
+    let vm_count = (test_config.players as usize).saturating_sub(1);
+    if config.vms.len() < vm_count {
+        anyhow::bail!(
+            "cluster '{}' has {} claimed VM(s), but {} player(s) require {vm_count} VM(s). Run the matching up command first, e.g. `nix run .#cluster-1v1-up` or `nix run .#cluster-tournament-up`.",
+            config.cluster_name,
+            config.vms.len(),
+            test_config.players
+        );
+    }
     let target_vms = &config.vms[..vm_count];
 
     let filter_re = Regex::new(
@@ -888,12 +889,7 @@ pub async fn run<S>(
     // Step 2b: Ensure Steam on VMs if steam network
     if test_config.network == NetworkMode::Steam {
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===", verbose);
-        let compositor = if test_config.display == crate::cli::DisplayMode::Headless {
-            crate::steam::steam_compositor_setup(test_config.display, &config.vm_user)
-        } else {
-            // Compositor already running from step 2a — just export the env vars.
-            String::new()
-        };
+        let compositor = crate::steam::steam_compositor_setup(test_config.display, &config.vm_user);
         for vm in target_vms {
             match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user, &compositor).await {
                 Ok(()) => {
@@ -1982,7 +1978,7 @@ mod tests {
     }
 
     #[test]
-    fn local_display_auto_start_gates_on_headless_and_existing_display() {
+    fn local_display_auto_start_gates_on_host_args_and_existing_display() {
         assert!(should_auto_start_local_display(
             crate::cli::DisplayMode::Sway,
             "--auto-host-steam",
@@ -1998,7 +1994,7 @@ mod tests {
             "--auto-host-steam",
             true
         ));
-        assert!(!should_auto_start_local_display(
+        assert!(should_auto_start_local_display(
             crate::cli::DisplayMode::Headless,
             "--auto-host-steam",
             false

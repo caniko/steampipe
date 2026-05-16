@@ -51,7 +51,7 @@ if pgrep -x weston >/dev/null; then
 fi
 if ! pgrep -x sway >/dev/null; then
     rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayland-*.lock 2>/dev/null || true
-    nohup env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_LIBINPUT_NO_DEVICES=1 \
+    nohup env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 \
         sway >"$XDG_RUNTIME_DIR/sway.log" 2>&1 &
     sleep 2
 fi
@@ -63,6 +63,21 @@ if ! pgrep -x sway >/dev/null; then
     exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
+for socket in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
+    if [ -S "$socket" ]; then
+        export SWAYSOCK="$socket"
+        break
+    fi
+done
+if command -v swaymsg >/dev/null && [ -n "${{SWAYSOCK:-}}" ]; then
+    if ! swaymsg -t get_outputs >/dev/null 2>&1; then
+        echo "sway IPC failed readiness check"
+        if [ -f "$XDG_RUNTIME_DIR/sway.log" ]; then
+            tail -n 80 "$XDG_RUNTIME_DIR/sway.log"
+        fi
+        exit 1
+    fi
+fi
 "#
     )
 }
@@ -126,6 +141,21 @@ if ! pgrep -x sway >/dev/null; then
     exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
+for socket in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
+    if [ -S "$socket" ]; then
+        export SWAYSOCK="$socket"
+        break
+    fi
+done
+if command -v swaymsg >/dev/null && [ -n "${{SWAYSOCK:-}}" ]; then
+    if ! swaymsg -t get_outputs >/dev/null 2>&1; then
+        echo "sway IPC failed readiness check"
+        if [ -f "$XDG_RUNTIME_DIR/sway.log" ]; then
+            tail -n 80 "$XDG_RUNTIME_DIR/sway.log"
+        fi
+        exit 1
+    fi
+fi
 "#
     )
 }
@@ -143,11 +173,11 @@ pub fn compositor_setup(mode: crate::cli::DisplayMode, vm_user: &str) -> String 
 
 /// Return a compositor snippet suitable for Steam itself.
 ///
-/// Headless game runs still need a headless Weston session for Steam
+/// Headless game runs still need a headless Sway session for Steam
 /// login and IPC readiness; the game process can still receive `--headless`.
 pub fn steam_compositor_setup(mode: crate::cli::DisplayMode, vm_user: &str) -> String {
     match mode {
-        crate::cli::DisplayMode::Headless => weston_setup(vm_user),
+        crate::cli::DisplayMode::Headless => sway_setup(vm_user),
         _ => compositor_setup(mode, vm_user),
     }
 }
@@ -157,7 +187,11 @@ pub const STEAM_START_SILENT: &str = r#"
 if pgrep -x steam >/dev/null; then
     echo "already-running"
 else
-    steam -silent -cef-disable-gpu >/dev/null 2>&1 &
+    if [ -n "${SWAYSOCK:-}" ] && command -v swaymsg >/dev/null; then
+        swaymsg exec "sh -lc 'steam -silent -cef-disable-gpu >/tmp/steampipe-steam-start.log 2>&1'" >/dev/null
+    else
+        nohup steam -silent -cef-disable-gpu >/tmp/steampipe-steam-start.log 2>&1 &
+    fi
     echo "started"
 fi
 "#;
@@ -193,7 +227,11 @@ if pgrep -x steam >/dev/null; then
 fi
 
 : > "$log" 2>/dev/null || true
-nohup steam -silent -cef-disable-gpu >/tmp/steampipe-steam-start.log 2>&1 &
+if [ -n "${{SWAYSOCK:-}}" ] && command -v swaymsg >/dev/null; then
+    swaymsg exec "sh -lc 'steam -silent -cef-disable-gpu >/tmp/steampipe-steam-start.log 2>&1'" >/dev/null
+else
+    nohup steam -silent -cef-disable-gpu >/tmp/steampipe-steam-start.log 2>&1 &
+fi
 if wait_for_steam_ready; then
     exit 0
 fi
@@ -205,6 +243,10 @@ echo "--- connection log tail ---"
 tail -n 80 "$log" 2>/dev/null || true
 echo "--- steam start log tail ---"
 tail -n 80 /tmp/steampipe-steam-start.log 2>/dev/null || true
+if [ -n "${{SWAYSOCK:-}}" ] && command -v swaymsg >/dev/null; then
+    echo "--- sway tree ---"
+    swaymsg -t get_tree 2>/dev/null || true
+fi
 exit 1
 "#
     )
@@ -1532,6 +1574,7 @@ mod tests {
         assert!(script.contains("wait_for_steam_ready"));
         assert!(script.contains("STALE_STEAM_RESTARTING"));
         assert!(script.contains("pkill -TERM -x steam"));
+        assert!(script.contains("swaymsg exec"));
         assert!(script.contains("Logged On.*processing complete"));
         assert!(script.contains("connection log tail"));
         assert!(
@@ -1568,8 +1611,11 @@ mod tests {
         let script = sway_setup("testuser");
         assert!(script.contains("sway"));
         assert!(script.contains("pkill -x weston"));
+        assert!(script.contains("WLR_BACKENDS=headless"));
         assert!(script.contains("WLR_LIBINPUT_NO_DEVICES=1"));
         assert!(script.contains("sway failed to start"));
+        assert!(script.contains("SWAYSOCK"));
+        assert!(script.contains("swaymsg -t get_outputs"));
         assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
@@ -1602,9 +1648,11 @@ mod tests {
     }
 
     #[test]
-    fn steam_compositor_setup_headless_uses_weston() {
+    fn steam_compositor_setup_headless_uses_sway() {
         let script = steam_compositor_setup(crate::cli::DisplayMode::Headless, "u");
-        assert!(script.contains("weston --backend=headless --no-config"));
+        assert!(script.contains("WLR_BACKENDS=headless"));
+        assert!(script.contains("sway"));
+        assert!(script.contains("SWAYSOCK"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
     }
 
@@ -1618,7 +1666,7 @@ mod tests {
     fn compositor_setup_sway() {
         let script = compositor_setup(crate::cli::DisplayMode::Sway, "u");
         assert!(script.contains("sway"));
-        assert!(!script.contains("WLR_BACKENDS"));
+        assert!(script.contains("WLR_BACKENDS=headless"));
     }
 
     #[test]
