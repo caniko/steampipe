@@ -15,9 +15,22 @@ pub fn weston_setup(vm_user: &str) -> String {
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
+chmod 700 $XDG_RUNTIME_DIR 2>/dev/null || true
+if pgrep -x sway >/dev/null; then
+    pkill -x sway 2>/dev/null || true
+    sleep 1
+fi
 if ! pgrep -x weston >/dev/null; then
-    weston --backend=headless --no-config >/dev/null 2>&1 &
+    rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayland-*.lock 2>/dev/null || true
+    nohup weston --backend=headless --no-config >"$XDG_RUNTIME_DIR/weston.log" 2>&1 &
     sleep 2
+fi
+if ! pgrep -x weston >/dev/null; then
+    echo "weston failed to start"
+    if [ -f "$XDG_RUNTIME_DIR/weston.log" ]; then
+        tail -n 80 "$XDG_RUNTIME_DIR/weston.log"
+    fi
+    exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
 "#
@@ -30,10 +43,24 @@ pub fn sway_setup(vm_user: &str) -> String {
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
+chmod 700 $XDG_RUNTIME_DIR 2>/dev/null || true
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
+if pgrep -x weston >/dev/null; then
+    pkill -x weston 2>/dev/null || true
+    sleep 1
+fi
 if ! pgrep -x sway >/dev/null; then
-    sway >/dev/null 2>&1 &
+    rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayland-*.lock 2>/dev/null || true
+    nohup env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_LIBINPUT_NO_DEVICES=1 \
+        sway >"$XDG_RUNTIME_DIR/sway.log" 2>&1 &
     sleep 2
+fi
+if ! pgrep -x sway >/dev/null; then
+    echo "sway failed to start"
+    if [ -f "$XDG_RUNTIME_DIR/sway.log" ]; then
+        tail -n 80 "$XDG_RUNTIME_DIR/sway.log"
+    fi
+    exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
 "#
@@ -51,9 +78,22 @@ pub fn weston_gpu_setup(vm_user: &str) -> String {
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
+chmod 700 $XDG_RUNTIME_DIR 2>/dev/null || true
+if pgrep -x sway >/dev/null; then
+    pkill -x sway 2>/dev/null || true
+    sleep 1
+fi
 if ! pgrep -x weston >/dev/null; then
-    weston --renderer=gl --no-config >/dev/null 2>&1 &
+    rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayland-*.lock 2>/dev/null || true
+    nohup weston --renderer=gl --no-config >"$XDG_RUNTIME_DIR/weston.log" 2>&1 &
     sleep 2
+fi
+if ! pgrep -x weston >/dev/null; then
+    echo "weston failed to start"
+    if [ -f "$XDG_RUNTIME_DIR/weston.log" ]; then
+        tail -n 80 "$XDG_RUNTIME_DIR/weston.log"
+    fi
+    exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
 "#
@@ -66,10 +106,24 @@ pub fn sway_gpu_setup(vm_user: &str) -> String {
         r#"
 export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p $XDG_RUNTIME_DIR
+chmod 700 $XDG_RUNTIME_DIR 2>/dev/null || true
 unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
+if pgrep -x weston >/dev/null; then
+    pkill -x weston 2>/dev/null || true
+    sleep 1
+fi
 if ! pgrep -x sway >/dev/null; then
-    WLR_BACKENDS=drm WLR_RENDERER=gles2 sway >/dev/null 2>&1 &
+    rm -f "$XDG_RUNTIME_DIR"/wayland-* "$XDG_RUNTIME_DIR"/wayland-*.lock 2>/dev/null || true
+    nohup env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WLR_BACKENDS=drm WLR_RENDERER=gles2 WLR_LIBINPUT_NO_DEVICES=1 \
+        sway >"$XDG_RUNTIME_DIR/sway.log" 2>&1 &
     sleep 2
+fi
+if ! pgrep -x sway >/dev/null; then
+    echo "sway failed to start"
+    if [ -f "$XDG_RUNTIME_DIR/sway.log" ]; then
+        tail -n 80 "$XDG_RUNTIME_DIR/sway.log"
+    fi
+    exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
 "#
@@ -1466,6 +1520,8 @@ mod tests {
             script.contains("--backend=headless"),
             "weston_setup must use headless backend"
         );
+        assert!(script.contains("pkill -x sway"));
+        assert!(script.contains("weston failed to start"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
@@ -1511,6 +1567,9 @@ mod tests {
     fn sway_setup_script() {
         let script = sway_setup("testuser");
         assert!(script.contains("sway"));
+        assert!(script.contains("pkill -x weston"));
+        assert!(script.contains("WLR_LIBINPUT_NO_DEVICES=1"));
+        assert!(script.contains("sway failed to start"));
         assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
@@ -1527,6 +1586,9 @@ mod tests {
             script.contains("WLR_RENDERER=gles2"),
             "sway_gpu_setup must use a GPU compositor renderer so Vulkan Wayland clients get present modes"
         );
+        assert!(script.contains("pkill -x weston"));
+        assert!(script.contains("WLR_LIBINPUT_NO_DEVICES=1"));
+        assert!(script.contains("sway failed to start"));
         assert!(script.contains("sway"));
         assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));

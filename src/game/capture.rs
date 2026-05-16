@@ -77,6 +77,20 @@ export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
 mkdir -p "$XDG_RUNTIME_DIR"
 chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null || true
 export WAYLAND_DISPLAY=wayland-1
+if ! pgrep -x sway >/dev/null; then
+    echo FAIL
+    echo "sway is not running; VNC capture requires a sway/sway-gpu session"
+    if pgrep -x weston >/dev/null; then
+        echo "weston is running instead"
+    fi
+    exit 1
+fi
+export SWAYSOCK="$(find "$XDG_RUNTIME_DIR" -maxdepth 1 -type s -name 'sway-ipc.*.sock' 2>/dev/null | head -n1)"
+if [ -z "$SWAYSOCK" ] || ! swaymsg -r -t get_outputs >/dev/null 2>&1; then
+    echo FAIL
+    echo "sway IPC is not ready"
+    exit 1
+fi
 current_wayvnc="$(pgrep -af '(^|/)wayvnc( |$)' || true)"
 if [ -n "$current_wayvnc" ]; then
     if printf '%s\n' "$current_wayvnc" | grep -q -- '--disable-input'; then
@@ -1149,6 +1163,8 @@ mod tests {
         let script = wayvnc_start_script("chessbender", false);
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-chessbender"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("VNC capture requires a sway/sway-gpu session"));
+        assert!(script.contains("swaymsg -r -t get_outputs"));
         assert!(script.contains("wayvnc --disable-input --log-level=info 0.0.0.0 5900"));
         assert!(script.contains("tail -n 40 \"$XDG_RUNTIME_DIR/wayvnc.log\""));
     }

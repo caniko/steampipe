@@ -504,9 +504,12 @@ pub enum Commands {
         /// Visual scene to validate (default: all configured scenes)
         #[arg(long)]
         scene: Option<String>,
+        /// Load validator defaults from a named test profile
+        #[arg(long)]
+        profile: Option<String>,
         /// Screenshot backend: grim or vnc
-        #[arg(long = "screenshot-backend", default_value = "grim")]
-        screenshot_backend: ScreenshotBackend,
+        #[arg(long = "screenshot-backend")]
+        screenshot_backend: Option<ScreenshotBackend>,
         /// Run the configured project visual validator for each screenshot
         #[arg(long)]
         validate: bool,
@@ -865,7 +868,32 @@ mod tests {
                 validate,
                 ..
             } => {
-                assert!(matches!(screenshot_backend, ScreenshotBackend::Vnc));
+                assert!(matches!(screenshot_backend, Some(ScreenshotBackend::Vnc)));
+                assert!(validate);
+            }
+            _ => panic!("expected Screenshot command"),
+        }
+    }
+
+    #[test]
+    fn screenshot_profile_flag() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "screenshot",
+            "--profile",
+            "uifull-1v1-lan",
+            "--validate",
+        ]);
+        match cli.command {
+            Commands::Screenshot {
+                profile,
+                screenshot_backend,
+                validate,
+                ..
+            } => {
+                assert_eq!(profile.as_deref(), Some("uifull-1v1-lan"));
+                assert!(screenshot_backend.is_none());
                 assert!(validate);
             }
             _ => panic!("expected Screenshot command"),

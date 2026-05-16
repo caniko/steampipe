@@ -965,6 +965,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Screenshot {
             output,
             scene,
+            profile,
             screenshot_backend,
             validate,
         } => {
@@ -972,11 +973,26 @@ async fn main() -> anyhow::Result<()> {
                 let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
                 project_root.join(format!("screenshots/{ts}"))
             });
+            let prof = profile
+                .as_deref()
+                .map(|name| {
+                    config::lookup_test_profile(&project_root, name).ok_or_else(|| {
+                        anyhow::anyhow!("test profile '{name}' not found in steampipe.toml")
+                    })
+                })
+                .transpose()?;
+            let screenshot_backend = screenshot_backend
+                .unwrap_or_else(|| resolve_screenshot_backend_from_profile(prof.as_ref()));
             let (validator, golden) = if validate {
-                match select_validator_plan(&project_root, None)? {
+                match select_validator_plan(&project_root, prof.as_ref())? {
                     ValidatorPlan::Shell(validator) => (Some(validator), None),
                     ValidatorPlan::Golden(visual) => (None, Some(visual)),
                     ValidatorPlan::None => {
+                        if let Some(name) = profile.as_deref() {
+                            anyhow::bail!(
+                                "test profile '{name}' does not define a visual validator"
+                            );
+                        }
                         let project_config = config::load_project_config(&project_root)
                             .ok_or_else(|| anyhow::anyhow!("--validate requires steampipe.toml"))?;
                         (Some(select_visual_validator(project_config)?), None)
