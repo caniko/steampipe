@@ -98,8 +98,13 @@ if [ -n "$current_wayvnc" ]; then
     else
         current_input_mode="enabled"
     fi
+    if printf '%s\n' "$current_wayvnc" | grep -q -- '--disable-resizing'; then
+        current_resizing_mode="disabled"
+    else
+        current_resizing_mode="enabled"
+    fi
     desired_input_mode="{desired_input_mode}"
-    if [ "$current_input_mode" != "$desired_input_mode" ]; then
+    if [ "$current_input_mode" != "$desired_input_mode" ] || [ "$current_resizing_mode" != "disabled" ]; then
         pkill -x wayvnc 2>/dev/null || true
         sleep 1
     fi
@@ -107,7 +112,7 @@ fi
 if ! pgrep -x wayvnc >/dev/null; then
     rm -f "$XDG_RUNTIME_DIR/wayvnc.log"
     nohup env XDG_RUNTIME_DIR="$XDG_RUNTIME_DIR" WAYLAND_DISPLAY="$WAYLAND_DISPLAY" \
-        wayvnc {disable_flag}--log-level=info 0.0.0.0 5900 >"$XDG_RUNTIME_DIR/wayvnc.log" 2>&1 &
+        wayvnc {disable_flag}--disable-resizing --log-level=info 0.0.0.0 5900 >"$XDG_RUNTIME_DIR/wayvnc.log" 2>&1 &
     sleep 2
 fi
 if pgrep -x wayvnc >/dev/null; then
@@ -1165,7 +1170,10 @@ mod tests {
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
         assert!(script.contains("VNC capture requires a sway/sway-gpu session"));
         assert!(script.contains("swaymsg -r -t get_outputs"));
-        assert!(script.contains("wayvnc --disable-input --log-level=info 0.0.0.0 5900"));
+        assert!(script.contains("current_resizing_mode"));
+        assert!(script.contains(
+            "wayvnc --disable-input --disable-resizing --log-level=info 0.0.0.0 5900"
+        ));
         assert!(script.contains("tail -n 40 \"$XDG_RUNTIME_DIR/wayvnc.log\""));
     }
 
