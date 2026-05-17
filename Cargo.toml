@@ -11,9 +11,12 @@ rust-version = "1.87"
 default = []
 fixture-tools = []
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "cluster-ctl"
-path = "src/main.rs"
+path = "src/bin/cluster-ctl.rs"
 
 [dependencies]
 anyhow = "1"

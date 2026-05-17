@@ -1,16 +1,15 @@
-mod core;
+pub mod core;
 #[cfg(feature = "fixture-tools")]
-mod fixture;
-mod game;
-mod harness;
-mod mcp;
-mod net;
-mod ui;
-mod vm;
+pub mod fixture;
+pub mod game;
+pub mod harness;
+pub mod mcp;
+pub mod net;
+pub mod ui;
+pub mod vm;
 
 use std::path::PathBuf;
 
-use clap::Parser;
 use core::config::{self, BackendKind, ClusterConfig, VisualConfig, detect_project_root};
 use core::credentials;
 use core::state;
@@ -18,13 +17,15 @@ use game::{accounts, capture, compositor, run, steam};
 use harness::{bisect, history, output::OutputFormat, runner as test};
 use net::{bridge, deploy, netem};
 use ui::cli::{
-    self, CaptureMode, Cli, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend,
+    self, CaptureMode, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend,
     SteamAction, VisualAction,
 };
 #[cfg(feature = "fixture-tools")]
 use ui::cli::{FixtureAction, FixtureGoldenAction};
 use ui::{logs, watch};
 use vm::{lifecycle, preflight, snapshot, status};
+
+pub use ui::cli::Cli;
 
 /// Resolve the env-var table passed to both peers for this test run.
 ///
@@ -433,10 +434,14 @@ macro_rules! resolve {
     };
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
+pub fn run(cli: Cli) -> anyhow::Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run_async(cli))
+}
 
+async fn run_async(cli: Cli) -> anyhow::Result<()> {
     // Commands that don't need project root or config
     if matches!(&cli.command, Commands::Mcp) {
         return mcp::serve().await;
