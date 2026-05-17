@@ -315,7 +315,7 @@ pub async fn start<S>(
     Ok(())
 }
 
-/// Run the `steam-check` subcommand: boot each instance, verify Steam login + health.
+/// Run the `steam check` subcommand: boot each instance, verify Steam login + health.
 /// Requires `BridgeReady` — starts and stops instances, which needs the bridge.
 pub async fn check(
     config: &ClusterConfig<BridgeReady>,
@@ -386,7 +386,7 @@ pub async fn check(
     if !failed.is_empty() {
         println!("  FAILED: {}", failed.join(" "));
         println!();
-        println!("  To fix 'not-logged-in': run 'nix run .#cluster-steam-login'");
+        println!("  To fix 'not-logged-in': run `nix run .#cluster-steam-login` (or `cluster-ctl steam login`)");
         anyhow::bail!("Some VMs failed checks");
     } else {
         println!("  All VMs ready for testing");
@@ -423,7 +423,7 @@ fn parse_steam_identity(output: &str) -> (Option<String>, bool) {
     }
 }
 
-/// Run the `steam-login` subcommand: interactive per-instance Steam login wizard.
+/// Run the `steam login` subcommand: interactive per-instance Steam login wizard.
 /// Requires `BridgeReady` — boots instances to perform login.
 pub async fn login(
     config: &ClusterConfig<BridgeReady>,
@@ -458,7 +458,7 @@ pub async fn guard<S>(
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(Some(target), false)?;
     if targets.len() != 1 {
-        anyhow::bail!("steam-guard requires exactly one target VM");
+        anyhow::bail!("`steam guard` requires exactly one target VM");
     }
     let vm = &targets[0];
     let Some(vm_creds) = creds.and_then(|c| c.get::<str>(&vm.name)) else {
@@ -603,7 +603,7 @@ async fn login_single_vm(
 
     if outcome == LoginOutcome::LeftRunning {
         println!("  {} left running for Steam login completion.", vm.name);
-        println!("  After completing Steam login, validate with `cluster-ctl accounts`.");
+        println!("  After completing Steam login, validate with `cluster-ctl steam accounts`.");
         println!("  Stop the login VM with `cluster-ctl down` when you are done.");
         return Ok(());
     }
@@ -676,7 +676,7 @@ pub async fn auto_login<S>(
                 Ok(LoginOutcome::Completed) => (vm.name, Some(true)),
                 Ok(LoginOutcome::LeftRunning) => {
                     eprintln!(
-                        "  {}: Steam Guard required; finish with steam-guard",
+                        "  {}: Steam Guard required; finish with `steam guard`",
                         vm.name
                     );
                     (vm.name, Some(false))
@@ -747,7 +747,7 @@ async fn automated_login(
     if wait == SteamCmdWait::GuardRequired {
         println!("  Steam Guard required for {}.", creds.steam_user);
         println!(
-            "  Complete from another shell with: cluster-ctl steam-guard {} --code <CODE>",
+            "  Complete from another shell with: cluster-ctl steam guard {} --code <CODE>",
             vm.name
         );
         println!(
@@ -875,7 +875,7 @@ for i in $(seq 1 300); do
     fi
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
         echo STEAMCMD_SESSION_ENDED_WITHOUT_STATUS
-        echo "SteamCMD has no running login session and no successful status; rerun steam-login to start a new login."
+        echo "SteamCMD has no running login session and no successful status; rerun \`steam login\` to start a new login."
         echo "--- steamcmd log tail ---"
         tail -n 80 "$LOG" 2>/dev/null || true
         exit 1
@@ -935,7 +935,7 @@ for i in $(seq 1 300); do
     fi
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
         echo STEAMCMD_SESSION_ENDED_WITHOUT_STATUS
-        echo "SteamCMD has no running login session and no successful status; rerun steam-login to start a new login."
+        echo "SteamCMD has no running login session and no successful status; rerun \`steam login\` to start a new login."
         echo "--- steamcmd log tail ---"
         tail -n 80 "$LOG" 2>/dev/null || true
         exit 1
@@ -1203,7 +1203,7 @@ async fn interactive_login(
         let Some(input) = read_stdin_line(&mut stdin)? else {
             println!("  stdin is nonblocking; leaving the VM running for manual VNC login.");
             println!(
-                "  VNC into {}:5900, complete Steam login, then run `cluster-ctl accounts`.",
+                "  VNC into {}:5900, complete Steam login, then run `cluster-ctl steam accounts`.",
                 vm.ip
             );
             println!("  Stop the login VM with `cluster-ctl down` when finished.");
@@ -1217,7 +1217,7 @@ async fn interactive_login(
             println!("  Paste text (will be typed into focused VM window):");
             let Some(text) = read_stdin_line(&mut stdin)? else {
                 println!("  stdin is nonblocking; paste was not sent.");
-                println!("  Continue in VNC, then run `cluster-ctl accounts` to validate.");
+                println!("  Continue in VNC, then run `cluster-ctl steam accounts` to validate.");
                 return Ok(LoginOutcome::LeftRunning);
             };
             let text = text.trim_end_matches('\n');

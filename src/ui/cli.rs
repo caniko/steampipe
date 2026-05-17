@@ -190,37 +190,10 @@ pub enum Commands {
         verify: bool,
     },
 
-    /// Interactive Steam login wizard (one VM at a time with VNC)
-    SteamLogin {
-        /// Target VM: "all", "3", "vm-3"
-        target: Option<String>,
-        /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
-        #[arg(short = '+', long)]
-        continue_from: bool,
-        /// Path to directory containing 4GB login VM runners (required for microvm backend)
-        #[arg(long)]
-        login_runners_dir: Option<PathBuf>,
-    },
-
-    /// Submit Steam Guard code to a running SteamCMD login VM
-    SteamGuard {
-        /// Target VM: "3" or "vm-3"
-        target: String,
-        /// Steam Guard code. If omitted, read one line from stdin.
-        #[arg(long)]
-        code: Option<String>,
-    },
-
-    /// Check Steam login + health on VMs (boots each VM to verify)
-    SteamCheck {
-        /// Target VM: "all", "3", "vm-3"
-        target: Option<String>,
-        /// Path to directory containing VM runners (required for microvm backend)
-        #[arg(long)]
-        runners_dir: Option<PathBuf>,
-        /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
-        #[arg(long, default_value = "sway")]
-        display: DisplayMode,
+    /// Steam-related operations (login, guard, check, start, accounts, clean-logins)
+    Steam {
+        #[command(subcommand)]
+        action: SteamAction,
     },
 
     /// Verify in-VM GPU, Vulkan, and Wayland readiness
@@ -233,15 +206,6 @@ pub enum Commands {
         /// Emit machine-readable JSON
         #[arg(long)]
         json: bool,
-    },
-
-    /// Start compositor + Steam on VMs
-    SteamStart {
-        /// Target VM: "all", "3", "vm-3"
-        target: Option<String>,
-        /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
-        #[arg(long, default_value = "sway")]
-        display: DisplayMode,
     },
 
     /// Start compositor + Steam + game on all VMs
@@ -521,18 +485,6 @@ pub enum Commands {
         action: VisualAction,
     },
 
-    /// Show Steam account status across all VMs
-    Accounts,
-
-    /// Remove persisted Steam login state (from loginStateDir)
-    CleanLogins {
-        /// Target VM: "all", "3", "vm-3" (default: all)
-        target: Option<String>,
-        /// Login state directory (default: /var/lib/steampipe/logins)
-        #[arg(long)]
-        login_state_dir: Option<PathBuf>,
-    },
-
     /// Live TUI dashboard showing VM status
     Watch {
         /// Refresh interval in seconds
@@ -577,13 +529,77 @@ pub enum Commands {
 impl Commands {
     /// Whether this command requires the global `--vm-count` flag.
     ///
-    /// `steam-guard` targets exactly one VM by name; `netem` either targets
+    /// `steam guard` targets exactly one VM by name; `netem` either targets
     /// one named VM or fans out across the already-leased set. Both derive
     /// their operational VM set from the cluster's lease state, so the user
     /// shouldn't have to repeat the pool size on the command line.
     pub fn needs_vm_count(&self) -> bool {
-        !matches!(self, Self::SteamGuard { .. } | Self::Netem { .. })
+        !matches!(
+            self,
+            Self::Steam {
+                action: SteamAction::Guard { .. }
+            } | Self::Netem { .. }
+        )
     }
+}
+
+/// Steam-related subcommands. Grouped under `cluster-ctl steam` to keep the
+/// top-level CLI focused.
+#[derive(Subcommand)]
+pub enum SteamAction {
+    /// Interactive Steam login wizard (one VM at a time with VNC)
+    Login {
+        /// Target VM: "all", "3", "vm-3"
+        target: Option<String>,
+        /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
+        #[arg(short = '+', long)]
+        continue_from: bool,
+        /// Path to directory containing 4GB login VM runners (required for microvm backend)
+        #[arg(long)]
+        login_runners_dir: Option<PathBuf>,
+    },
+
+    /// Submit Steam Guard code to a running SteamCMD login VM
+    Guard {
+        /// Target VM: "3" or "vm-3"
+        target: String,
+        /// Steam Guard code. If omitted, read one line from stdin.
+        #[arg(long)]
+        code: Option<String>,
+    },
+
+    /// Check Steam login + health on VMs (boots each VM to verify)
+    Check {
+        /// Target VM: "all", "3", "vm-3"
+        target: Option<String>,
+        /// Path to directory containing VM runners (required for microvm backend)
+        #[arg(long)]
+        runners_dir: Option<PathBuf>,
+        /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "sway")]
+        display: DisplayMode,
+    },
+
+    /// Start compositor + Steam on VMs
+    Start {
+        /// Target VM: "all", "3", "vm-3"
+        target: Option<String>,
+        /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
+        #[arg(long, default_value = "sway")]
+        display: DisplayMode,
+    },
+
+    /// Show Steam account status across all VMs
+    Accounts,
+
+    /// Remove persisted Steam login state (from loginStateDir)
+    CleanLogins {
+        /// Target VM: "all", "3", "vm-3" (default: all)
+        target: Option<String>,
+        /// Login state directory (default: /var/lib/steampipe/logins)
+        #[arg(long)]
+        login_state_dir: Option<PathBuf>,
+    },
 }
 
 /// Fixture-only maintenance command groups.
@@ -792,7 +808,8 @@ mod tests {
         let cli = parse(&[
             "--vm-count",
             "7",
-            "steam-login",
+            "steam",
+            "login",
             "vm-1",
             "--credentials",
             "/etc/steampipe/credentials.toml",
@@ -802,37 +819,43 @@ mod tests {
             Some(std::path::Path::new("/etc/steampipe/credentials.toml"))
         );
         match cli.command {
-            Commands::SteamLogin {
-                target,
-                continue_from,
-                login_runners_dir,
+            Commands::Steam {
+                action:
+                    SteamAction::Login {
+                        target,
+                        continue_from,
+                        login_runners_dir,
+                    },
             } => {
                 assert_eq!(target.as_deref(), Some("vm-1"));
                 assert!(!continue_from);
                 assert!(login_runners_dir.is_none());
             }
-            _ => panic!("expected SteamLogin command"),
+            _ => panic!("expected Steam login command"),
         }
     }
 
     #[test]
     fn steam_guard_accepts_target_and_code() {
-        let cli = parse(&["steam-guard", "vm-1", "--code", "ABCDE"]);
+        let cli = parse(&["steam", "guard", "vm-1", "--code", "ABCDE"]);
         assert!(cli.vm_count.is_none());
         assert!(!cli.command.needs_vm_count());
         match cli.command {
-            Commands::SteamGuard { target, code } => {
+            Commands::Steam {
+                action: SteamAction::Guard { target, code },
+            } => {
                 assert_eq!(target, "vm-1");
                 assert_eq!(code.as_deref(), Some("ABCDE"));
             }
-            _ => panic!("expected SteamGuard command"),
+            _ => panic!("expected Steam guard command"),
         }
     }
 
     #[test]
     fn steam_guard_accepts_global_credentials_after_subcommand() {
         let cli = parse(&[
-            "steam-guard",
+            "steam",
+            "guard",
             "vm-1",
             "--credentials",
             "/etc/steampipe/credentials.toml",
@@ -844,11 +867,13 @@ mod tests {
             Some(std::path::Path::new("/etc/steampipe/credentials.toml"))
         );
         match cli.command {
-            Commands::SteamGuard { target, code } => {
+            Commands::Steam {
+                action: SteamAction::Guard { target, code },
+            } => {
                 assert_eq!(target, "vm-1");
                 assert_eq!(code.as_deref(), Some("ABCDE"));
             }
-            _ => panic!("expected SteamGuard command"),
+            _ => panic!("expected Steam guard command"),
         }
     }
 
@@ -1005,51 +1030,73 @@ mod tests {
         }
     }
 
-    // ── SteamStart display mode ─────────────────────────────────────────
+    // ── Steam start display mode ────────────────────────────────────────
 
     #[test]
     fn steam_start_display_default_is_sway() {
-        let cli = parse(&["--vm-count", "7", "steam-start"]);
+        let cli = parse(&["--vm-count", "7", "steam", "start"]);
         match cli.command {
-            Commands::SteamStart { display, .. } => {
+            Commands::Steam {
+                action: SteamAction::Start { display, .. },
+            } => {
                 assert!(matches!(display, DisplayMode::Sway));
             }
-            _ => panic!("expected SteamStart"),
+            _ => panic!("expected Steam start"),
         }
     }
 
     #[test]
     fn steam_start_display_weston_gpu() {
-        let cli = parse(&["--vm-count", "7", "steam-start", "--display", "weston-gpu"]);
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam",
+            "start",
+            "--display",
+            "weston-gpu",
+        ]);
         match cli.command {
-            Commands::SteamStart { display, .. } => {
+            Commands::Steam {
+                action: SteamAction::Start { display, .. },
+            } => {
                 assert!(matches!(display, DisplayMode::WestonGpu));
             }
-            _ => panic!("expected SteamStart"),
+            _ => panic!("expected Steam start"),
         }
     }
 
-    // ── SteamCheck display mode ─────────────────────────────────────────
+    // ── Steam check display mode ────────────────────────────────────────
 
     #[test]
     fn steam_check_display_default_is_sway() {
-        let cli = parse(&["--vm-count", "7", "steam-check"]);
+        let cli = parse(&["--vm-count", "7", "steam", "check"]);
         match cli.command {
-            Commands::SteamCheck { display, .. } => {
+            Commands::Steam {
+                action: SteamAction::Check { display, .. },
+            } => {
                 assert!(matches!(display, DisplayMode::Sway));
             }
-            _ => panic!("expected SteamCheck"),
+            _ => panic!("expected Steam check"),
         }
     }
 
     #[test]
     fn steam_check_display_sway_gpu() {
-        let cli = parse(&["--vm-count", "7", "steam-check", "--display", "sway-gpu"]);
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam",
+            "check",
+            "--display",
+            "sway-gpu",
+        ]);
         match cli.command {
-            Commands::SteamCheck { display, .. } => {
+            Commands::Steam {
+                action: SteamAction::Check { display, .. },
+            } => {
                 assert!(matches!(display, DisplayMode::SwayGpu));
             }
-            _ => panic!("expected SteamCheck"),
+            _ => panic!("expected Steam check"),
         }
     }
 
@@ -1854,7 +1901,7 @@ mod tests {
 
     #[test]
     fn needs_vm_count_waives_only_steam_guard_and_netem() {
-        assert!(!parse(&["steam-guard", "vm-1", "--code", "X"])
+        assert!(!parse(&["steam", "guard", "vm-1", "--code", "X"])
             .command
             .needs_vm_count());
         assert!(!parse(&["netem", "vm-1", "--latency", "50"])
@@ -1870,6 +1917,13 @@ mod tests {
             .command
             .needs_vm_count());
         assert!(parse(&["--vm-count", "7", "down"])
+            .command
+            .needs_vm_count());
+        // `steam login` and `steam check` still need vm-count (they fan out)
+        assert!(parse(&["--vm-count", "7", "steam", "login"])
+            .command
+            .needs_vm_count());
+        assert!(parse(&["--vm-count", "7", "steam", "check"])
             .command
             .needs_vm_count());
     }

@@ -48,7 +48,7 @@ scenes deterministically. wayvnc supports input today
 disables it with `--disable-input` — Phase F re-enables it under
 controlled conditions); `wtype` is already shipped in the VM image
 ([nix/cluster-vm-base.nix:120](../../../../nix/cluster-vm-base.nix#L120))
-but only used by the interactive `steam-login` flow.
+but only used by the interactive `steam login` flow.
 
 This phase also makes Phase G's timelapse meaningful: the harness
 can capture at deterministic scene transitions instead of arbitrary
@@ -221,7 +221,7 @@ wall-clock intervals, producing comparable timelines across runs.
   "Scene scripting."
 - Existing wtype usage:
   [src/game/capture.rs](../../../../src/game/capture.rs) (no actual
-  scripted usage today; interactive only in steam-login path).
+  scripted usage today; interactive only in `steam login` path).
 - Phase B's readiness primitives:
   [02-compositor-readiness.md](./02-compositor-readiness.md).
 - Phase D's scene schema base:

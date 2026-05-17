@@ -19,7 +19,7 @@ use harness::{bisect, history, output::OutputFormat, runner as test};
 use net::{bridge, deploy, netem};
 use ui::cli::{
     self, CaptureMode, Cli, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend,
-    VisualAction,
+    SteamAction, VisualAction,
 };
 #[cfg(feature = "fixture-tools")]
 use ui::cli::{FixtureAction, FixtureGoldenAction};
@@ -209,7 +209,9 @@ fn command_requires_claimed_vms(command: &Commands) -> bool {
             | Commands::CompositorStatus
             | Commands::Deploy { .. }
             | Commands::Logs { .. }
-            | Commands::SteamStart { .. }
+            | Commands::Steam {
+                action: SteamAction::Start { .. } | SteamAction::Accounts,
+            }
             | Commands::Run { .. }
             | Commands::StopGame { .. }
             | Commands::Test { .. }
@@ -222,7 +224,6 @@ fn command_requires_claimed_vms(command: &Commands) -> bool {
             | Commands::SnapshotList
             | Commands::SnapshotDelete { .. }
             | Commands::Screenshot { .. }
-            | Commands::Accounts
             | Commands::Visual {
                 action: VisualAction::Capture { .. }
                     | VisualAction::Record { .. }
@@ -580,7 +581,11 @@ async fn main() -> anyhow::Result<()> {
             | Commands::NetDown { .. }
             | Commands::Deploy { .. }
             | Commands::Logs { .. }
-            | Commands::SteamStart { .. }
+            | Commands::Steam {
+                action: SteamAction::Start { .. }
+                    | SteamAction::Accounts
+                    | SteamAction::CleanLogins { .. },
+            }
             | Commands::Run { .. }
             | Commands::StopGame { .. }
             | Commands::Test { .. }
@@ -593,14 +598,12 @@ async fn main() -> anyhow::Result<()> {
             | Commands::SnapshotList
             | Commands::SnapshotDelete { .. }
             | Commands::Screenshot { .. }
-            | Commands::Accounts
             | Commands::Visual {
                 action: VisualAction::Capture { .. }
                     | VisualAction::Record { .. }
                     | VisualAction::Report { .. },
             }
             | Commands::Watch { .. }
-            | Commands::CleanLogins { .. }
     ) {
         config = config.with_vm_ids(&claimed_vm_ids)?;
         if command_requires_claimed_vms(&cli.command) && config.vms.is_empty() {
@@ -642,16 +645,51 @@ async fn main() -> anyhow::Result<()> {
             let validated = config.validate_or_skip_bridge()?;
             lifecycle::restart(&validated, target.as_deref(), &runners_dir).await?;
         }
-        Commands::SteamCheck {
-            target,
-            runners_dir,
-            display,
-        } => {
-            let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-            bridge::ensure_bridge(&config, &project_root)?;
-            let validated = config.validate_or_skip_bridge()?;
-            steam::check(&validated, target.as_deref(), &runners_dir, display).await?;
-        }
+        Commands::Steam { action } => match action {
+            SteamAction::Check {
+                target,
+                runners_dir,
+                display,
+            } => {
+                let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+                bridge::ensure_bridge(&config, &project_root)?;
+                let validated = config.validate_or_skip_bridge()?;
+                steam::check(&validated, target.as_deref(), &runners_dir, display).await?;
+            }
+            SteamAction::Login {
+                target,
+                continue_from,
+                login_runners_dir,
+            } => {
+                let login_runners_dir =
+                    require_runners_dir(login_runners_dir, config.backend_kind)?;
+                bridge::ensure_bridge(&config, &project_root)?;
+                let validated = config.validate_or_skip_bridge()?;
+                steam::login(
+                    &validated,
+                    target.as_deref(),
+                    continue_from,
+                    &login_runners_dir,
+                    creds.as_ref(),
+                )
+                .await?;
+            }
+            SteamAction::Guard { target, code } => {
+                bridge::ensure_bridge(&config, &project_root)?;
+                let validated = config.validate_or_skip_bridge()?;
+                steam::guard(&validated, target.as_str(), code.as_deref(), creds.as_ref()).await?;
+            }
+            SteamAction::Start { target, display } => {
+                steam::start(&config, target.as_deref(), display).await?;
+            }
+            SteamAction::Accounts => accounts::show(&config).await?,
+            SteamAction::CleanLogins {
+                target,
+                login_state_dir,
+            } => {
+                steam::clean_logins(&config.vms, login_state_dir.as_deref(), target.as_deref())?;
+            }
+        },
         Commands::GpuPreflight {
             target,
             runners_dir,
@@ -670,29 +708,6 @@ async fn main() -> anyhow::Result<()> {
                 preflight::gpu_preflight(&config, target.as_deref(), json).await?;
             }
         }
-        Commands::SteamLogin {
-            target,
-            continue_from,
-            login_runners_dir,
-        } => {
-            let login_runners_dir = require_runners_dir(login_runners_dir, config.backend_kind)?;
-            bridge::ensure_bridge(&config, &project_root)?;
-            let validated = config.validate_or_skip_bridge()?;
-            steam::login(
-                &validated,
-                target.as_deref(),
-                continue_from,
-                &login_runners_dir,
-                creds.as_ref(),
-            )
-            .await?;
-        }
-        Commands::SteamGuard { target, code } => {
-            bridge::ensure_bridge(&config, &project_root)?;
-            let validated = config.validate_or_skip_bridge()?;
-            steam::guard(&validated, target.as_str(), code.as_deref(), creds.as_ref()).await?;
-        }
-
         // Commands that work on any config state
         Commands::Status => status::run(&config).await?,
         Commands::CompositorStatus => compositor::status_all(&config).await?,
@@ -720,9 +735,6 @@ async fn main() -> anyhow::Result<()> {
                 let n = lines.unwrap_or(100);
                 logs::print_stdout(&config, target.as_deref(), n, head, pattern.as_deref()).await?;
             }
-        }
-        Commands::SteamStart { target, display } => {
-            steam::start(&config, target.as_deref(), display).await?;
         }
         Commands::Run {
             display,
@@ -1060,7 +1072,6 @@ async fn main() -> anyhow::Result<()> {
             };
             capture::screenshot_all(&config, &output_dir, &options).await?;
         }
-        Commands::Accounts => accounts::show(&config).await?,
         Commands::Visual { action } => match action {
             VisualAction::List => unreachable!(),
             VisualAction::Capture { scene, vm, output } => {
@@ -1097,12 +1108,6 @@ async fn main() -> anyhow::Result<()> {
                 println!("{}", index.display());
             }
         },
-        Commands::CleanLogins {
-            target,
-            login_state_dir,
-        } => {
-            steam::clean_logins(&config.vms, login_state_dir.as_deref(), target.as_deref())?;
-        }
         Commands::Watch { interval } => watch::run(&config, interval).await?,
         Commands::Doctor { fix } => preflight::doctor(&config, fix).await?,
         Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } | Commands::Mcp => {

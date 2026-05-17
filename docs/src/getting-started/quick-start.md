@@ -50,11 +50,11 @@ Each VM boots and `cluster-ctl` waits for SSH to become reachable.
 
 ```bash
 # Interactive mode - VNC into each VM to complete login + Steam Guard
-cluster-ctl --vm-count 7 steam-login --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
 
 # Or automated mode with a credentials file
 cluster-ctl --vm-count 7 --credentials secrets/steam-creds.toml \
-  steam-login --login-runners-dir ./result-login
+  steam login --login-runners-dir ./result-login
 ```
 
 ## 5. Deploy and test

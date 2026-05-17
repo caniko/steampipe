@@ -64,7 +64,7 @@ pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
         let missing = total - logged_in;
         println!("  {logged_in}/{total} VMs logged in ({missing} need login)");
         if missing > 0 {
-            println!("  Run `cluster-ctl steam-login` to log in missing VMs");
+            println!("  Run `cluster-ctl steam login` to log in missing VMs");
         }
     }
 

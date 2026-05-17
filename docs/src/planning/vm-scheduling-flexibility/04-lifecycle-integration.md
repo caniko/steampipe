@@ -87,8 +87,8 @@ empty placeholder.
 3. **The full command list to sweep** (cross-check against
    [README.md:908-969](../../../../README.md#L908-L969)):
    `status`, `up`, `down`, `restart`, `deploy`, `run`,
-   `stop-game`, `steam-login`, `steam-check`, `steam-start`,
-   `steam-guard`, `accounts`, `clean-logins`, `test`,
+   `stop-game`, `steam login`, `steam check`, `steam start`,
+   `steam guard`, `steam accounts`, `steam clean-logins`, `test`,
    `bisect`, `history`, `logs`, `watch`, `screenshot`,
    `netem`, `netem-show`, `netem-reset`, `snapshot-save`,
    `snapshot-restore`, `snapshot-list`, `snapshot-delete`,

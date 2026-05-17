@@ -461,8 +461,8 @@ in
       (mkAllFlavorScripts "1v1" 1 2)
       // {
         "cluster-1v1-steam-test" = mkSteamTestWrapper "1v1-steam-test" 1 "1v1" 2;
-        "cluster-1v1-steam-login" = mkSteamLoginWrapper "1v1-steam-login" 1 "--cluster 1v1 steam-login --login-runners-dir ${loginVMRunnersDir}";
-        "cluster-1v1-steam-guard" = mkSteamLoginWrapper "1v1-steam-guard" 1 "--cluster 1v1 steam-guard";
+        "cluster-1v1-steam-login" = mkSteamLoginWrapper "1v1-steam-login" 1 "--cluster 1v1 steam login --login-runners-dir ${loginVMRunnersDir}";
+        "cluster-1v1-steam-guard" = mkSteamLoginWrapper "1v1-steam-guard" 1 "--cluster 1v1 steam guard";
         "cluster-1v1-test-wayland" = cluster1v1WaylandTest;
       }
       // (mkAllFlavorScripts "tournament" vmCount 8)
@@ -477,7 +477,7 @@ in
         cluster-logs = mkWrapper "logs" vmCount "logs";
         cluster-logs-follow = mkWrapper "logs-follow" vmCount "logs --follow";
         cluster-history = mkWrapper "history" vmCount "history";
-        cluster-accounts = mkWrapper "accounts" vmCount "accounts";
+        cluster-accounts = mkWrapper "accounts" vmCount "steam accounts";
         cluster-screenshot = mkWrapper "screenshot" vmCount "screenshot";
         cluster-deploy = mkWrapper "deploy" vmCount "deploy";
         cluster-deploy-verify = mkWrapper "deploy-verify" vmCount "deploy --verify";
@@ -487,17 +487,17 @@ in
       }
       # -- Steam management (full cluster) --
       // {
-        cluster-steam-start = mkWrapper "steam-start" vmCount "steam-start";
-        cluster-steam-check = mkWrapper "steam-check" vmCount "steam-check --runners-dir ${vmRunnersDir}";
-        cluster-steam-login = mkSteamLoginWrapper "steam-login" vmCount "steam-login --login-runners-dir ${loginVMRunnersDir}";
-        cluster-steam-guard = mkSteamLoginWrapper "steam-guard" vmCount "steam-guard";
+        cluster-steam-start = mkWrapper "steam-start" vmCount "steam start";
+        cluster-steam-check = mkWrapper "steam-check" vmCount "steam check --runners-dir ${vmRunnersDir}";
+        cluster-steam-login = mkSteamLoginWrapper "steam-login" vmCount "steam login --login-runners-dir ${loginVMRunnersDir}";
+        cluster-steam-guard = mkSteamLoginWrapper "steam-guard" vmCount "steam guard";
       }
       # System-level login persist: boots login VMs with virtiofs-mounted loginStateDir,
       # logs in, and Steam writes session files directly to host.
       // lib.optionalAttrs nixosIntegration {
         cluster-steam-login-persist =
           mkWrapper "steam-login-persist" vmCount
-          "--credentials ${nixosCredentials} steam-login --login-runners-dir ${loginVMRunnersDir}";
+          "--credentials ${nixosCredentials} steam login --login-runners-dir ${loginVMRunnersDir}";
       }
       # -- Network simulation (full cluster, requires sudo) --
       // {

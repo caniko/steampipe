@@ -178,11 +178,11 @@ Each VM boots and `cluster-ctl` waits for SSH to become reachable.
 
 ```bash
 # Interactive mode — VNC into each VM to complete login + Steam Guard
-cluster-ctl --vm-count 7 steam-login --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
 
 # Or automated mode with a credentials file
 cluster-ctl --vm-count 7 --credentials secrets/steam-creds.toml \
-  steam-login --login-runners-dir ./result-login
+  steam login --login-runners-dir ./result-login
 ```
 
 The credentials file format:
@@ -204,7 +204,7 @@ decrypt with `rage`/`age` via ssh-agent automatically.
 ### 5. Verify Steam sessions
 
 ```bash
-cluster-ctl --vm-count 7 steam-check --runners-dir ./result
+cluster-ctl --vm-count 7 steam check --runners-dir ./result
 ```
 
 Boots each VM, verifies the Steam login is valid and Steam doesn't crash.
@@ -390,7 +390,7 @@ two methods.
 ### Interactive login (VNC)
 
 ```bash
-cluster-ctl --vm-count 7 steam-login --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
 ```
 
 For each VM:
@@ -408,10 +408,10 @@ You can target specific VMs or continue from a starting point:
 
 ```bash
 # Login only vm-3
-cluster-ctl --vm-count 7 steam-login vm-3 --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login vm-3 --login-runners-dir ./result-login
 
 # Login vm-3 through vm-7
-cluster-ctl --vm-count 7 steam-login -+ vm-3 --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login -+ vm-3 --login-runners-dir ./result-login
 ```
 
 ### Automated login (credentials file)
@@ -419,7 +419,7 @@ cluster-ctl --vm-count 7 steam-login -+ vm-3 --login-runners-dir ./result-login
 ```bash
 cluster-ctl --vm-count 7 \
   --credentials secrets/steam-creds.toml \
-  steam-login --login-runners-dir ./result-login
+  steam login --login-runners-dir ./result-login
 ```
 
 Runs `steam -login <user> <pass>` on each VM and waits for the connection log
@@ -432,7 +432,7 @@ to confirm success. Also activates game keys if provided.
 ### Checking Steam health
 
 ```bash
-cluster-ctl --vm-count 7 steam-check --runners-dir ./result
+cluster-ctl --vm-count 7 steam check --runners-dir ./result
 ```
 
 Boots each VM one at a time, verifies:
@@ -442,7 +442,7 @@ Boots each VM one at a time, verifies:
 ### Viewing account status
 
 ```bash
-cluster-ctl --vm-count 7 accounts
+cluster-ctl --vm-count 7 steam accounts
 ```
 
 ```
@@ -453,7 +453,7 @@ vm-2     OK     player_two           76561198000000002
 vm-3     ─      ─                    ─
 
   2/3 VMs logged in (1 need login)
-  Run `cluster-ctl steam-login` to log in missing VMs
+  Run `cluster-ctl steam login` to log in missing VMs
 ```
 
 Also warns about duplicate accounts.
@@ -515,7 +515,7 @@ cluster-ctl --vm-count 7 stop-game
 ### Start only Steam (without the game)
 
 ```bash
-cluster-ctl --vm-count 7 steam-start
+cluster-ctl --vm-count 7 steam start
 ```
 
 ---
@@ -943,11 +943,13 @@ Networking:
 Deployment:
   deploy [--no-build] [--verify]  Build and deploy to VMs
 
-Steam:
-  steam-login [TARGET] --login-runners-dir <DIR>  Interactive login
-  steam-check [TARGET] --runners-dir <DIR>        Verify logins
-  steam-start [TARGET]     Start sway + Steam (--display weston for experimental)
-  accounts                 Show Steam account status
+Steam (grouped under `cluster-ctl steam <subcommand>`):
+  steam login [TARGET] --login-runners-dir <DIR>   Interactive login
+  steam guard <VM> [--code CODE]                   Submit Steam Guard code
+  steam check [TARGET] --runners-dir <DIR>         Verify logins
+  steam start [TARGET]                             Start sway + Steam (--display weston for experimental)
+  steam accounts                                   Show Steam account status
+  steam clean-logins [TARGET]                      Remove persisted login state
 
 Game:
   run [-- ARGS...]         Start game on all VMs

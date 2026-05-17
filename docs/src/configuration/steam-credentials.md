@@ -19,7 +19,7 @@ decrypt with `rage`/`age` via ssh-agent automatically.
 ## Interactive login (VNC)
 
 ```bash
-cluster-ctl --vm-count 7 steam-login --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
 ```
 
 For each VM:
@@ -39,10 +39,10 @@ Target specific VMs:
 
 ```bash
 # Login only vm-3
-cluster-ctl --vm-count 7 steam-login vm-3 --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login vm-3 --login-runners-dir ./result-login
 
 # Login vm-3 through vm-7
-cluster-ctl --vm-count 7 steam-login -+ vm-3 --login-runners-dir ./result-login
+cluster-ctl --vm-count 7 steam login -+ vm-3 --login-runners-dir ./result-login
 ```
 
 ## Automated login
@@ -50,7 +50,7 @@ cluster-ctl --vm-count 7 steam-login -+ vm-3 --login-runners-dir ./result-login
 ```bash
 cluster-ctl --vm-count 7 \
   --credentials secrets/steam-creds.toml \
-  steam-login --login-runners-dir ./result-login
+  steam login --login-runners-dir ./result-login
 ```
 
 Runs `steam -login <user> <pass>` on each VM and waits for confirmation. Also
@@ -63,7 +63,7 @@ activates game keys if provided.
 ## Checking Steam health
 
 ```bash
-cluster-ctl --vm-count 7 steam-check --runners-dir ./result
+cluster-ctl --vm-count 7 steam check --runners-dir ./result
 ```
 
 Boots each VM one at a time and verifies:
@@ -74,7 +74,7 @@ Boots each VM one at a time and verifies:
 ## Viewing account status
 
 ```bash
-cluster-ctl --vm-count 7 accounts
+cluster-ctl --vm-count 7 steam accounts
 ```
 
 Displays logged-in accounts, SteamIDs, and warns about duplicate accounts.

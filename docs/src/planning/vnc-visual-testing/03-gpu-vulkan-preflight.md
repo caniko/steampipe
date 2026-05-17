@@ -110,7 +110,7 @@ lifecycle, F scene scripting) a precondition they can assert on:
    Parse into the `GpuPreflightReport`.
 4. **Add `cluster-ctl gpu-preflight` subcommand** to
    [src/ui/cli.rs](../../../../src/ui/cli.rs) with `--runners-dir` to
-   boot VMs if not running, mirror of the `steam-check` pattern. Add
+   boot VMs if not running, mirror of the `steam check` pattern. Add
    `--json` flag for machine-readable output. Default human-readable
    table:
    ```
