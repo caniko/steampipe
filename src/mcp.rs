@@ -46,6 +46,12 @@ impl SteampipeMcp {
     }
 }
 
+impl Default for SteampipeMcp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Shared types ────────────────────────────────────────────────────────────
 
 fn default_cluster() -> String {

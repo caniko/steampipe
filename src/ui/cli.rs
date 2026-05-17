@@ -266,11 +266,11 @@ pub enum Commands {
         players: Option<u8>,
 
         /// Args passed to the game binary on each VM
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         vm_args: Option<String>,
 
         /// Args passed to the local (host) game binary
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         host_args: Option<String>,
 
         /// Number of test runs
@@ -389,10 +389,10 @@ pub enum Commands {
         #[arg(long, default_value = "headless")]
         display: DisplayMode,
         /// Args passed to the game binary on VMs
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         vm_args: Option<String>,
         /// Args passed to the local (host) game binary
-        #[arg(long)]
+        #[arg(long, allow_hyphen_values = true)]
         host_args: Option<String>,
     },
 
@@ -1288,6 +1288,55 @@ mod tests {
             }
             _ => panic!("expected Test"),
         }
+    }
+
+    #[test]
+    fn test_allows_space_separated_hyphen_values_for_game_args() {
+        let cli = parse(&[
+            "test",
+            "--host-args",
+            "--headless",
+            "--vm-args",
+            "--auto-join",
+        ]);
+        match cli.command {
+            Commands::Test {
+                host_args, vm_args, ..
+            } => {
+                assert_eq!(host_args.as_deref(), Some("--headless"));
+                assert_eq!(vm_args.as_deref(), Some("--auto-join"));
+            }
+            _ => panic!("expected Test"),
+        }
+
+        let cli = parse(&[
+            "test",
+            "--host-args=--auto-host-udp 0.0.0.0:7777",
+            "--vm-args=--auto-join-udp 1.2.3.4:7777",
+        ]);
+        match cli.command {
+            Commands::Test {
+                host_args, vm_args, ..
+            } => {
+                assert_eq!(host_args.as_deref(), Some("--auto-host-udp 0.0.0.0:7777"));
+                assert_eq!(vm_args.as_deref(), Some("--auto-join-udp 1.2.3.4:7777"));
+            }
+            _ => panic!("expected Test"),
+        }
+
+        // allow_hyphen_values only permits a flag-like value; it does not make
+        // the option consume multiple space-separated tokens.
+        let args = [
+            "cluster-ctl",
+            "test",
+            "--host-args",
+            "--auto-host-udp",
+            "0.0.0.0:7777",
+            "--vm-args",
+            "--auto-join-udp",
+            "1.2.3.4:7777",
+        ];
+        assert!(Cli::try_parse_from(args).is_err());
     }
 
     // ── Deploy ───────────────────────────────────────────────────────────

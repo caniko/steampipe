@@ -5,6 +5,7 @@
 //!   2. $XDG_CONFIG_HOME/steampipe/host.json
 //!   3. /etc/steampipe/host.json
 //!   4. /etc/steampipe/module.json    (legacy NixOS-module path)
+//!
 //! See docs/src/configuration/host-config.md for the schema and
 //! the user-facing walkthroughs.
 
