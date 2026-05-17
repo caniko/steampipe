@@ -297,7 +297,7 @@ in
       (lib.mapAttrsToList (name: vm: {
           inherit name;
           path =
-            if flavor.hypervisor == "crosvm"
+            if flavor.hypervisor == "crosvm" && flavor.graphics
             then patchCrosvmGpuParams flavor (mkMicroVM flavor vmLoginMount name vm)
             else mkMicroVM flavor vmLoginMount name vm;
         })
