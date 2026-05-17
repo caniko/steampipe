@@ -243,7 +243,10 @@ mod tests {
 
         save(&config, "after-login").unwrap();
 
-        assert!(root.join("state/snapshots/after-login/vm-3/save.dat").exists());
+        assert!(
+            root.join("state/snapshots/after-login/vm-3/save.dat")
+                .exists()
+        );
         assert!(!root.join("state/snapshots/after-login/vm-1").exists());
 
         std::fs::write(vm_state_dir.join("save.dat"), "after").unwrap();

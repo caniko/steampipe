@@ -1171,9 +1171,11 @@ mod tests {
         assert!(script.contains("VNC capture requires a sway/sway-gpu session"));
         assert!(script.contains("swaymsg -r -t get_outputs"));
         assert!(script.contains("current_resizing_mode"));
-        assert!(script.contains(
-            "wayvnc --disable-input --disable-resizing --log-level=info 0.0.0.0 5900"
-        ));
+        assert!(
+            script.contains(
+                "wayvnc --disable-input --disable-resizing --log-level=info 0.0.0.0 5900"
+            )
+        );
         assert!(script.contains("tail -n 40 \"$XDG_RUNTIME_DIR/wayvnc.log\""));
     }
 

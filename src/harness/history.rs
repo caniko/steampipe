@@ -114,14 +114,23 @@ pub fn summarize_visual_results(
     }
     Some(RunVisualSummary {
         passed: visual_results.iter().filter(|result| result.passed).count(),
-        failed: visual_results.iter().filter(|result| !result.passed).count(),
+        failed: visual_results
+            .iter()
+            .filter(|result| !result.passed)
+            .count(),
     })
 }
 
 fn format_visual_cell(visual_results: &[crate::game::visual::VisualRunResult]) -> String {
     match summarize_visual_results(visual_results) {
-        Some(summary) if summary.failed == 0 => format!("PASS ({}/{})", summary.passed, summary.passed),
-        Some(summary) => format!("FAIL ({}/{})", summary.failed, summary.passed + summary.failed),
+        Some(summary) if summary.failed == 0 => {
+            format!("PASS ({}/{})", summary.passed, summary.passed)
+        }
+        Some(summary) => format!(
+            "FAIL ({}/{})",
+            summary.failed,
+            summary.passed + summary.failed
+        ),
         None => "─".to_string(),
     }
 }

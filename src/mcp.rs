@@ -75,8 +75,7 @@ fn build_config(
         "1v1" => 1,
         _ => 7,
     });
-    let config =
-        ClusterConfig::from_vm_count(&project_root, vm_count, Some(&params.cluster), None)
+    let config = ClusterConfig::from_vm_count(&project_root, vm_count, Some(&params.cluster), None)
         .map_err(|e| ErrorData::internal_error(format!("Config error: {e}"), None))?;
 
     state::ensure_state_dir(&config.state_dir)
@@ -689,7 +688,11 @@ impl SteampipeMcp {
                     if summary.failed == 0 {
                         format!("PASS ({}/{})", summary.passed, summary.passed)
                     } else {
-                        format!("FAIL ({}/{})", summary.failed, summary.passed + summary.failed)
+                        format!(
+                            "FAIL ({}/{})",
+                            summary.failed,
+                            summary.passed + summary.failed
+                        )
                     }
                 })
                 .unwrap_or_else(|| "─".to_string());

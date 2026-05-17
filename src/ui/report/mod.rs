@@ -81,7 +81,12 @@ pub fn generate<S>(
     let result = select_result(&history.results, run_label)?;
     let resolved_run_label = run_label
         .map(str::to_string)
-        .or_else(|| result.visual_results.first().map(|result| result.run_label.clone()))
+        .or_else(|| {
+            result
+                .visual_results
+                .first()
+                .map(|result| result.run_label.clone())
+        })
         .ok_or_else(|| anyhow::anyhow!("could not resolve run label for report"))?;
 
     let visual = load_visual_config(project_root)?;
@@ -97,24 +102,32 @@ pub fn generate<S>(
 
     let mut grouped: BTreeMap<String, Vec<SceneView>> = BTreeMap::new();
     for item in &result.visual_results {
-        let vm_name = if item.vm.is_empty() { "vm-1" } else { item.vm.as_str() };
-        grouped.entry(vm_name.to_string()).or_default().push(SceneView {
-            scene: item.scene.clone(),
-            vm: vm_name.to_string(),
-            passed: item.passed,
-            ssim: format!("{:.5}", item.ssim),
-            max_delta: item.max_delta,
-            actual_src: asset_src(&output_dir, &item.actual_path, single_file)?,
-            golden_src: asset_src(&output_dir, &item.golden_path, single_file)?,
-            diff_src: asset_src(&output_dir, &item.diff_path, single_file)?,
-        });
+        let vm_name = if item.vm.is_empty() {
+            "vm-1"
+        } else {
+            item.vm.as_str()
+        };
+        grouped
+            .entry(vm_name.to_string())
+            .or_default()
+            .push(SceneView {
+                scene: item.scene.clone(),
+                vm: vm_name.to_string(),
+                passed: item.passed,
+                ssim: format!("{:.5}", item.ssim),
+                max_delta: item.max_delta,
+                actual_src: asset_src(&output_dir, &item.actual_path, single_file)?,
+                golden_src: asset_src(&output_dir, &item.golden_path, single_file)?,
+                diff_src: asset_src(&output_dir, &item.diff_path, single_file)?,
+            });
     }
 
     let timelapse_root = run_root.join("timelapse");
     let video_root = run_root.join("video");
     let mut vms = Vec::new();
     for (name, scenes) in grouped {
-        let timelapse_frames = collect_png_assets(&output_dir, &timelapse_root.join(&name), single_file)?;
+        let timelapse_frames =
+            collect_png_assets(&output_dir, &timelapse_root.join(&name), single_file)?;
         let video_path = video_root.join(format!("{name}.webm"));
         let video = if video_path.exists() {
             Some(AssetView {
@@ -194,7 +207,10 @@ fn render_html(
 ) -> String {
     let mut html = String::new();
     html.push_str("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
-    html.push_str(&format!("<title>Visual Report {}</title>", escape_html(run_label)));
+    html.push_str(&format!(
+        "<title>Visual Report {}</title>",
+        escape_html(run_label)
+    ));
     html.push_str("<style>");
     html.push_str(STYLE);
     html.push_str("</style></head><body><main>");
@@ -294,7 +310,9 @@ fn render_html(
             html.push_str("</div>");
         }
         if !vm.timelapse_frames.is_empty() {
-            html.push_str("<section class=\"scene-card\"><h3>Timelapse</h3><div class=\"timelapse-strip\">");
+            html.push_str(
+                "<section class=\"scene-card\"><h3>Timelapse</h3><div class=\"timelapse-strip\">",
+            );
             for frame in &vm.timelapse_frames {
                 html.push_str(&format!(
                     "<figure><img src=\"{}\" alt=\"Timelapse frame {} for {}\"><figcaption>{}</figcaption></figure>",
@@ -327,13 +345,23 @@ fn escape_html(input: &str) -> String {
         .replace('"', "&quot;")
 }
 
-fn select_result<'a>(results: &'a [TestResult], run_label: Option<&str>) -> anyhow::Result<&'a TestResult> {
+fn select_result<'a>(
+    results: &'a [TestResult],
+    run_label: Option<&str>,
+) -> anyhow::Result<&'a TestResult> {
     if let Some(run_label) = run_label {
         results
             .iter()
             .rev()
-            .find(|result| result.visual_results.iter().any(|item| item.run_label == run_label))
-            .ok_or_else(|| anyhow::anyhow!("no test history entry found for run label '{run_label}'"))
+            .find(|result| {
+                result
+                    .visual_results
+                    .iter()
+                    .any(|item| item.run_label == run_label)
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("no test history entry found for run label '{run_label}'")
+            })
     } else {
         results
             .iter()
@@ -354,7 +382,11 @@ fn load_visual_config(project_root: &Path) -> anyhow::Result<config::VisualConfi
     Ok(visual.clone())
 }
 
-fn collect_png_assets(output_dir: &Path, dir: &Path, single_file: bool) -> anyhow::Result<Vec<AssetView>> {
+fn collect_png_assets(
+    output_dir: &Path,
+    dir: &Path,
+    single_file: bool,
+) -> anyhow::Result<Vec<AssetView>> {
     if !dir.exists() {
         return Ok(Vec::new());
     }
@@ -367,7 +399,11 @@ fn collect_png_assets(output_dir: &Path, dir: &Path, single_file: bool) -> anyho
     entries
         .into_iter()
         .map(|path| {
-            let label = path.file_name().and_then(|name| name.to_str()).unwrap_or("frame").to_string();
+            let label = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("frame")
+                .to_string();
             Ok(AssetView {
                 label,
                 src: asset_src(output_dir, &path, single_file)?,
@@ -378,7 +414,8 @@ fn collect_png_assets(output_dir: &Path, dir: &Path, single_file: bool) -> anyho
 
 fn asset_src(output_dir: &Path, path: &Path, single_file: bool) -> anyhow::Result<String> {
     if single_file {
-        let bytes = std::fs::read(path).with_context(|| format!("read asset {}", path.display()))?;
+        let bytes =
+            std::fs::read(path).with_context(|| format!("read asset {}", path.display()))?;
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         let mime = match path.extension().and_then(|ext| ext.to_str()) {
             Some("png") => "image/png",

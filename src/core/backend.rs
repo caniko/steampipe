@@ -638,16 +638,16 @@ mod tests {
     fn host_wayland_display_prefers_environment() {
         assert_eq!(
             host_wayland_display(Path::new("/does/not/matter")),
-            std::env::var("WAYLAND_DISPLAY").ok().filter(|value| !value.is_empty())
+            std::env::var("WAYLAND_DISPLAY")
+                .ok()
+                .filter(|value| !value.is_empty())
         );
     }
 
     #[test]
     fn host_wayland_display_discovers_socket_names() {
-        let dir = std::env::temp_dir().join(format!(
-            "steampipe-wayland-detect-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("steampipe-wayland-detect-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("wayland-1"), "").unwrap();

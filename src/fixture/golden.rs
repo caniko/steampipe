@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
@@ -96,7 +96,11 @@ pub fn regenerate(
         "capture-note steampipe_commit={} dirty={} fixture_flake_lock_committed={} fixture_flake_lock_sha={} fixture_nixpkgs_rev={} host_nixpkgs={}",
         steampipe_commit.trim(),
         if steampipe_dirty { "yes" } else { "no" },
-        if fixture_flake_lock_committed { "yes" } else { "no" },
+        if fixture_flake_lock_committed {
+            "yes"
+        } else {
+            "no"
+        },
         fixture_flake_lock_sha.trim(),
         nixpkgs_rev.trim(),
         host_nixpkgs_divergence

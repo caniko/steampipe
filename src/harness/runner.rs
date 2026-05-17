@@ -625,7 +625,11 @@ struct StallCaptureContext {
     screenshot_backend: crate::cli::ScreenshotBackend,
 }
 
-async fn capture_reason_frames(context: &StallCaptureContext, reason: &str, stamp: &str) -> anyhow::Result<()> {
+async fn capture_reason_frames(
+    context: &StallCaptureContext,
+    reason: &str,
+    stamp: &str,
+) -> anyhow::Result<()> {
     let _guard = context.capture_lock.lock().await;
     if context.screenshot_backend == crate::cli::ScreenshotBackend::Vnc {
         for vm in &context.target_vms {
@@ -740,7 +744,10 @@ sleep 1
             .download(&vm.ip, "/tmp/steampipe-run.webm", &video_dir)
             .await
         {
-            eprintln!("Warning: failed to download video from {}: {error}", vm.name);
+            eprintln!(
+                "Warning: failed to download video from {}: {error}",
+                vm.name
+            );
             continue;
         }
         let downloaded = video_dir.join("steampipe-run.webm");
@@ -793,7 +800,8 @@ pub async fn run<S>(
     {
         validate_visual_capture_config(test_config.display, test_config.screenshot_backend)?;
     }
-    if test_config.capture_mode == CaptureMode::Timelapse && test_config.capture_interval_secs.is_none()
+    if test_config.capture_mode == CaptureMode::Timelapse
+        && test_config.capture_interval_secs.is_none()
     {
         anyhow::bail!("--capture-mode timelapse requires --capture-interval");
     }
@@ -1149,7 +1157,8 @@ pub async fn run<S>(
             run_num,
             &mut output,
         )
-        .await {
+        .await
+        {
             Ok(mut scene_results) => visual_results.append(&mut scene_results),
             Err(error) => {
                 failed += 1;
@@ -1160,8 +1169,13 @@ pub async fn run<S>(
                 );
                 crate::run::kill_games(backend, target_vms, binary_name).await;
                 kill_process_group(&mut child, test_config.shutdown_timeout);
-                stop_video_capture(config, target_vms, &capture_root.join(&run_label), &video_started)
-                    .await;
+                stop_video_capture(
+                    config,
+                    target_vms,
+                    &capture_root.join(&run_label),
+                    &video_started,
+                )
+                .await;
                 if test_config.stop_on_failure {
                     break;
                 }
@@ -1224,7 +1238,13 @@ pub async fn run<S>(
         if let Some(task) = timelapse_task {
             let _ = task.await;
         }
-        stop_video_capture(config, target_vms, &capture_root.join(&run_label), &video_started).await;
+        stop_video_capture(
+            config,
+            target_vms,
+            &capture_root.join(&run_label),
+            &video_started,
+        )
+        .await;
 
         cleanup_heartbeat_files(&local_heartbeat_dir);
 

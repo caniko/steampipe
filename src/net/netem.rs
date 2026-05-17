@@ -304,7 +304,10 @@ mod tests {
     fn resolve_netem_target_accepts_non_contiguous_owned_vm() {
         let config = ClusterConfig::for_test_ids(&[2, 4]);
         let targets = resolve_netem_targets(&config, Some("vm-4")).unwrap();
-        assert_eq!(targets.iter().map(|vm| vm.index).collect::<Vec<_>>(), vec![4]);
+        assert_eq!(
+            targets.iter().map(|vm| vm.index).collect::<Vec<_>>(),
+            vec![4]
+        );
     }
 
     #[test]
