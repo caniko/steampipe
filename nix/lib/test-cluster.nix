@@ -80,9 +80,11 @@ in
       useSystemdStage1 =
         if f ? use_systemd_stage1
         then f.use_systemd_stage1
+        else if clusterConfig ? use_systemd_stage1
+        then clusterConfig.use_systemd_stage1
         else if hypervisor == "crosvm"
         then systemdStage1Default
-        else null;
+        else false;
     };
     flavors =
       {default = mkFlavor {};}

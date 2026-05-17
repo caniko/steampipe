@@ -28,12 +28,9 @@ in {
     };
 
     useSystemdStage1 = lib.mkOption {
-      type = lib.types.nullOr lib.types.bool;
-      default = null;
-      description = ''
-        Override boot.initrd.systemd.enable for this VM. Leave null to preserve
-        the hypervisor-specific default from microvm.nix.
-      '';
+      type = lib.types.bool;
+      default = false;
+      description = "systemd-stage-1 initrd; required ahead of NixOS 26.11.";
     };
   };
 
@@ -134,9 +131,9 @@ in {
       system.stateVersion = "25.05";
     }
 
-    (lib.mkIf (cfg.useSystemdStage1 != null) {
+    {
       boot.initrd.systemd.enable = cfg.useSystemdStage1;
-    })
+    }
 
     (lib.mkIf (cfg.useSystemdStage1 == true) {
       # microvm.nix's crosvm systemd-stage-1 default is off because the store
