@@ -1,9 +1,11 @@
 use std::io::{self, BufRead, ErrorKind};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use crate::core::backend::Backend;
-use crate::core::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
+use crate::core::config::{BridgeReady, ClusterConfig, Unchecked, VmDef, par_each_vm};
 use crate::core::credentials::{CredentialsMap, VmCredentials};
+use crate::core::nixos_module::{Discovery, NixosModuleConfig, RowStatus};
 use crate::vm::lease;
 
 const LOGIN_SSH_TIMEOUT_SECS: u32 = 180;
@@ -386,7 +388,9 @@ pub async fn check(
     if !failed.is_empty() {
         println!("  FAILED: {}", failed.join(" "));
         println!();
-        println!("  To fix 'not-logged-in': run `nix run .#cluster-steam-login` (or `cluster-ctl steam login`)");
+        println!(
+            "  To fix 'not-logged-in': run `nix run .#cluster-steam-login` (or `cluster-ctl steam login`)"
+        );
         anyhow::bail!("Some VMs failed checks");
     } else {
         println!("  All VMs ready for testing");
@@ -1308,6 +1312,94 @@ fn shell_escape(s: &str) -> String {
 /// Default directory where the NixOS module persists Steam login state.
 const DEFAULT_LOGIN_STATE_DIR: &str = "/var/lib/steampipe/logins";
 
+pub fn info(
+    discovery: &Discovery,
+    host: Option<&NixosModuleConfig>,
+    cluster: Option<&ClusterConfig<Unchecked>>,
+) -> anyhow::Result<()> {
+    match (&discovery.selected, host) {
+        (Some(path), Some(host)) => {
+            let source_note = if path == Path::new("/etc/steampipe/module.json") {
+                format!(
+                    " (legacy NixOS-module path; schemaVersion {})",
+                    host.schema_version
+                )
+            } else {
+                format!(" (schemaVersion {})", host.schema_version)
+            };
+            println!("Host config source: {}{source_note}", path.display());
+        }
+        _ => println!("Host config source: no config discovered"),
+    }
+    println!();
+    println!("Discovery trace:");
+    for (index, row) in discovery.rows.iter().enumerate() {
+        println!(
+            "  {}. {:<52} {}",
+            index + 1,
+            row.label,
+            render_row_status(row)
+        );
+    }
+
+    let Some(host) = host else {
+        return Ok(());
+    };
+
+    println!();
+    println!("Cluster shape:");
+    println!("  {:<15} {}", "vmCount", host.vm_count);
+    println!(
+        "  {:<15} {} ({}.0/{}, host {})",
+        "bridge", host.bridge, host.subnet, host.prefix, host.host_ip
+    );
+    println!(
+        "  {:<15} {}",
+        "tapOwner",
+        host.tap_owner.as_deref().unwrap_or("none")
+    );
+    println!(
+        "  {:<15} {}",
+        "loginStateDir",
+        host.login_state_dir.display()
+    );
+    println!(
+        "  {:<15} {}",
+        "credentials",
+        render_credentials_summary(host.credentials_path.as_deref())
+    );
+
+    println!();
+    println!("Configured accounts ({}):", host.accounts.len());
+    for account in &host.accounts {
+        let login_state = render_login_state_summary(&host.login_state_dir.join(&account.vm));
+        println!(
+            "  {:<8} {:<20} login-state: {}",
+            account.vm, account.steam_user, login_state
+        );
+    }
+
+    if let Some(cluster) = cluster {
+        println!();
+        let leased = if cluster.vms.is_empty() {
+            "(none)".to_string()
+        } else {
+            cluster
+                .vms
+                .iter()
+                .map(|vm| vm.name.0.clone())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        println!(
+            "Leased cluster vms (cluster={}): {}",
+            cluster.cluster_name, leased
+        );
+    }
+
+    Ok(())
+}
+
 /// Remove persisted Steam login state from the host login state directory.
 ///
 /// `target` selects which VMs to clean: `None` or `Some("all")` cleans every
@@ -1315,41 +1407,63 @@ const DEFAULT_LOGIN_STATE_DIR: &str = "/var/lib/steampipe/logins";
 /// that one.
 pub fn clean_logins(
     vms: &[VmDef],
-    login_state_dir: Option<&Path>,
+    login_state_dir: Option<PathBuf>,
     target: Option<&str>,
+    host: Option<&NixosModuleConfig>,
 ) -> anyhow::Result<()> {
-    let dir = login_state_dir.unwrap_or_else(|| Path::new(DEFAULT_LOGIN_STATE_DIR));
+    let dir = match login_state_dir {
+        Some(path) => path,
+        None => match host
+            .cloned()
+            .or_else(|| crate::core::nixos_module::load().ok().flatten())
+        {
+            Some(module) => module.login_state_dir,
+            None => PathBuf::from(DEFAULT_LOGIN_STATE_DIR),
+        },
+    };
 
     if !dir.exists() {
         println!("Login state directory does not exist: {}", dir.display());
         return Ok(());
     }
 
-    let targets: Vec<&VmDef> = match target {
-        None | Some("all") => vms.iter().collect(),
+    let work_set: Vec<String> = if !vms.is_empty() {
+        vms.iter().map(|vm| vm.name.0.clone()).collect()
+    } else if let Some(host) = host {
+        host.accounts
+            .iter()
+            .map(|account| account.vm.clone())
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let targets: Vec<String> = match target {
+        None | Some("all") => work_set,
         Some(t) => {
             let name = if t.starts_with("vm-") {
                 t.to_string()
             } else {
                 format!("vm-{t}")
             };
-            match vms.iter().find(|v| *v.name == *name) {
-                Some(vm) => vec![vm],
-                None => anyhow::bail!("unknown VM: {name}"),
+            if work_set.iter().any(|vm| vm == &name) {
+                vec![name]
+            } else {
+                anyhow::bail!("unknown VM: {name}");
             }
         }
     };
 
     let mut cleaned = 0u32;
     for vm in &targets {
-        let vm_dir = dir.join(&vm.name);
+        let vm_dir = dir.join(vm);
         if !vm_dir.exists() {
-            println!("  {}: no login state, skipping", vm.name);
+            println!("  {}: no login state, skipping", vm);
             continue;
         }
         std::fs::remove_dir_all(&vm_dir)?;
         std::fs::create_dir_all(&vm_dir)?;
-        println!("  {}: cleaned", vm.name);
+        println!("  {}: cleaned", vm);
         cleaned += 1;
     }
 
@@ -1360,6 +1474,61 @@ pub fn clean_logins(
     }
 
     Ok(())
+}
+
+fn render_row_status(row: &crate::core::nixos_module::DiscoveryRow) -> String {
+    match row.status {
+        RowStatus::NotSet => "(not set)".into(),
+        RowStatus::NotFound => "(not found)".into(),
+        RowStatus::NoXdgHome => "(no XDG home)".into(),
+        RowStatus::Selected => "(selected)".into(),
+    }
+}
+
+fn render_credentials_summary(path: Option<&Path>) -> String {
+    let Some(path) = path else {
+        return "none".into();
+    };
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            let mut details = vec!["exists".to_string()];
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                details.push(format!(
+                    "mode {:04o}",
+                    metadata.permissions().mode() & 0o7777
+                ));
+            }
+            if let Ok(modified) = metadata.modified() {
+                details.push(format!("mtime {}", format_date(modified)));
+            }
+            format!("{} ({})", path.display(), details.join(", "))
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            format!("{} (missing)", path.display())
+        }
+        Err(error) => format!("{} (metadata error: {error})", path.display()),
+    }
+}
+
+fn render_login_state_summary(path: &Path) -> String {
+    match std::fs::metadata(path) {
+        Ok(metadata) => {
+            if let Ok(modified) = metadata.modified() {
+                format!("present ({})", format_date(modified))
+            } else {
+                "present".into()
+            }
+        }
+        Err(error) if error.kind() == ErrorKind::NotFound => "missing".into(),
+        Err(error) => format!("metadata error: {error}"),
+    }
+}
+
+fn format_date(timestamp: SystemTime) -> String {
+    let datetime: chrono::DateTime<chrono::Local> = timestamp.into();
+    datetime.format("%Y-%m-%d").to_string()
 }
 
 #[cfg(test)]

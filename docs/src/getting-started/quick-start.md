@@ -29,6 +29,20 @@ host_ip = "10.0.100.254"
 udp_port = 27100
 ```
 
+### Operating from any directory
+
+If your host has `/etc/steampipe/{host,module}.json` (NixOS module) or
+`~/.config/steampipe/host.json` (hand-written), the Steam-group subcommands
+work from any directory:
+
+```bash
+cluster-ctl steam info
+cluster-ctl steam check
+```
+
+See [Global host config](../configuration/host-config.md) for the schema and
+discovery details.
+
 ## 2. Set up networking
 
 ```bash

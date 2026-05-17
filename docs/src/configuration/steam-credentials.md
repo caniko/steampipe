@@ -1,5 +1,9 @@
 # Steam Credentials
 
+> [Global host config](./host-config.md) covers the broader discovery model.
+> If you only need the credentials default, set `credentialsPath` there and
+> `cluster-ctl` will use it as the `--credentials` fallback.
+
 ## Credentials file format
 
 ```toml

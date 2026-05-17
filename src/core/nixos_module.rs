@@ -1,6 +1,12 @@
-//! Reader for the NixOS-module-published cluster config at
-//! /etc/steampipe/module.json. See the plan at
-//! docs/src/planning/nixos-module-cli-awareness/.
+//! Reader for the global host config — the JSON file that
+//! describes a Steampipe cluster's shape for a single machine.
+//! Discovered at, in precedence order:
+//!   1. --host-config <path>
+//!   2. $XDG_CONFIG_HOME/steampipe/host.json
+//!   3. /etc/steampipe/host.json
+//!   4. /etc/steampipe/module.json    (legacy NixOS-module path)
+//! See docs/src/configuration/host-config.md for the schema and
+//! the user-facing walkthroughs.
 
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -111,7 +117,7 @@ pub fn load_from(path: &Path) -> anyhow::Result<Option<NixosModuleConfig>> {
 
     if config.schema_version != SUPPORTED_SCHEMA_VERSION {
         anyhow::bail!(
-            "{} has schemaVersion {}, but cluster-ctl only supports schemaVersion {} from docs/src/planning/nixos-module-cli-awareness/01-module-json-schema.md",
+            "{} has schemaVersion {}, but cluster-ctl only supports schemaVersion {} (see docs/src/configuration/host-config.md)",
             path.display(),
             config.schema_version,
             SUPPORTED_SCHEMA_VERSION
@@ -321,7 +327,7 @@ mod tests {
         let error = load_from(&path).expect_err("unknown schema version should fail");
         let message = error.to_string();
         assert!(message.contains("schemaVersion 2"));
-        assert!(message.contains("01-module-json-schema.md"));
+        assert!(message.contains("host-config.md"));
     }
 
     #[test]

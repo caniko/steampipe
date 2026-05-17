@@ -976,6 +976,9 @@ remote_dir = "/home/player/game"
 # SSH key path (relative to project root)
 # ssh_key = "nix/test-cluster/cluster_key"
 
+# On NixOS hosts with services.steampipe-cluster enabled, --credentials
+# defaults to /etc/steampipe/credentials.toml automatically.
+
 [network]
 # bridge = "br-cluster"
 # subnet = "10.0.100"
@@ -1241,6 +1244,110 @@ impl ClusterConfig<Unchecked> {
         )
     }
 
+    /// Audit for Steam-only host-config construction:
+    ///
+    /// - Dispatch sites: `steam check`, `login`, `guard`, `start`, `accounts`,
+    ///   `clean-logins` at `src/main.rs:719`, `:730`, `:749`, `:755`, `:759`,
+    ///   `:760`.
+    /// - Steam field reads: `backend`, `vm_user`, `lock_dir`, `cluster_name`,
+    ///   `state_dir`, and VM metadata in `src/game/steam.rs:283`, `:296`, `:327`,
+    ///   `:354`, `:472`, `:478`, `:503`, `:516`, `:542`, `:578`, `:592`, `:600`,
+    ///   `:603`, `:622`, `:666`.
+    /// - Accounts field reads: `backend` and `vms` in `src/game/accounts.rs:15`,
+    ///   `:19`, `:22`.
+    /// - Clean-logins only consumes `config.vms` at `src/main.rs:764`.
+    /// - Verified not read anywhere on that path: `remote_dir`, `binary_name`,
+    ///   `cargo_package`, `steam_api_lib`, `steam_appid_file`, `assets_dir`,
+    ///   `log_file`.
+    ///
+    /// Suitable only for commands that do not require project-rooted runner
+    /// metadata. Those fields are populated with debug sentinels and release
+    /// empty strings so accidental use is caught by `assert_project_fields_available`.
+    pub fn from_host_config(
+        host: &crate::core::nixos_module::NixosModuleConfig,
+        vm_count: u8,
+        cluster_name: Option<&str>,
+        backend_override: Option<BackendKind>,
+        ssh_key_override: Option<&Path>,
+        state_dir_override: Option<&Path>,
+        lock_dir_override: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        let cluster_name = cluster_name.unwrap_or("default").to_string();
+        let state_dir = match state_dir_override {
+            Some(path) => PathBuf::from(path),
+            None => xdg_state_dir(&cluster_name)?,
+        };
+        let lock_dir = match lock_dir_override {
+            Some(path) => PathBuf::from(path),
+            None => xdg_runtime_dir()?,
+        };
+        let ssh_key = match ssh_key_override {
+            Some(path) => PathBuf::from(path),
+            None => default_host_config_ssh_key_path(),
+        };
+        let backend_kind = backend_override.unwrap_or_default();
+        // Host-config-driven clusters are a host-side fallback path. The project-rooted
+        // flow still owns any explicit vm_user policy.
+        let vm_user = "nixos".to_string();
+        let backend = build_backend(backend_kind, &ssh_key, &vm_user, None);
+        let vm_ids: Vec<u8> = (1..=vm_count).collect();
+        let vms = Self::vm_defs_for_ids(&host.subnet, vm_count, &vm_ids)?;
+        let mb = 1024 * 1024;
+
+        Ok(Self {
+            bridge: host.bridge.clone(),
+            subnet: host.subnet.clone(),
+            prefix: host.prefix,
+            host_ip: host.host_ip.clone(),
+            vm_user,
+            remote_dir: sentinel("remote_dir"),
+            binary_name: sentinel("binary_name"),
+            cargo_package: sentinel("cargo_package"),
+            ssh_key,
+            udp_port: 27100,
+            steam_api_lib: PathBuf::new(),
+            steam_appid_file: sentinel("steam_appid_file"),
+            assets_dir: sentinel("assets_dir"),
+            log_file: sentinel("log_file"),
+            state_dir,
+            cluster_name,
+            requested_vm_count: vm_count,
+            max_vms: vm_count,
+            vms,
+            backend,
+            backend_kind,
+            lock_dir,
+            ram_per_vm: 2048 * mb,
+            host_ram_reserve: 2048 * mb,
+            tap_owner: host.tap_owner.clone(),
+            exit_codes: HashMap::new(),
+            heartbeat_stall_secs: 30,
+            hooks: HooksConfig::default(),
+            _state: PhantomData,
+        })
+    }
+
+    /// Back-compat wrapper for the earlier phase name.
+    #[allow(dead_code)]
+    pub fn from_module(
+        module: &crate::core::nixos_module::NixosModuleConfig,
+        cluster_name: Option<&str>,
+        backend_override: Option<BackendKind>,
+        state_dir_override: Option<&Path>,
+        lock_dir_override: Option<&Path>,
+        ssh_key_override: Option<&Path>,
+    ) -> anyhow::Result<Self> {
+        Self::from_host_config(
+            module,
+            module.vm_count,
+            cluster_name,
+            backend_override,
+            ssh_key_override,
+            state_dir_override,
+            lock_dir_override,
+        )
+    }
+
     /// Build config from an already-loaded `ProjectConfig` (no filesystem access).
     ///
     /// `new()` delegates here after loading `steampipe.toml`. Tests can call this
@@ -1300,26 +1407,11 @@ impl ClusterConfig<Unchecked> {
             .or_else(|| proj.as_ref().and_then(|p| p.cluster.as_ref()?.name.clone()))
             .unwrap_or_else(|| "default".into());
 
-        let base_state_dir = std::env::var("XDG_STATE_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                dirs::home_dir()
-                    .map(|d| d.join(".local/state"))
-                    .unwrap_or_else(|| PathBuf::from("/tmp"))
-            })
-            .join("steampipe");
-
         let state_dir = proj
             .as_ref()
             .and_then(|p| p.cluster.as_ref()?.state_dir.clone())
             .map(PathBuf::from)
-            .unwrap_or_else(|| {
-                if cluster_name == "default" {
-                    base_state_dir
-                } else {
-                    base_state_dir.join(&cluster_name)
-                }
-            });
+            .unwrap_or_else(|| cluster_state_dir(&cluster_name));
 
         let max_vms = proj.as_ref().and_then(|p| p.max_vms).unwrap_or(7);
         let requested_vm_count = requested_vm_count.clamp(1, max_vms);
@@ -1463,6 +1555,22 @@ impl ClusterConfig<Unchecked> {
 
 /// Methods available on any config state (both Unchecked and BridgeReady).
 impl<S> ClusterConfig<S> {
+    #[cfg(debug_assertions)]
+    pub fn assert_project_fields_available(&self) {
+        debug_assert!(
+            !self.remote_dir.is_empty()
+                && !is_sentinel_field(&self.remote_dir)
+                && !self.binary_name.is_empty()
+                && !is_sentinel_field(&self.binary_name)
+                && !self.cargo_package.is_empty()
+                && !is_sentinel_field(&self.cargo_package),
+            "host-config-only ClusterConfig carries sentinel project fields; this code path requires a project-rooted ClusterConfig"
+        );
+    }
+
+    #[cfg(not(debug_assertions))]
+    pub fn assert_project_fields_available(&self) {}
+
     fn vm_defs_for_ids(subnet: &str, max_vms: u8, vm_ids: &[u8]) -> anyhow::Result<Vec<VmDef>> {
         vm_ids
             .iter()
@@ -1573,6 +1681,203 @@ impl<S> ClusterConfig<S> {
     }
 }
 
+fn default_state_root() -> PathBuf {
+    std::env::var("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            dirs::home_dir()
+                .map(|d| d.join(".local/state"))
+                .unwrap_or_else(|| PathBuf::from("/tmp"))
+        })
+        .join("steampipe")
+}
+
+fn cluster_state_dir(cluster_name: &str) -> PathBuf {
+    let base_state_dir = default_state_root();
+    if cluster_name == "default" {
+        base_state_dir
+    } else {
+        base_state_dir.join(cluster_name)
+    }
+}
+
+fn build_backend(
+    backend_kind: BackendKind,
+    ssh_key: &Path,
+    vm_user: &str,
+    proj: Option<&ProjectConfig>,
+) -> Backend {
+    match backend_kind {
+        BackendKind::Microvm => Backend::new_microvm(ssh_key, vm_user),
+        BackendKind::Docker => {
+            let docker_cfg = proj.and_then(|p| p.docker.as_ref());
+            Backend::new_docker(
+                docker_cfg
+                    .and_then(|d| d.image.as_deref())
+                    .unwrap_or("steamcmd/steamcmd:latest"),
+                docker_cfg
+                    .and_then(|d| d.network.as_deref())
+                    .unwrap_or("steampipe-net"),
+            )
+        }
+        BackendKind::Local => {
+            let local_cfg = proj.and_then(|p| p.local.as_ref());
+            let work_dir = local_cfg
+                .and_then(|l| l.work_dir.as_deref())
+                .map(PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir().join("steampipe-local"));
+            Backend::new_local(work_dir)
+        }
+    }
+}
+
+pub fn module_ssh_key_candidates() -> Vec<PathBuf> {
+    let config_dir = xdg_config_home_from_env(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+    .or_else(dirs::config_dir)
+    .unwrap_or_else(|| {
+        dirs::home_dir()
+            .map(|home| home.join(".config"))
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+    });
+
+    vec![
+        config_dir.join("steampipe/cluster_key"),
+        PathBuf::from("/etc/steampipe/cluster_key"),
+    ]
+}
+
+fn sentinel(field: &str) -> String {
+    #[cfg(debug_assertions)]
+    {
+        format!("__STEAMPIPE_SENTINEL_{field}__")
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = field;
+        String::new()
+    }
+}
+
+#[cfg(debug_assertions)]
+fn is_sentinel_field(value: &str) -> bool {
+    value.starts_with("__STEAMPIPE_SENTINEL_")
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn default_ssh_key_for_host_config() -> anyhow::Result<PathBuf> {
+    default_ssh_key_for_host_config_from_candidates(host_config_ssh_key_candidates())
+}
+
+fn default_host_config_ssh_key_path() -> PathBuf {
+    let candidates = host_config_ssh_key_candidates();
+    candidates
+        .iter()
+        .find(|path| path.exists())
+        .cloned()
+        .or_else(|| candidates.into_iter().next())
+        .unwrap_or_else(|| PathBuf::from("/etc/steampipe/cluster_key"))
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+fn default_ssh_key_for_host_config_from_candidates(
+    candidates: Vec<PathBuf>,
+) -> anyhow::Result<PathBuf> {
+    if let Some(path) = candidates.iter().find(|path| path.exists()) {
+        return Ok(path.clone());
+    }
+
+    anyhow::bail!(
+        "no SSH key found at any of: {}. Pass --ssh-key explicitly or place a key at one of those paths.",
+        candidates
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn host_config_ssh_key_candidates() -> Vec<PathBuf> {
+    host_config_ssh_key_candidates_from_env(
+        std::env::var_os("XDG_CONFIG_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn host_config_ssh_key_candidates_from_env(
+    xdg_config_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(config_home) = xdg_config_home_from_env(xdg_config_home, home) {
+        candidates.push(config_home.join("steampipe/cluster_key"));
+    }
+    if let Some(root) = std::env::var_os("STEAMPIPE_ETC_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+    {
+        candidates.push(root.join("steampipe/cluster_key"));
+    } else {
+        candidates.push(PathBuf::from("/etc/steampipe/cluster_key"));
+    }
+    candidates
+}
+
+fn xdg_config_home_from_env(
+    xdg_config_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    xdg_config_home
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".config"))
+        })
+}
+
+fn xdg_state_dir(cluster_name: &str) -> anyhow::Result<PathBuf> {
+    xdg_state_dir_from_env(
+        cluster_name,
+        std::env::var_os("XDG_STATE_HOME"),
+        std::env::var_os("HOME"),
+    )
+}
+
+fn xdg_state_dir_from_env(
+    cluster_name: &str,
+    xdg_state_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> anyhow::Result<PathBuf> {
+    let base = xdg_state_home
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| {
+            home.filter(|value| !value.is_empty())
+                .map(|home| PathBuf::from(home).join(".local/state"))
+        })
+        .ok_or_else(|| anyhow::anyhow!("neither XDG_STATE_HOME nor HOME is set"))?;
+    Ok(base.join("steampipe").join(cluster_name))
+}
+
+fn xdg_runtime_dir() -> anyhow::Result<PathBuf> {
+    xdg_runtime_dir_from_env(std::env::var_os("XDG_RUNTIME_DIR"))
+}
+
+fn xdg_runtime_dir_from_env(
+    xdg_runtime_dir: Option<std::ffi::OsString>,
+) -> anyhow::Result<PathBuf> {
+    xdg_runtime_dir
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .map(|path| path.join("steampipe"))
+        .ok_or_else(|| anyhow::anyhow!("XDG_RUNTIME_DIR is not set"))
+}
+
 #[cfg(test)]
 impl ClusterConfig<Unchecked> {
     /// Build a minimal config for testing. No filesystem access.
@@ -1640,6 +1945,7 @@ pub fn detect_project_root() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::nixos_module::NixosModuleConfig;
 
     #[test]
     fn find_vm_by_name() {
@@ -1696,14 +2002,20 @@ mod tests {
     fn resolve_targets_continue_from_non_contiguous_set() {
         let config = ClusterConfig::for_test_ids(&[2, 4, 6]);
         let targets = config.resolve_targets(Some("vm-4"), true).unwrap();
-        assert_eq!(targets.iter().map(|vm| vm.index).collect::<Vec<_>>(), vec![4, 6]);
+        assert_eq!(
+            targets.iter().map(|vm| vm.index).collect::<Vec<_>>(),
+            vec![4, 6]
+        );
     }
 
     #[test]
     fn with_vm_ids_replaces_operational_vm_set() {
         let config = ClusterConfig::for_test(4).with_vm_ids(&[2, 4]).unwrap();
         assert_eq!(config.requested_vm_count, 4);
-        assert_eq!(config.vms.iter().map(|vm| vm.index).collect::<Vec<_>>(), vec![2, 4]);
+        assert_eq!(
+            config.vms.iter().map(|vm| vm.index).collect::<Vec<_>>(),
+            vec![2, 4]
+        );
     }
 
     #[test]
@@ -1775,6 +2087,256 @@ mod tests {
         let config =
             ClusterConfig::from_parts(&root, proj, 1, Some("cli-cluster"), None, None).unwrap();
         assert_eq!(config.cluster_name, "cli-cluster");
+    }
+
+    #[test]
+    fn from_host_config_populates_vms_from_subnet() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            None,
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(config.max_vms, 3);
+        assert_eq!(config.requested_vm_count, 3);
+        assert_eq!(config.vms.len(), 3);
+        assert_eq!(&*config.vms[0].name, "vm-1");
+        assert_eq!(&*config.vms[0].ip, "10.44.0.1");
+        assert_eq!(&*config.vms[2].ip, "10.44.0.3");
+    }
+
+    #[test]
+    fn from_host_config_uses_cluster_name_override() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            Some("special"),
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(config.cluster_name, "special");
+    }
+
+    #[test]
+    fn from_host_config_defaults_cluster_name_to_default() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(config.cluster_name, "default");
+    }
+
+    #[test]
+    fn from_host_config_defaults_backend_to_microvm() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            None,
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert!(matches!(config.backend_kind, BackendKind::Microvm));
+    }
+
+    #[test]
+    fn from_host_config_max_vms_equals_vm_count() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(config.max_vms, host.vm_count);
+        assert_eq!(config.requested_vm_count, host.vm_count);
+    }
+
+    #[test]
+    fn from_host_config_propagates_network_fields() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(config.bridge, host.bridge);
+        assert_eq!(config.subnet, host.subnet);
+        assert_eq!(config.prefix, host.prefix);
+        assert_eq!(config.host_ip, host.host_ip);
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn from_host_config_sentinel_fields_in_debug_have_distinct_marker() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert!(config.binary_name.contains("SENTINEL_binary_name"));
+    }
+
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn from_host_config_sentinel_fields_in_release_are_empty() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert!(config.binary_name.is_empty());
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "host-config-only ClusterConfig carries sentinel project fields")]
+    fn from_host_config_sentinel_fields_panic_on_assert() {
+        let host = sample_module_config();
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        config.assert_project_fields_available();
+    }
+
+    #[test]
+    fn default_ssh_key_for_host_config_errors_with_all_candidates_listed() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let config_home = tempdir.path().join("config");
+        let expected_user = config_home.join("steampipe/cluster_key");
+        let expected_system = PathBuf::from("/etc/steampipe/cluster_key");
+
+        let candidates = host_config_ssh_key_candidates_from_env(
+            Some(config_home.into_os_string()),
+            Some(tempdir.path().join("home").into_os_string()),
+        );
+        let error = default_ssh_key_for_host_config_from_candidates(candidates).unwrap_err();
+        let message = error.to_string();
+
+        assert!(message.contains(&expected_user.display().to_string()));
+        assert!(message.contains(&expected_system.display().to_string()));
+    }
+
+    #[test]
+    fn xdg_state_dir_prefers_xdg_state_home() {
+        let path = xdg_state_dir_from_env(
+            "default",
+            Some("/tmp/state-home".into()),
+            Some("/tmp/home".into()),
+        )
+        .unwrap();
+        assert_eq!(path, PathBuf::from("/tmp/state-home/steampipe/default"));
+    }
+
+    #[test]
+    fn xdg_state_dir_falls_back_to_home_local_state() {
+        let path = xdg_state_dir_from_env("default", None, Some("/tmp/home".into())).unwrap();
+        assert_eq!(
+            path,
+            PathBuf::from("/tmp/home/.local/state/steampipe/default")
+        );
+    }
+
+    #[test]
+    fn xdg_state_dir_errors_when_no_env_present() {
+        let error = xdg_state_dir_from_env("default", None, None).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("neither XDG_STATE_HOME nor HOME is set")
+        );
     }
 
     // ── New config struct tests ──��──────────────────────────────────────
@@ -2160,6 +2722,25 @@ mod tests {
         let proj: ProjectConfig = toml::from_str(toml_str).unwrap();
         let gpu = proj.profile.unwrap().get("gpu").unwrap().clone();
         assert_eq!(gpu.display.as_deref(), Some("weston-gpu"));
+    }
+
+    fn sample_module_config() -> NixosModuleConfig {
+        NixosModuleConfig {
+            schema_version: 1,
+            vm_count: 3,
+            bridge: "br-module".into(),
+            subnet: "10.44.0".into(),
+            prefix: 24,
+            host_ip: "10.44.0.254".into(),
+            tap_owner: Some("can".into()),
+            login_state_dir: PathBuf::from("/srv/steam-logins"),
+            credentials_path: Some(PathBuf::from("/etc/steampipe/credentials.toml")),
+            accounts: Vec::new(),
+        }
+    }
+
+    fn fake_ssh_key() -> tempfile::NamedTempFile {
+        tempfile::NamedTempFile::new().expect("fake ssh key")
     }
 
     #[test]

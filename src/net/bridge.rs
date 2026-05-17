@@ -29,12 +29,21 @@ pub fn down<S>(config: &ClusterConfig<S>, nft: &str) -> anyhow::Result<()> {
 
 /// Ensure the network bridge is up, setting it up via sudo if needed.
 /// No-op for Docker/Local backends or if the bridge already exists.
-pub fn ensure_bridge<S>(config: &ClusterConfig<S>, project_root: &Path) -> anyhow::Result<()> {
+pub fn ensure_bridge<S>(
+    config: &ClusterConfig<S>,
+    project_root: Option<&Path>,
+) -> anyhow::Result<()> {
     match &config.backend {
         Backend::MicroVm(_) => {
             if config::bridge_exists(&config.bridge) {
                 return Ok(());
             }
+            let Some(project_root) = project_root else {
+                anyhow::bail!(
+                    "Bridge {} not found and no project root is available to run `cluster-ctl net-up`. This host must already have services.steampipe-cluster networking active.",
+                    config.bridge
+                );
+            };
             println!(
                 "==> Bridge {} not found, setting up network via sudo...",
                 config.bridge

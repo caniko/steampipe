@@ -1,5 +1,6 @@
 use crate::core::backend::Backend;
 use crate::core::config::{ClusterConfig, par_each_vm};
+use crate::core::nixos_module::NixosModuleConfig;
 
 /// Per-VM account info collected from the instance.
 #[derive(Debug)]
@@ -11,7 +12,36 @@ struct AccountInfo {
 }
 
 /// Show Steam account status across all instances.
-pub async fn show<S>(config: &ClusterConfig<S>) -> anyhow::Result<()> {
+pub async fn show<S>(
+    config: &ClusterConfig<S>,
+    host: Option<&NixosModuleConfig>,
+) -> anyhow::Result<()> {
+    if config.vms.is_empty() {
+        if let Some(host) = host {
+            println!(
+                "==> Configured Steam accounts ({}; not leased)\n",
+                host.accounts.len()
+            );
+            println!("{:<8} {:<12} {:<20}", "VM", "Status", "Account");
+            println!("{}", "─".repeat(44));
+            for account in &host.accounts {
+                println!(
+                    "{:<8} {:<12} {:<20}",
+                    account.vm, "not leased", account.steam_user
+                );
+            }
+            if host.accounts.is_empty() {
+                println!();
+                println!("  No configured accounts in host config");
+            }
+            return Ok(());
+        }
+        anyhow::bail!(
+            "cluster '{}' has no claimed VMs. Start the cluster first, e.g. `nix run .#cluster-1v1-up` or `nix run .#cluster-tournament-up`.",
+            config.cluster_name
+        );
+    }
+
     let backend = config.backend.clone();
 
     println!(

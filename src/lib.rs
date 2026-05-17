@@ -234,6 +234,42 @@ fn command_requires_claimed_vms(command: &Commands) -> bool {
     )
 }
 
+fn steam_only_command(command: &Commands) -> bool {
+    matches!(command, Commands::Steam { .. })
+}
+
+fn command_uses_credentials(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::Up { .. }
+            | Commands::Steam {
+                action: SteamAction::Login { .. } | SteamAction::Guard { .. }
+            }
+    )
+}
+
+fn ensure_module_only_ssh_key_available<S>(
+    config: &ClusterConfig<S>,
+    module_only: bool,
+) -> anyhow::Result<()> {
+    if !module_only
+        || !matches!(config.backend_kind, BackendKind::Microvm)
+        || config.ssh_key.exists()
+    {
+        return Ok(());
+    }
+
+    let candidates = config::module_ssh_key_candidates()
+        .into_iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::bail!(
+        "No SSH key found for module-only Steam commands. Checked: {}. Pass --ssh-key explicitly or use the project key at nix/test-cluster/cluster_key.",
+        candidates
+    );
+}
+
 fn find_vm<'a, S>(
     config: &'a ClusterConfig<S>,
     target: Option<&str>,
@@ -422,6 +458,21 @@ fn require_runners_dir(
     }
 }
 
+fn require_login_runners_dir(
+    runners_dir: Option<PathBuf>,
+    backend_kind: BackendKind,
+    project_root: Option<&std::path::Path>,
+) -> anyhow::Result<PathBuf> {
+    match runners_dir {
+        Some(path) => Ok(path),
+        None if backend_kind != BackendKind::Microvm => Ok(PathBuf::from("/dev/null")),
+        None if project_root.is_none() => {
+            anyhow::bail!("--login-runners-dir is required when running outside a project root")
+        }
+        None => anyhow::bail!("--login-runners-dir is required for the microvm backend"),
+    }
+}
+
 /// Resolve a test config field: CLI explicit > profile > default.
 macro_rules! resolve {
     ($cli:expr, $profile:expr, $field:ident, $default:expr) => {
@@ -451,13 +502,45 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         return Ok(());
     }
 
+    let (discovery, module) = core::nixos_module::load_with_trace(cli.host_config.as_deref())?;
+
     let project_root = match &cli.project_root {
-        Some(p) => p.clone(),
-        None => detect_project_root()?,
+        Some(path) => Some(path.clone()),
+        None => match detect_project_root() {
+            Ok(path) => Some(path),
+            Err(_)
+                if steam_only_command(&cli.command)
+                    && (module.is_some()
+                        || matches!(
+                            &cli.command,
+                            Commands::Steam {
+                                action: SteamAction::Info
+                            }
+                        )) =>
+            {
+                None
+            }
+            Err(error) => return Err(error),
+        },
     };
+
+    if matches!(
+        &cli.command,
+        Commands::Steam {
+            action: SteamAction::Info
+        }
+    ) && project_root.is_none()
+        && module.is_none()
+    {
+        steam::info(&discovery, None, None)?;
+        return Ok(());
+    }
 
     // Init doesn't need vm_count
     if matches!(&cli.command, Commands::Init) {
+        let project_root = project_root
+            .as_ref()
+            .expect("project root must exist for init");
         let path = project_root.join("steampipe.toml");
         if path.exists() {
             anyhow::bail!("steampipe.toml already exists");
@@ -469,7 +552,10 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
 
     // YhConfig doesn't need vm_count either
     if let Commands::YhConfig { force } = &cli.command {
-        let proj = config::load_project_config(&project_root);
+        let project_root = project_root
+            .as_ref()
+            .expect("project root must exist for yh-config");
+        let proj = config::load_project_config(project_root);
         let cluster_name = cli
             .cluster
             .as_deref()
@@ -493,7 +579,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         }
 
         let content = config::generate_yh_cluster_config(
-            &project_root,
+            project_root,
             cli.vm_count,
             cli.cluster.as_deref(),
             cli.backend,
@@ -512,22 +598,24 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         action: VisualAction::List,
     } = &cli.command
     {
-        print_visual_scenes(&project_root)?;
+        let project_root = project_root
+            .as_ref()
+            .expect("project root must exist for visual list");
+        print_visual_scenes(project_root)?;
         return Ok(());
     }
 
     #[cfg(feature = "fixture-tools")]
     if let Commands::Fixture { action } = &cli.command {
+        let project_root = project_root
+            .as_ref()
+            .expect("project root must exist for fixture tooling");
         match action {
             FixtureAction::Golden { action } => match action {
                 FixtureGoldenAction::Verify {
                     golden_dir,
                     manifest,
-                } => fixture::golden::verify(
-                    &project_root,
-                    golden_dir.clone(),
-                    manifest.clone(),
-                )?,
+                } => fixture::golden::verify(&project_root, golden_dir.clone(), manifest.clone())?,
                 FixtureGoldenAction::Regenerate {
                     fixture,
                     output,
@@ -545,15 +633,43 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
 
     let vm_count = if cli.command.needs_vm_count() {
         cli.vm_count
-            .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?
+            .or_else(|| module.as_ref().map(|m| m.vm_count))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "--vm-count is required (e.g. --vm-count 7) — no value in the discovered host config either; pass it explicitly or enable services.steampipe-cluster on this host."
+                )
+            })?
     } else {
         // The operational VM set for these commands is derived from the
         // cluster's lease state (see the with_vm_ids rewrite below), so the
         // synthetic placeholder is immediately overwritten.
-        cli.vm_count.unwrap_or(1)
+        cli.vm_count
+            .or_else(|| module.as_ref().map(|m| m.vm_count))
+            .unwrap_or(1)
     };
-    let mut config =
-        ClusterConfig::from_vm_count(&project_root, vm_count, cli.cluster.as_deref(), cli.backend)?;
+    let module_only = project_root.is_none();
+    let mut config = match project_root.as_deref() {
+        Some(project_root) => ClusterConfig::from_vm_count(
+            project_root,
+            vm_count,
+            cli.cluster.as_deref(),
+            cli.backend,
+        )?,
+        None => {
+            let module = module.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("standalone Steam mode requires a discovered host config")
+            })?;
+            ClusterConfig::from_host_config(
+                module,
+                vm_count,
+                cli.cluster.as_deref(),
+                cli.backend,
+                cli.ssh_key.as_deref(),
+                cli.state_dir.as_deref(),
+                cli.lock_dir.as_deref(),
+            )?
+        }
+    };
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
     }
@@ -564,11 +680,18 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         config.lock_dir = dir.clone();
     }
 
-    let creds = cli
-        .credentials
-        .as_deref()
-        .map(|path| credentials::load(path, None))
-        .transpose()?;
+    let creds = if command_uses_credentials(&cli.command) {
+        let creds_path = cli
+            .credentials
+            .clone()
+            .or_else(|| module.as_ref().and_then(|m| m.credentials_path.clone()));
+        creds_path
+            .as_deref()
+            .map(|path| credentials::load(path, None))
+            .transpose()?
+    } else {
+        None
+    };
 
     state::ensure_state_dir(&config.state_dir)?;
 
@@ -589,7 +712,8 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             | Commands::Steam {
                 action: SteamAction::Start { .. }
                     | SteamAction::Accounts
-                    | SteamAction::CleanLogins { .. },
+                    | SteamAction::CleanLogins { .. }
+                    | SteamAction::Info,
             }
             | Commands::Run { .. }
             | Commands::StopGame { .. }
@@ -611,7 +735,16 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             | Commands::Watch { .. }
     ) {
         config = config.with_vm_ids(&claimed_vm_ids)?;
-        if command_requires_claimed_vms(&cli.command) && config.vms.is_empty() {
+        let allow_host_fallback_without_claims = matches!(
+            &cli.command,
+            Commands::Steam {
+                action: SteamAction::Accounts | SteamAction::CleanLogins { .. } | SteamAction::Info,
+            }
+        ) && module.is_some();
+        if command_requires_claimed_vms(&cli.command)
+            && config.vms.is_empty()
+            && !allow_host_fallback_without_claims
+        {
             anyhow::bail!(
                 "cluster '{}' has no claimed VMs. Start the cluster first, e.g. `nix run .#cluster-1v1-up` or `nix run .#cluster-tournament-up`.",
                 config.cluster_name
@@ -631,7 +764,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             )?;
             config = config.with_vm_ids(&reserved_ids)?;
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-            bridge::ensure_bridge(&config, &project_root)?;
+            bridge::ensure_bridge(&config, project_root.as_deref())?;
             let validated = config.validate_or_skip_bridge()?;
             let started = lifecycle::up(&validated, &runners_dir).await?;
             println!("==> {} VM(s) running", started.len());
@@ -646,7 +779,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             runners_dir,
         } => {
             let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-            bridge::ensure_bridge(&config, &project_root)?;
+            bridge::ensure_bridge(&config, project_root.as_deref())?;
             let validated = config.validate_or_skip_bridge()?;
             lifecycle::restart(&validated, target.as_deref(), &runners_dir).await?;
         }
@@ -657,7 +790,8 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 display,
             } => {
                 let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
-                bridge::ensure_bridge(&config, &project_root)?;
+                ensure_module_only_ssh_key_available(&config, module_only)?;
+                bridge::ensure_bridge(&config, project_root.as_deref())?;
                 let validated = config.validate_or_skip_bridge()?;
                 steam::check(&validated, target.as_deref(), &runners_dir, display).await?;
             }
@@ -666,9 +800,13 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 continue_from,
                 login_runners_dir,
             } => {
-                let login_runners_dir =
-                    require_runners_dir(login_runners_dir, config.backend_kind)?;
-                bridge::ensure_bridge(&config, &project_root)?;
+                let login_runners_dir = require_login_runners_dir(
+                    login_runners_dir,
+                    config.backend_kind,
+                    project_root.as_deref(),
+                )?;
+                ensure_module_only_ssh_key_available(&config, module_only)?;
+                bridge::ensure_bridge(&config, project_root.as_deref())?;
                 let validated = config.validate_or_skip_bridge()?;
                 steam::login(
                     &validated,
@@ -680,19 +818,29 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 .await?;
             }
             SteamAction::Guard { target, code } => {
-                bridge::ensure_bridge(&config, &project_root)?;
+                ensure_module_only_ssh_key_available(&config, module_only)?;
+                bridge::ensure_bridge(&config, project_root.as_deref())?;
                 let validated = config.validate_or_skip_bridge()?;
                 steam::guard(&validated, target.as_str(), code.as_deref(), creds.as_ref()).await?;
             }
             SteamAction::Start { target, display } => {
+                ensure_module_only_ssh_key_available(&config, module_only)?;
                 steam::start(&config, target.as_deref(), display).await?;
             }
-            SteamAction::Accounts => accounts::show(&config).await?,
+            SteamAction::Accounts => accounts::show(&config, module.as_ref()).await?,
+            SteamAction::Info => steam::info(&discovery, module.as_ref(), Some(&config))?,
             SteamAction::CleanLogins {
                 target,
                 login_state_dir,
             } => {
-                steam::clean_logins(&config.vms, login_state_dir.as_deref(), target.as_deref())?;
+                let login_state_dir = login_state_dir
+                    .or_else(|| module.as_ref().map(|host| host.login_state_dir.clone()));
+                steam::clean_logins(
+                    &config.vms,
+                    login_state_dir,
+                    target.as_deref(),
+                    module.as_ref(),
+                )?;
             }
         },
         Commands::GpuPreflight {
@@ -720,7 +868,11 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         Commands::NetUp { nft } => bridge::up(&config, &nft)?,
         Commands::NetDown { nft } => bridge::down(&config, &nft)?,
         Commands::Deploy { no_build, verify } => {
-            deploy::run(&config, &project_root, no_build, verify, true).await?
+            config.assert_project_fields_available();
+            let project_root = project_root
+                .as_deref()
+                .expect("project root must exist for deploy");
+            deploy::run(&config, project_root, no_build, verify, true).await?
         }
         Commands::StopGame { kill_steam } => run::stop_game(&config, kill_steam).await?,
         Commands::Logs {
@@ -735,7 +887,11 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 let tail_lines = lines.unwrap_or(20);
                 logs::follow(&config, tail_lines, target.as_deref()).await?;
             } else if output.is_some() {
-                logs::run(&config, &project_root, output).await?;
+                config.assert_project_fields_available();
+                let project_root = project_root
+                    .as_deref()
+                    .expect("project root must exist for log collection");
+                logs::run(&config, project_root, output).await?;
             } else {
                 let n = lines.unwrap_or(100);
                 logs::print_stdout(&config, target.as_deref(), n, head, pattern.as_deref()).await?;
@@ -745,6 +901,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             display,
             extra_args,
         } => {
+            config.assert_project_fields_available();
             run::start_game(&config, display, &extra_args).await?;
         }
         Commands::Test {
@@ -777,10 +934,14 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             strace,
             ..
         } => {
+            let project_root = project_root
+                .as_deref()
+                .expect("project root must exist for test runs");
+            config.assert_project_fields_available();
             // Load test profile if specified
             let prof = profile
                 .as_deref()
-                .and_then(|name| config::lookup_test_profile(&project_root, name));
+                .and_then(|name| config::lookup_test_profile(project_root, name));
             if profile.is_some() && prof.is_none() {
                 eprintln!(
                     "Warning: test profile '{}' not found in steampipe.toml",
@@ -832,7 +993,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
 
             let resolved_screenshot_backend =
                 resolve_screenshot_backend_from_profile(prof.as_ref());
-            let validator_plan = select_validator_plan(&project_root, prof.as_ref())?;
+            let validator_plan = select_validator_plan(project_root, prof.as_ref())?;
             let (visual_validator, visual_config) = match validator_plan {
                 ValidatorPlan::Shell(validator) => (Some(validator), None),
                 ValidatorPlan::Golden(visual) => (None, Some(visual)),
@@ -843,7 +1004,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             let chaos = chaos_profile
                 .as_deref()
                 .or(prof.as_ref().and_then(|p| p.chaos_profile.as_deref()))
-                .and_then(|name| config::lookup_chaos_profile(&project_root, name));
+                .and_then(|name| config::lookup_chaos_profile(project_root, name));
 
             // Resolve hooks: CLI > profile > config hooks
             let resolved_on_complete = on_complete
@@ -853,7 +1014,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 .or_else(|| prof.as_ref().and_then(|p| p.on_failure.clone()))
                 .or_else(|| config.hooks.on_failure.clone());
 
-            test::run(&config, &project_root, {
+            test::run(&config, project_root, {
                 let resolved_timeout_secs = resolve!(timeout, prof, timeout, 300);
                 test::TestConfig {
                     network: resolved_network,
@@ -937,9 +1098,13 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             vm_args,
             host_args,
         } => {
+            let project_root = project_root
+                .as_deref()
+                .expect("project root must exist for bisect");
+            config.assert_project_fields_available();
             bisect::run(
                 &config,
-                &project_root,
+                project_root,
                 bisect::BisectConfig {
                     good_sha: good,
                     bad_sha: bad,
@@ -965,10 +1130,13 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             rate,
             chaos_profile,
         } => {
+            let project_root = project_root
+                .as_deref()
+                .expect("project root must exist for chaos profiles");
             // Resolve chaos profile if specified
             let (lat, jit, los, rat) = if let Some(ref name) = chaos_profile {
                 let profile =
-                    config::lookup_chaos_profile(&project_root, name).ok_or_else(|| {
+                    config::lookup_chaos_profile(project_root, name).ok_or_else(|| {
                         anyhow::anyhow!("Chaos profile '{name}' not found in steampipe.toml")
                     })?;
                 (profile.latency, profile.jitter, profile.loss, profile.rate)
@@ -1025,6 +1193,9 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             screenshot_backend,
             validate,
         } => {
+            let project_root = project_root
+                .as_deref()
+                .expect("project root must exist for screenshot");
             let output_dir = output.unwrap_or_else(|| {
                 let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
                 project_root.join(format!("screenshots/{ts}"))
@@ -1032,7 +1203,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             let prof = profile
                 .as_deref()
                 .map(|name| {
-                    config::lookup_test_profile(&project_root, name).ok_or_else(|| {
+                    config::lookup_test_profile(project_root, name).ok_or_else(|| {
                         anyhow::anyhow!("test profile '{name}' not found in steampipe.toml")
                     })
                 })
@@ -1040,7 +1211,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             let screenshot_backend = screenshot_backend
                 .unwrap_or_else(|| resolve_screenshot_backend_from_profile(prof.as_ref()));
             let (validator, golden) = if validate {
-                match select_validator_plan(&project_root, prof.as_ref())? {
+                match select_validator_plan(project_root, prof.as_ref())? {
                     ValidatorPlan::Shell(validator) => (Some(validator), None),
                     ValidatorPlan::Golden(visual) => (None, Some(visual)),
                     ValidatorPlan::None => {
@@ -1049,7 +1220,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                                 "test profile '{name}' does not define a visual validator"
                             );
                         }
-                        let project_config = config::load_project_config(&project_root)
+                        let project_config = config::load_project_config(project_root)
                             .ok_or_else(|| anyhow::anyhow!("--validate requires steampipe.toml"))?;
                         (Some(select_visual_validator(project_config)?), None)
                     }
@@ -1080,9 +1251,12 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         Commands::Visual { action } => match action {
             VisualAction::List => unreachable!(),
             VisualAction::Capture { scene, vm, output } => {
+                let project_root = project_root
+                    .as_deref()
+                    .expect("project root must exist for visual capture");
                 capture_visual_scene(
                     &config,
-                    &project_root,
+                    project_root,
                     &scene,
                     vm.as_deref(),
                     output.as_deref(),
@@ -1090,22 +1264,34 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 .await?
             }
             VisualAction::Record { args, force } => {
-                record_visual_scene(&config, &project_root, &args, force).await?
+                let project_root = project_root
+                    .as_deref()
+                    .expect("project root must exist for visual record");
+                record_visual_scene(&config, project_root, &args, force).await?
             }
             VisualAction::Bless { scene, from, yes } => {
-                bless_visual_scene(&project_root, &scene, from.as_deref(), yes)?
+                let project_root = project_root
+                    .as_deref()
+                    .expect("project root must exist for visual bless");
+                bless_visual_scene(project_root, &scene, from.as_deref(), yes)?
             }
             VisualAction::Diff { scene, from } => {
-                diff_visual_scene(&project_root, &scene, from.as_deref())?
+                let project_root = project_root
+                    .as_deref()
+                    .expect("project root must exist for visual diff");
+                diff_visual_scene(project_root, &scene, from.as_deref())?
             }
             VisualAction::Report {
                 run_label,
                 output,
                 single_file,
             } => {
+                let project_root = project_root
+                    .as_deref()
+                    .expect("project root must exist for visual report");
                 let index = ui::report::generate(
                     &config,
-                    &project_root,
+                    project_root,
                     run_label.as_deref(),
                     output.as_deref(),
                     single_file,
@@ -1115,7 +1301,10 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         },
         Commands::Watch { interval } => watch::run(&config, interval).await?,
         Commands::Doctor { fix } => preflight::doctor(&config, fix).await?,
-        Commands::Init | Commands::YhConfig { .. } | Commands::Completions { .. } | Commands::Mcp => {
+        Commands::Init
+        | Commands::YhConfig { .. }
+        | Commands::Completions { .. }
+        | Commands::Mcp => {
             unreachable!()
         }
         #[cfg(feature = "fixture-tools")]

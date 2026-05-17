@@ -203,11 +203,21 @@ in {
     # Write module config so project-level flakes can discover NixOS-level settings
     environment.etc."steampipe/module.json" = {
       text = builtins.toJSON {
-        loginStateDir = toString cfg.loginStateDir;
+        accounts = lib.mapAttrsToList (name: creds: {
+          steamUser = creds.steamUser;
+          vm = name;
+        }) cfg.accounts;
+        bridge = cfg.bridge;
         credentialsPath =
           if cfg.accounts != {}
           then "/etc/steampipe/credentials.toml"
           else null;
+        hostIp = cfg.hostIp;
+        loginStateDir = toString cfg.loginStateDir;
+        prefix = cfg.prefix;
+        schemaVersion = 1;
+        subnet = cfg.subnet;
+        tapOwner = cfg.tapOwner;
         vmCount = cfg.vmCount;
       };
     };

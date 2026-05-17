@@ -121,6 +121,11 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub credentials: Option<PathBuf>,
 
+    /// Path to a global host config JSON file. Overrides discovery at
+    /// $XDG_CONFIG_HOME/steampipe/host.json and /etc/steampipe/{host,module}.json.
+    #[arg(long, global = true)]
+    pub host_config: Option<PathBuf>,
+
     /// Cluster name (for running multiple independent clusters)
     #[arg(long, global = true)]
     pub cluster: Option<String>,
@@ -537,7 +542,7 @@ impl Commands {
         !matches!(
             self,
             Self::Steam {
-                action: SteamAction::Guard { .. }
+                action: SteamAction::Guard { .. } | SteamAction::Info
             } | Self::Netem { .. }
         )
     }
@@ -591,6 +596,9 @@ pub enum SteamAction {
 
     /// Show Steam account status across all VMs
     Accounts,
+
+    /// Show the discovered global host config + local login-state summary
+    Info,
 
     /// Remove persisted Steam login state (from loginStateDir)
     CleanLogins {
@@ -878,6 +886,18 @@ mod tests {
     }
 
     #[test]
+    fn steam_info_does_not_need_vm_count() {
+        let cli = parse(&["steam", "info"]);
+        assert!(!cli.command.needs_vm_count());
+        match cli.command {
+            Commands::Steam {
+                action: SteamAction::Info,
+            } => {}
+            _ => panic!("expected Steam info command"),
+        }
+    }
+
+    #[test]
     fn logs_follow_with_target() {
         let cli = parse(&["--vm-count", "7", "logs", "--follow", "vm-2"]);
         match cli.command {
@@ -1082,14 +1102,7 @@ mod tests {
 
     #[test]
     fn steam_check_display_sway_gpu() {
-        let cli = parse(&[
-            "--vm-count",
-            "7",
-            "steam",
-            "check",
-            "--display",
-            "sway-gpu",
-        ]);
+        let cli = parse(&["--vm-count", "7", "steam", "check", "--display", "sway-gpu"]);
         match cli.command {
             Commands::Steam {
                 action: SteamAction::Check { display, .. },
@@ -1900,32 +1913,41 @@ mod tests {
     }
 
     #[test]
-    fn needs_vm_count_waives_only_steam_guard_and_netem() {
-        assert!(!parse(&["steam", "guard", "vm-1", "--code", "X"])
-            .command
-            .needs_vm_count());
-        assert!(!parse(&["netem", "vm-1", "--latency", "50"])
-            .command
-            .needs_vm_count());
-        assert!(!parse(&["netem", "all", "--loss", "1"])
-            .command
-            .needs_vm_count());
-        assert!(parse(&["--vm-count", "7", "status"])
-            .command
-            .needs_vm_count());
-        assert!(parse(&["--vm-count", "7", "up"])
-            .command
-            .needs_vm_count());
-        assert!(parse(&["--vm-count", "7", "down"])
-            .command
-            .needs_vm_count());
+    fn needs_vm_count_waives_steam_guard_info_and_netem() {
+        assert!(
+            !parse(&["steam", "guard", "vm-1", "--code", "X"])
+                .command
+                .needs_vm_count()
+        );
+        assert!(!parse(&["steam", "info"]).command.needs_vm_count());
+        assert!(
+            !parse(&["netem", "vm-1", "--latency", "50"])
+                .command
+                .needs_vm_count()
+        );
+        assert!(
+            !parse(&["netem", "all", "--loss", "1"])
+                .command
+                .needs_vm_count()
+        );
+        assert!(
+            parse(&["--vm-count", "7", "status"])
+                .command
+                .needs_vm_count()
+        );
+        assert!(parse(&["--vm-count", "7", "up"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "7", "down"]).command.needs_vm_count());
         // `steam login` and `steam check` still need vm-count (they fan out)
-        assert!(parse(&["--vm-count", "7", "steam", "login"])
-            .command
-            .needs_vm_count());
-        assert!(parse(&["--vm-count", "7", "steam", "check"])
-            .command
-            .needs_vm_count());
+        assert!(
+            parse(&["--vm-count", "7", "steam", "login"])
+                .command
+                .needs_vm_count()
+        );
+        assert!(
+            parse(&["--vm-count", "7", "steam", "check"])
+                .command
+                .needs_vm_count()
+        );
     }
 
     // ── Original tests ──────────────────────────────────────────────────

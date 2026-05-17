@@ -176,7 +176,7 @@ in {
   ];
 
   environment.etc."sway/fixture-workload.conf".text = ''
-    output * mode 1280x720 bg #000000 solid_color
+    output * mode 1280x1024 bg #000000 solid_color
     default_border pixel 0
     focus_follows_mouse no
     mouse_warping none
