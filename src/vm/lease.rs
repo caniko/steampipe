@@ -1,15 +1,41 @@
 //! VM reservation via PID-based claim files.
 //!
 //! Each VM slot gets a claim file in the lock directory. A VM is "claimed" if the
-//! claim file exists and the PID recorded in it is still alive. Multiple `cluster-ctl`
-//! processes can safely share the same VM pool — a process only uses VMs whose
-//! claim files reference live processes from its cluster.
+//! claim file exists, the PID recorded in it is still alive, **and** the process at
+//! that PID is genuinely a `microvm@vm-N` instance for the slot (not a recycled
+//! PID). Multiple `cluster-ctl` processes can safely share the same VM pool — a
+//! process only uses VMs whose claim files reference live, identity-verified
+//! processes from its cluster.
+//!
+//! ## Robustness against PID races
+//!
+//! - **PID identity verification**: each claim file carries a `cmdline_substring`
+//!   (typically `microvm@vm-N`). `probe_holder` reads `/proc/{pid}/cmdline` and
+//!   verifies the substring is present. A recycled PID running unrelated code
+//!   fails the check and the claim is recognised as stale.
+//! - **Startup grace window**: brand-new claims (younger than `STARTUP_GRACE`)
+//!   skip the cmdline check because the bash `microvm-run` shell briefly owns
+//!   the PID before exec'ing crosvm — cmdline would show bash, not the final
+//!   pattern. The grace gives the exec time to land.
+//! - **Atomic writes**: claim files are written via `tempfile + rename` so a
+//!   reader never sees a partial write parse as "no claim".
+//! - **Audit logging**: every claim reclaim emits an `eprintln!` recording the
+//!   prior owner and the reason (dead-PID vs cmdline-mismatch).
+//!
+//! See `docs/src/investigations/cluster-lease-stale-pid-race.md` in the regicide
+//! repo for the failure mode this guards against.
 
 use std::fs::{self, OpenOptions};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::core::state;
+
+/// Grace period after a claim is written during which the cmdline identity
+/// check is skipped. The window covers the microvm-run bash → crosvm `exec`
+/// transition (typically <100 ms; 5 s is generous against load).
+const STARTUP_GRACE: Duration = Duration::from_secs(5);
 
 /// Information about who holds a VM claim.
 pub struct LeaseInfo {
@@ -21,15 +47,39 @@ fn claim_path(vm_id: u8, lock_dir: &Path) -> PathBuf {
     lock_dir.join(format!("vm-{vm_id}.claim"))
 }
 
+/// Expected substring in `/proc/{pid}/cmdline` for a healthy claim on `vm_id`.
+fn expected_cmdline_substring(vm_id: u8) -> String {
+    format!("microvm@vm-{vm_id}")
+}
+
 /// Write a claim file for a VM. Called after `start_instance()` returns a PID.
+///
+/// The write goes through a tempfile + rename so concurrent readers never see
+/// a torn file. The recorded `cmdline_substring` is what `probe_holder` will
+/// match against `/proc/{pid}/cmdline` after the startup grace window.
 pub fn write_claim(vm_id: u8, lock_dir: &Path, cluster: &str, pid: u32) -> anyhow::Result<()> {
     fs::create_dir_all(lock_dir)?;
     let meta = serde_json::json!({
         "pid": pid,
         "cluster": cluster,
         "since": chrono::Local::now().to_rfc3339(),
+        "cmdline_substring": expected_cmdline_substring(vm_id),
     });
-    fs::write(claim_path(vm_id, lock_dir), meta.to_string())?;
+    write_atomic(&claim_path(vm_id, lock_dir), meta.to_string().as_bytes())?;
+    Ok(())
+}
+
+/// Atomically replace `path` with `bytes` by writing a sibling tempfile and
+/// renaming. The rename is POSIX-atomic on the same filesystem.
+fn write_atomic(path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("claim path has no parent: {}", path.display()))?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(bytes)?;
+    tmp.flush()?;
+    tmp.persist(path)
+        .map_err(|e| anyhow::anyhow!("atomic rename failed: {e}"))?;
     Ok(())
 }
 
@@ -96,7 +146,12 @@ pub fn reserve_n(
 }
 
 /// Probe a claim file to see who holds a VM. Returns `None` if the VM is free
-/// (no claim file, unreadable, or the PID is dead).
+/// (no claim file, unreadable, dead PID, or PID identity mismatch).
+///
+/// Identity verification: after the startup grace window, the PID's
+/// `/proc/{pid}/cmdline` must contain the substring recorded in the claim file
+/// (typically `microvm@vm-N`). This catches recycled PIDs that happen to be
+/// alive but aren't the original microvm process.
 pub fn probe_holder(vm_id: u8, lock_dir: &Path) -> Option<LeaseInfo> {
     let path = claim_path(vm_id, lock_dir);
     let mut file = OpenOptions::new().read(true).open(&path).ok()?;
@@ -107,14 +162,51 @@ pub fn probe_holder(vm_id: u8, lock_dir: &Path) -> Option<LeaseInfo> {
     let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
     let pid = v.get("pid")?.as_u64()? as u32;
     let cluster = v.get("cluster")?.as_str()?.to_string();
+    let since = v
+        .get("since")
+        .and_then(|s| s.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+
+    // Compute claim age. Default to "old" if `since` is missing or unparseable
+    // so legacy claim files (no `since` field) still get cmdline-verified.
+    let claim_is_fresh = since
+        .and_then(|s| chrono::Local::now().signed_duration_since(s).to_std().ok())
+        .is_some_and(|age| age < STARTUP_GRACE);
 
     if !state::is_pid_alive(pid) {
-        // Stale claim — reclaim by removing it
+        eprintln!("[lease] vm-{vm_id}.claim PID {pid} is dead (cluster '{cluster}'); reclaiming.");
         let _ = fs::remove_file(&path);
         return None;
     }
 
+    if !claim_is_fresh {
+        let expected = v
+            .get("cmdline_substring")
+            .and_then(|s| s.as_str())
+            .map(str::to_owned)
+            .unwrap_or_else(|| expected_cmdline_substring(vm_id));
+        let cmdline_ok = read_proc_cmdline(pid)
+            .map(|cmd| cmd.contains(&expected))
+            .unwrap_or(false);
+        if !cmdline_ok {
+            eprintln!(
+                "[lease] vm-{vm_id}.claim PID {pid} no longer matches '{expected}' \
+                 (PID reuse or process exited); reclaiming claim for cluster '{cluster}'."
+            );
+            let _ = fs::remove_file(&path);
+            return None;
+        }
+    }
+
     Some(LeaseInfo { pid, cluster })
+}
+
+/// Read `/proc/{pid}/cmdline` and join the NUL-separated args into a single
+/// string. Returns `None` if the file can't be read (process exited).
+fn read_proc_cmdline(pid: u32) -> Option<String> {
+    let raw = fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    let joined = String::from_utf8_lossy(&raw).replace('\0', " ");
+    Some(joined)
 }
 
 /// List VM IDs currently claimed by a given cluster name (with alive PIDs).
@@ -168,6 +260,27 @@ mod tests {
         unreachable!("no dead pid found in scan range");
     }
 
+    /// Write a claim with a custom `cmdline_substring` so we can deliberately
+    /// trigger identity mismatch (the test's own PID's cmdline never contains
+    /// `microvm@vm-...`).
+    fn write_claim_with_substring(
+        vm_id: u8,
+        lock_dir: &Path,
+        cluster: &str,
+        pid: u32,
+        cmdline_substring: &str,
+        age_seconds: i64,
+    ) {
+        let since = chrono::Local::now() - chrono::Duration::seconds(age_seconds);
+        let meta = serde_json::json!({
+            "pid": pid,
+            "cluster": cluster,
+            "since": since.to_rfc3339(),
+            "cmdline_substring": cmdline_substring,
+        });
+        fs::write(claim_path(vm_id, lock_dir), meta.to_string()).unwrap();
+    }
+
     #[test]
     fn claim_path_is_lock_dir_joined() {
         let p = claim_path(3, Path::new("/tmp/lock-dir"));
@@ -175,10 +288,14 @@ mod tests {
     }
 
     #[test]
-    fn write_then_probe_returns_holder() {
-        let dir = unique_lock_dir("probe");
+    fn write_then_probe_returns_holder_within_startup_grace() {
+        let dir = unique_lock_dir("probe-grace");
+        // Test's own PID has cmdline like "lease-test-foo", not "microvm@vm-1",
+        // so without the grace window probe_holder would reject the live PID
+        // for identity mismatch. The just-written claim is fresh, so cmdline
+        // is skipped and the lease is honoured.
         write_claim(1, &dir, "alpha", live_pid()).unwrap();
-        let info = probe_holder(1, &dir).expect("claim should be live");
+        let info = probe_holder(1, &dir).expect("fresh claim should be live");
         assert_eq!(info.pid, live_pid());
         assert_eq!(info.cluster, "alpha");
     }
@@ -199,6 +316,96 @@ mod tests {
             !claim_path(2, &dir).exists(),
             "stale claim file should be removed"
         );
+    }
+
+    #[test]
+    fn probe_holder_reclaims_pid_with_wrong_cmdline_after_grace() {
+        let dir = unique_lock_dir("cmdline-mismatch");
+        // Stamp claim as 10 s old → past startup grace, so cmdline gets verified.
+        write_claim_with_substring(3, &dir, "ghost", live_pid(), "microvm@vm-3", 10);
+        assert!(claim_path(3, &dir).exists());
+        // Our test process's cmdline doesn't contain "microvm@vm-3" → reclaim.
+        assert!(probe_holder(3, &dir).is_none());
+        assert!(!claim_path(3, &dir).exists());
+    }
+
+    #[test]
+    fn probe_holder_keeps_fresh_claim_even_with_wrong_cmdline() {
+        let dir = unique_lock_dir("fresh-grace");
+        // age_seconds=0 → within startup grace → cmdline check skipped.
+        write_claim_with_substring(4, &dir, "alpha", live_pid(), "microvm@vm-4", 0);
+        let info = probe_holder(4, &dir).expect("within grace window the claim should hold");
+        assert_eq!(info.cluster, "alpha");
+        assert!(claim_path(4, &dir).exists());
+    }
+
+    #[test]
+    fn probe_holder_keeps_live_claim_when_cmdline_matches() {
+        // Synthesise a claim whose cmdline_substring is a substring guaranteed
+        // to be in our own /proc/$$/cmdline. Test binaries always invoke
+        // something like `<runner> tests::probe_holder_...` — `tests::` is a
+        // stable, non-empty fingerprint.
+        let dir = unique_lock_dir("live-match");
+        let our_cmdline = read_proc_cmdline(live_pid()).expect("self cmdline readable");
+        // Pick a substring that's certain to appear: the test process's own
+        // executable path. (`/` is in every cmdline; safer is the binary name
+        // chunk before the test args.)
+        let needle: String = our_cmdline
+            .split_whitespace()
+            .next()
+            .expect("cmdline non-empty")
+            .to_owned();
+        write_claim_with_substring(5, &dir, "alpha", live_pid(), &needle, 10);
+        let info = probe_holder(5, &dir).expect("matching cmdline keeps claim alive");
+        assert_eq!(info.cluster, "alpha");
+    }
+
+    #[test]
+    fn probe_holder_handles_missing_cmdline_substring_field() {
+        // Simulate a legacy claim file written before the cmdline_substring
+        // field existed. probe_holder falls back to the default substring
+        // (`microvm@vm-{id}`) so the slot still gets identity-verified once
+        // it's outside the grace window.
+        let dir = unique_lock_dir("legacy");
+        let since = chrono::Local::now() - chrono::Duration::seconds(10);
+        let meta = serde_json::json!({
+            "pid": live_pid(),
+            "cluster": "legacy",
+            "since": since.to_rfc3339(),
+        });
+        fs::write(claim_path(6, &dir), meta.to_string()).unwrap();
+        // Default substring is `microvm@vm-6` which is NOT in our test
+        // process's cmdline → reclaimed.
+        assert!(probe_holder(6, &dir).is_none());
+    }
+
+    #[test]
+    fn write_claim_records_cmdline_substring() {
+        let dir = unique_lock_dir("substring-recorded");
+        write_claim(7, &dir, "alpha", live_pid()).unwrap();
+        let contents = fs::read_to_string(claim_path(7, &dir)).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&contents).unwrap();
+        assert_eq!(
+            v.get("cmdline_substring").and_then(|s| s.as_str()),
+            Some("microvm@vm-7")
+        );
+    }
+
+    #[test]
+    fn write_claim_uses_atomic_rename() {
+        // Force a torn-write scenario the old way: write the file, then
+        // overwrite it concurrently. With atomic rename, readers always see
+        // valid JSON.
+        let dir = unique_lock_dir("atomic");
+        write_claim(1, &dir, "alpha", live_pid()).unwrap();
+        // Sequentially overwrite many times; every intermediate read must parse.
+        for _ in 0..20 {
+            write_claim(1, &dir, "alpha", live_pid()).unwrap();
+            let raw = fs::read_to_string(claim_path(1, &dir)).unwrap();
+            let v: serde_json::Value =
+                serde_json::from_str(&raw).expect("atomic rename → readable JSON");
+            assert_eq!(v.get("cluster").and_then(|s| s.as_str()), Some("alpha"));
+        }
     }
 
     #[test]

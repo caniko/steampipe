@@ -48,8 +48,27 @@ pub async fn up(
     let reserved_names: Vec<&str> = config.vms.iter().map(|v| v.name.as_ref()).collect();
     println!("  Reserved: {}", reserved_names.join(", "));
 
-    // Stop any existing instances on these VMs
+    // Stop any existing instances on these VMs.
+    //
+    // Defensive: even though reserve_n already enforced ownership, double-check
+    // that the slot's current claim (if any) belongs to us. If a foreign claim
+    // slipped through for any reason (race, manual edit, lease bug), refuse to
+    // stomp on a still-running VM owned by another cluster.
     for vm in &config.vms {
+        if let Some(holder) = lease::probe_holder(vm.index, &config.lock_dir)
+            && holder.cluster != config.cluster_name
+        {
+            anyhow::bail!(
+                "vm-{} was reserved for cluster '{}' but its claim now belongs to cluster '{}' (pid {}). \
+                 Refusing to stop a VM owned by another cluster. \
+                 Run `cluster-ctl --cluster {} down` to release first, or wait for it to finish.",
+                vm.index,
+                config.cluster_name,
+                holder.cluster,
+                holder.pid,
+                holder.cluster,
+            );
+        }
         config.backend.stop_instance(config, vm);
     }
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
