@@ -7,8 +7,6 @@
   network,
   vmUser ? "cluster",
   sshAuthorizedKeys ? [],
-  sshAuthorizedKeysPath ? null,
-  sshAuthorizedKeysShare ? null,
   loginStateDir ? null,
   extraVmOverlays ? [],
   extraVmModules ? [],
@@ -29,7 +27,7 @@ in
 
           steampipe.clusterVm = {
             user = vmUser;
-            inherit sshAuthorizedKeys sshAuthorizedKeysPath;
+            inherit sshAuthorizedKeys;
             enableSteam = true;
             useSystemdStage1 = flavor.useSystemdStage1;
           };
@@ -81,23 +79,14 @@ in
               }
             ];
 
-            shares =
-              lib.optionals shareSteamState [
-                {
-                  tag = "steam-state-${name}";
-                  source = "${loginStateDir}/${name}";
-                  mountPoint = "/home/${vmUser}/.local/share/Steam";
-                  proto = "virtiofs";
-                }
-              ]
-              ++ lib.optionals (sshAuthorizedKeysShare != null) [
-                {
-                  tag = "steampipe-ssh-authorized";
-                  source = sshAuthorizedKeysShare.source;
-                  mountPoint = sshAuthorizedKeysShare.mountPoint;
-                  proto = "virtiofs";
-                }
-              ];
+            shares = lib.optionals shareSteamState [
+              {
+                tag = "steam-state-${name}";
+                source = "${loginStateDir}/${name}";
+                mountPoint = "/home/${vmUser}/.local/share/Steam";
+                proto = "virtiofs";
+              }
+            ];
           };
         })
       ]

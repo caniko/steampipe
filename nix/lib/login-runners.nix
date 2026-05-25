@@ -8,9 +8,7 @@
   subnet ? "10.0.100",
   prefix ? 24,
   vmUser ? "cluster",
-  sshAuthorizedKey ? null,
-  sshAuthorizedKeysPath ? null,
-  sshAuthorizedKeysShare ? null,
+  sshAuthorizedKey ? "",
   hypervisor ? "crosvm",
   graphics ? true,
   memory ? 4096,
@@ -44,16 +42,18 @@
   mkMicroVM = import ./microvm-runner.nix {
     inherit pkgs lib nixpkgs steampipe;
   } {
-    inherit network vmUser sshAuthorizedKeysPath sshAuthorizedKeysShare;
-    sshAuthorizedKeys = lib.optional (sshAuthorizedKey != null) sshAuthorizedKey;
+    inherit network vmUser;
+    # Empty key produces empty authorized_keys; runners build but are
+    # unreachable. This is the intentional first-rebuild state: the host
+    # activation script generates the keypair, the next rebuild's eval
+    # reads it via the module's default, and the runners gain a usable key.
+    sshAuthorizedKeys = lib.optional (sshAuthorizedKey != "") sshAuthorizedKey;
     loginStateDir = null;
   };
 
   loginVMRunners = lib.mapAttrs (mkMicroVM flavor) loginVMs;
 in
-  assert lib.assertMsg (sshAuthorizedKey != null || sshAuthorizedKeysPath != null)
-  "login-runners.nix requires either sshAuthorizedKey or sshAuthorizedKeysPath";
-    pkgs.linkFarm "steampipe-login-vm-runners"
+  pkgs.linkFarm "steampipe-login-vm-runners"
     (lib.mapAttrsToList (name: runner: {
         inherit name;
         path = runner;

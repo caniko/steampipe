@@ -21,16 +21,6 @@ in {
       description = "SSH public keys authorized for the cluster VM user.";
     };
 
-    sshAuthorizedKeysPath = lib.mkOption {
-      type = lib.types.nullOr lib.types.str;
-      default = null;
-      description = ''
-        Runtime path to an authorized_keys-compatible public key file for
-        the cluster VM user. This is used by host-managed login runners so
-        the SSH key can be generated outside the Nix store.
-      '';
-    };
-
     enableSteam = lib.mkOption {
       type = lib.types.bool;
       default = true;
@@ -66,15 +56,6 @@ in {
           PasswordAuthentication = false;
           PermitRootLogin = "no";
         };
-        extraConfig = lib.mkIf (cfg.sshAuthorizedKeysPath != null) ''
-          AuthorizedKeysCommand ${pkgs.writeShellScript "steampipe-authorized-keys" ''
-            set -euo pipefail
-            if [ "''${1:-}" = ${lib.escapeShellArg cfg.user} ] && [ -r ${lib.escapeShellArg cfg.sshAuthorizedKeysPath} ]; then
-              cat ${lib.escapeShellArg cfg.sshAuthorizedKeysPath}
-            fi
-          ''} %u
-          AuthorizedKeysCommandUser ${cfg.user}
-        '';
       };
 
       security.sudo.wheelNeedsPassword = false;

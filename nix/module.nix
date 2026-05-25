@@ -16,7 +16,6 @@
     else "root";
   loginRunnerSshDir = "/var/lib/steampipe/ssh";
   loginRunnerSshKey = "${loginRunnerSshDir}/cluster_key";
-  loginRunnerAuthorizedKeysDir = "/var/lib/steampipe/ssh-authorized";
 
   loginRunnersDir =
     (import ./lib/login-runners.nix {
@@ -24,11 +23,7 @@
     }) {
       inherit (cfg) vmCount subnet prefix;
       inherit vmUser;
-      sshAuthorizedKeysPath = "/run/steampipe/authorized-keys/cluster_key.pub";
-      sshAuthorizedKeysShare = {
-        source = loginRunnerAuthorizedKeysDir;
-        mountPoint = "/run/steampipe/authorized-keys";
-      };
+      sshAuthorizedKey = cfg.loginRunners.sshAuthorizedKey;
       hypervisor = cfg.loginRunners.hypervisor;
       graphics = cfg.loginRunners.graphics;
       memory = cfg.loginRunners.memory;
@@ -37,11 +32,9 @@
   loginRunnerKeyScript = ''
     set -euo pipefail
     keydir=${lib.escapeShellArg loginRunnerSshDir}
-    pubdir=${lib.escapeShellArg loginRunnerAuthorizedKeysDir}
     key="$keydir/cluster_key"
 
     ${pkgs.coreutils}/bin/install -d -m 0700 "$keydir"
-    ${pkgs.coreutils}/bin/install -d -m 0755 "$pubdir"
     if [ ! -f "$key" ]; then
       ${pkgs.openssh}/bin/ssh-keygen -t ed25519 -N "" \
         -C "steampipe-loginrunners@$(${pkgs.coreutils}/bin/hostname)" \
@@ -49,9 +42,8 @@
     fi
     ${pkgs.coreutils}/bin/chmod 0600 "$key"
     ${pkgs.coreutils}/bin/chmod 0644 "$key.pub"
-    ${pkgs.coreutils}/bin/install -m 0644 "$key.pub" "$pubdir/cluster_key.pub"
     ${lib.optionalString (cfg.tapOwner != null) ''
-      ${pkgs.coreutils}/bin/chown -R ${cfg.tapOwner}:users "$keydir" "$pubdir"
+      ${pkgs.coreutils}/bin/chown -R ${cfg.tapOwner}:users "$keydir"
     ''}
   '';
 
@@ -227,6 +219,39 @@ in {
     loginRunners = {
       enable = lib.mkEnableOption "host-level Steam login VM runners";
 
+      sshAuthorizedKey = lib.mkOption {
+        type = lib.types.str;
+        default =
+          if builtins.pathExists "${loginRunnerSshKey}.pub"
+          then lib.removeSuffix "\n" (builtins.readFile "${loginRunnerSshKey}.pub")
+          else "";
+        defaultText = lib.literalExpression ''
+          # Auto-read from the host-generated pubkey, if it exists yet.
+          if builtins.pathExists "''${loginRunnerSshKey}.pub"
+          then lib.removeSuffix "\n" (builtins.readFile "''${loginRunnerSshKey}.pub")
+          else ""
+        '';
+        example = "ssh-ed25519 AAAA... steampipe-loginrunners@host";
+        description = ''
+          Cluster SSH public key authorized inside each login VM, as a
+          single-line string. Required when `loginRunners.enable` is set.
+
+          By default the value is read at evaluation time from the
+          host-managed keypair at ${loginRunnerSshKey}.pub (the
+          activation script generates this keypair on every rebuild
+          when the module is enabled). Override only if you provide
+          the key out of band, for example through a flake input or a
+          pre-committed pubkey.
+
+          The key is baked into the login-runner derivation, so
+          rotating it requires a `nixos-rebuild` (≈30 s).
+
+          Fresh installs need two rebuilds: the first activation
+          creates the keypair, and the second rebuild's evaluation
+          picks it up via the default reader.
+        '';
+      };
+
       hypervisor = lib.mkOption {
         type = lib.types.str;
         default = "crosvm";
@@ -267,7 +292,9 @@ in {
       lib.optional (cfg.natInterface != null)
       "services.steampipe-cluster.natInterface is deprecated; NetworkManager shared mode manages NAT via the active default route."
       ++ lib.optional (cfg.tapOwner == null)
-      "services.steampipe-cluster: tapOwner is not set; loginStateDir will be owned by root and the in-VM Steam user cannot write to it. Set tapOwner to a host user whose numeric UID matches the in-VM vm_user (default 1000).";
+      "services.steampipe-cluster: tapOwner is not set; loginStateDir will be owned by root and the in-VM Steam user cannot write to it. Set tapOwner to a host user whose numeric UID matches the in-VM vm_user (default 1000)."
+      ++ lib.optional (cfg.loginRunners.enable && cfg.loginRunners.sshAuthorizedKey == "")
+      "services.steampipe-cluster.loginRunners is enabled but no sshAuthorizedKey is set and ${loginRunnerSshKey}.pub does not exist yet. The activation script will generate the keypair during this rebuild; run `nixos-rebuild switch` once more to bake the pubkey into the login runners. (Login VMs built by this rebuild will boot but reject SSH.)";
 
     # Bridge via NetworkManager
     networking.networkmanager.ensureProfiles.profiles =
@@ -282,16 +309,19 @@ in {
       // tapProfiles;
 
     # Create login state directories for interactive and automated Steam login.
+    # The SSH dir is provisioned unconditionally so the activation script can
+    # generate the cluster keypair on first rebuild — operators then read
+    # ${loginRunnerSshKey}.pub and set loginRunners.sshAuthorizedKey on the
+    # second rebuild to enable the login runners.
     systemd.tmpfiles.rules =
       ["d ${cfg.loginStateDir} 0755 ${loginStateOwner} users -"]
       ++ (map (name: "d ${cfg.loginStateDir}/${name} 0700 ${loginStateOwner} users -") vmNames)
-      ++ lib.optionals cfg.loginRunners.enable [
+      ++ [
         "d /var/lib/steampipe 0755 root root -"
         "d ${loginRunnerSshDir} 0700 ${loginStateOwner} users -"
-        "d ${loginRunnerAuthorizedKeysDir} 0755 ${loginStateOwner} users -"
       ];
 
-    system.activationScripts.steampipe-loginrunners-ssh-key = lib.mkIf cfg.loginRunners.enable {
+    system.activationScripts.steampipe-loginrunners-ssh-key = {
       text = loginRunnerKeyScript;
     };
 
