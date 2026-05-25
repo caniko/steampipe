@@ -29,9 +29,6 @@
 
 - [Steam session longevity research](./planning/steam-session-longevity-research.md)
 - [Steam session longevity design](./planning/steam-session-longevity-design.md)
-- [Plan: steam warm timer](./planning/steam-warm-timer/README.md)
-  - [01 Timer NixOS module](./planning/steam-warm-timer/01-timer-module.md)
-  - [02 Documentation](./planning/steam-warm-timer/02-docs.md)
 - [Config-less CLI research](./planning/cli-configless-from-nixos-research.md)
 - [Plan: config-less CLI from NixOS](./planning/cli-configless-from-nixos/README.md)
   - [01 Host config schema fields](./planning/cli-configless-from-nixos/01-host-config-schema-fields.md)
