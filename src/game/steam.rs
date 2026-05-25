@@ -2,7 +2,7 @@ use std::io::{self, BufRead, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-use crate::core::backend::Backend;
+use crate::core::backend::{Backend, microvm_log_path};
 use crate::core::config::{BridgeReady, ClusterConfig, Unchecked, VmDef, par_each_vm};
 use crate::core::credentials::{CredentialsMap, VmCredentials};
 use crate::core::nixos_module::{Discovery, NixosModuleConfig, RowStatus};
@@ -708,7 +708,7 @@ async fn login_single_vm(
     print!("  Waiting for SSH... ");
     if !backend.wait_ready(&vm.ip, LOGIN_SSH_TIMEOUT_SECS).await {
         println!("timeout after {LOGIN_SSH_TIMEOUT_SECS}s");
-        print_vm_log_tail(&config.state_dir, &vm.name.0);
+        print_vm_log_tail(&config.state_dir, vm);
         cleanup();
         anyhow::bail!("SSH timeout for {}", vm.name);
     }
@@ -745,24 +745,42 @@ async fn login_single_vm(
     Ok(())
 }
 
-fn print_vm_log_tail(state_dir: &Path, vm_name: &str) {
-    let path = state_dir.join(vm_name).join("vm.log");
-    let Ok(log) = std::fs::read_to_string(&path) else {
-        println!("  VM log unavailable: {}", path.display());
-        return;
+fn print_vm_log_tail(state_dir: &Path, vm: &VmDef) {
+    let path = microvm_log_path(state_dir, vm);
+    let log = match read_vm_log_lossy(&path) {
+        Ok(log) => log,
+        Err(err) => {
+            if err.kind() == ErrorKind::NotFound {
+                println!(
+                    "  VM log unavailable: {} (log file does not exist; backend may not have started the VM)",
+                    path.display()
+                );
+            } else {
+                println!("  VM log unavailable: {} ({err})", path.display());
+            }
+            return;
+        }
     };
     println!("  --- {} tail ---", path.display());
-    for line in log
-        .lines()
+    for line in vm_log_tail_lines(&log) {
+        println!("  {line}");
+    }
+    println!("  --- end VM log tail ---");
+}
+
+fn read_vm_log_lossy(path: &Path) -> io::Result<String> {
+    let bytes = std::fs::read(path)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+fn vm_log_tail_lines(log: &str) -> Vec<&str> {
+    log.lines()
         .rev()
         .take(40)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-    {
-        println!("  {line}");
-    }
-    println!("  --- end VM log tail ---");
+        .collect()
 }
 
 /// Auto-login Steam on already-running VMs using credentials.
@@ -1664,6 +1682,7 @@ fn format_date(timestamp: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::{IpAddr, VmName};
 
     #[test]
     fn shell_escape_no_quotes() {
@@ -1678,6 +1697,28 @@ mod tests {
     #[test]
     fn shell_escape_empty() {
         assert_eq!(shell_escape(""), "");
+    }
+
+    #[test]
+    fn vm_log_tail_tolerates_non_utf8_output() {
+        let temp = tempfile::tempdir().unwrap();
+        let vm = VmDef {
+            name: VmName("vm-1".into()),
+            ip: IpAddr("10.0.100.1".into()),
+            index: 1,
+        };
+        let log_path = microvm_log_path(temp.path(), &vm);
+        std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        std::fs::write(&log_path, b"boot line\nraw byte: \xff\nssh never came up\n").unwrap();
+
+        let log = read_vm_log_lossy(&log_path).unwrap();
+
+        assert!(log.contains("boot line"));
+        assert!(log.contains("raw byte: \u{fffd}"));
+        assert_eq!(
+            vm_log_tail_lines(&log),
+            vec!["boot line", "raw byte: \u{fffd}", "ssh never came up"]
+        );
     }
 
     #[test]
