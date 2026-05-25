@@ -40,3 +40,4 @@
     - [05.02 Configuration docs](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-02-configuration-docs.md)
     - [05.03 CLI help text](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-03-cli-help-text.md)
   - [06 Migrate project wrappers](./planning/cli-configless-from-nixos/06-migrate-project-wrappers.md)
+- [Nix input install gaps research](./planning/nix-input-install-gaps-research.md)

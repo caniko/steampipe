@@ -25,7 +25,7 @@ release cycle; version `1` prints an upgrade warning. The full JSON shape is:
   "prefix": 24,
   "hostIp": "10.0.100.254",
   "tapOwner": "can",
-  "runnersDir": "/run/current-system/sw/share/steampipe/runners",
+  "runnersDir": "/etc/steampipe/runners",
   "loginRunnersDir": "/etc/steampipe/login-runners",
   "loginStateDir": "/var/lib/steampipe/logins",
   "credentialsPath": "/etc/steampipe/credentials.toml",
@@ -75,8 +75,10 @@ Field reference:
 
 `runnersDir`, `loginRunnersDir`, `sshKey`, and `vmUser` are additive optional
 fields. They do not require a schema version bump, and readers that do not know
-about them ignore them. The NixOS module emits `loginRunnersDir`, `sshKey`, and
-`vmUser` only when `services.steampipe-cluster.loginRunners.enable = true`.
+about them ignore them. The NixOS module emits `runnersDir` only when
+`services.steampipe-cluster.runners.enable = true`, emits `loginRunnersDir`
+only when `services.steampipe-cluster.loginRunners.enable = true`, and emits
+`sshKey` when either host-level runner kind is enabled.
 
 ## `loginStateDir`
 
@@ -107,10 +109,9 @@ The host config emits `schemaVersion = 2` as of the writable-share persistence
 change. Versions `1` and `2` both parse, with a warning printed on `1`; the
 `1` to `2` change is behavioral. The mount model changed to one writable share
 at `/home/${vm_user}/.local/share/Steam`; no schema field was added or removed.
-The later `loginRunnersDir`, `sshKey`, and `vmUser` fields are also additive;
-the NixOS module emits them only when
-`services.steampipe-cluster.loginRunners.enable = true`, without a schema
-version bump. A future `cluster-ctl` release will drop `1` support. Run
+The later `runnersDir`, `loginRunnersDir`, `sshKey`, and `vmUser` fields are
+also additive; the NixOS module emits them without a schema version bump. A
+future `cluster-ctl` release will drop `1` support. Run
 `nixos-rebuild switch` with the updated module to regenerate schema-2
 `/etc/steampipe/module.json`.
 
@@ -125,35 +126,44 @@ the previous mount semantics, but it will not benefit from session persistence.
 
 ## `steampipe-warm-timer`
 
-`mkTestCluster` exposes an opt-in NixOS module as `warmTimerModule`. It wraps
-`cluster-ctl steam warm` in a systemd timer and oneshot service so refresh
-tokens rotate ahead of expiry without a manual cron entry.
+`inputs.steampipe.nixosModules.warmTimer` exposes an opt-in NixOS module that
+wraps `cluster-ctl steam warm` in a systemd timer and oneshot service, so
+refresh tokens rotate ahead of expiry without a manual cron entry.
 
-Import it next to the host module and enable it explicitly:
+Import it next to the host module and enable runtime runners explicitly:
 
 ```nix
 {
-  steampipe,
-  steampipeCluster,
-  ...
-}: {
   imports = [
-    steampipe.nixosModules.default
-    steampipeCluster.warmTimerModule
+    inputs.steampipe.nixosModules.default
+    inputs.steampipe.nixosModules.warmTimer
   ];
+
+  services.steampipe-cluster = {
+    enable = true;
+    tapOwner = "can";
+    tapOwnerUid = 1000;
+    runners.enable = true;
+  };
 
   services.steampipe-warm-timer.enable = true;
 }
 ```
 
+The host-level timer requires `services.steampipe-cluster.runners.enable =
+true`; evaluation fails if it is missing. The service invokes `cluster-ctl
+steam warm` without `--runners-dir`, so `cluster-ctl` resolves
+`/etc/steampipe/runners` from `/etc/steampipe/module.json`.
+
 Options:
 
 - `enable` (`bool`, default `false`): turn the timer on.
-- `user` (`str`, default = project `vm_user`): host user that runs the warm
-  command. This user must own the cluster SSH key and map to the same numeric
-  user that owns Steam login state, normally the host `tapOwner`.
-- `sshKey` (`str`, default = the cluster `ssh_key` from `steampipe.toml`): SSH
-  private key path passed to `cluster-ctl --ssh-key`.
+- `user` (`str`, default = `services.steampipe-cluster.tapOwner`): host user
+  that runs the warm command. This user must own the cluster SSH key and map to
+  the same numeric user that owns Steam login state, normally the host
+  `tapOwner`.
+- `sshKey` (`str`, default = `/var/lib/steampipe/ssh/cluster_key`): SSH private
+  key path passed to `cluster-ctl --ssh-key`.
 - `onCalendar` (`str`, default `"weekly"`): systemd `OnCalendar=` expression.
   Tune to `"daily"` for high-paranoia clusters or `"monthly"` for clusters
   that test rarely.
@@ -162,6 +172,12 @@ Options:
 - `extraArgs` (`list of str`, default `[]`): extra arguments appended to
   `cluster-ctl steam warm`, for example `[ "--cluster" "nightly" ]` when
   warming a non-default cluster context.
+
+Project-flake consumers can still use `(mkTestCluster {...}).warmTimerModule`
+when they intentionally want the timer bound to that project-built cluster
+instead of the host-level `/etc/steampipe/module.json` configuration.
+For the short host-level setup, see
+[Optional: weekly warm timer](../getting-started/installation.md#optional-weekly-warm-timer).
 
 ### Operational notes
 
@@ -201,12 +217,23 @@ behaviour.
       vm-2 = { steamUser = "bob"; steamPass = config.age.secrets.bob-pw.path; };
     };
 
-    # Enable host-level login VM runners so cluster-ctl can run
-    # `steam login` without --login-runners-dir.
+    # Runtime runners support steam check/warm/up outside a project root.
+    runners.enable = true;
+    # Login runners support steam login outside a project root.
     loginRunners.enable = true;
   };
 }
 ```
+
+When `services.steampipe-cluster.runners.enable = true`, the module publishes
+`/etc/steampipe/runners` as a link-farm containing one `vm-N/bin/microvm-run`
+wrapper per configured VM. It also emits
+`runnersDir = "/etc/steampipe/runners"` and
+`sshKey = "/var/lib/steampipe/ssh/cluster_key"` in
+`/etc/steampipe/module.json`, so `cluster-ctl steam check`,
+`cluster-ctl steam warm`, and `cluster-ctl up` can run from outside a project
+root. This option is off by default because enabling seven runtime VM runners
+adds roughly 7 GiB of VM closure paths to the host system closure.
 
 When `services.steampipe-cluster.loginRunners.enable = true`, the module
 publishes `/etc/steampipe/login-runners` as a link-farm containing one
@@ -215,6 +242,26 @@ publishes `/etc/steampipe/login-runners` as a link-farm containing one
 `sshKey = "/var/lib/steampipe/ssh/cluster_key"` in
 `/etc/steampipe/module.json`, so `cluster-ctl steam login` can run from
 outside a project root.
+
+The module installs `cluster-ctl` into the system profile by default through
+`services.steampipe-cluster.package`. Override that option to use a fork, a
+debug build, or a locally patched derivation:
+
+```nix
+{
+  services.steampipe-cluster.package = inputs.steampipe.packages.${pkgs.system}.default;
+}
+```
+
+Shell completions for bash, zsh, and fish are installed into the standard NixOS
+completion directories by default. Disable them when completions are managed
+out of band:
+
+```nix
+{
+  services.steampipe-cluster.completions.enable = false;
+}
+```
 
 The module owns the login-runner SSH keypair under `/var/lib/steampipe/ssh/`.
 The directory is mode `0700`, the private key is mode `0600`, and the public

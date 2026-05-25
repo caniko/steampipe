@@ -7,6 +7,10 @@
   ...
 }: let
   cfg = config.services.steampipe-cluster;
+  # Read this from _module.args manually so missing hand-import plumbing
+  # becomes our assertion below instead of a raw module-argument error.
+  microvm = config._module.args.microvm or null;
+  runnersEnabled = cfg.loginRunners.enable || cfg.runners.enable;
   vmNames = builtins.genList (i: "vm-${toString (i + 1)}") cfg.vmCount;
   tapNames = map (n: "tap-${n}") vmNames;
   vmUser = "cluster";
@@ -16,6 +20,18 @@
     else "root";
   loginRunnerSshDir = "/var/lib/steampipe/ssh";
   loginRunnerSshKey = "${loginRunnerSshDir}/cluster_key";
+
+  clusterCtlCompletions =
+    pkgs.runCommand "cluster-ctl-completions" {
+      nativeBuildInputs = [cfg.package];
+    } ''
+      mkdir -p "$out/share/bash-completion/completions"
+      mkdir -p "$out/share/zsh/site-functions"
+      mkdir -p "$out/share/fish/vendor_completions.d"
+      cluster-ctl completions bash > "$out/share/bash-completion/completions/cluster-ctl"
+      cluster-ctl completions zsh > "$out/share/zsh/site-functions/_cluster-ctl"
+      cluster-ctl completions fish > "$out/share/fish/vendor_completions.d/cluster-ctl.fish"
+    '';
 
   loginRunnersDir =
     (import ./lib/login-runners.nix {
@@ -27,6 +43,19 @@
       hypervisor = cfg.loginRunners.hypervisor;
       graphics = cfg.loginRunners.graphics;
       memory = cfg.loginRunners.memory;
+    };
+
+  runnersDir =
+    (import ./lib/host-runners.nix {
+      inherit pkgs lib nixpkgs steampipe;
+    }) {
+      inherit (cfg) vmCount subnet prefix;
+      inherit vmUser;
+      sshAuthorizedKey = cfg.runners.sshAuthorizedKey;
+      hypervisor = cfg.runners.hypervisor;
+      graphics = cfg.runners.graphics;
+      memory = cfg.runners.memory;
+      linkFarmName = "steampipe-vm-runners";
     };
 
   loginRunnerKeyScript = ''
@@ -270,6 +299,63 @@ in {
         description = "Memory per login VM in MiB. Steam GUI needs about 4 GiB.";
       };
     };
+
+    runners = {
+      enable = lib.mkEnableOption "host-level Steam runtime VM runners";
+
+      sshAuthorizedKey = lib.mkOption {
+        type = lib.types.str;
+        default =
+          if builtins.pathExists "${loginRunnerSshKey}.pub"
+          then lib.removeSuffix "\n" (builtins.readFile "${loginRunnerSshKey}.pub")
+          else "";
+        defaultText = lib.literalExpression "<host-generated key, see loginRunners.sshAuthorizedKey>";
+        description = ''
+          SSH public key authorized inside each runtime VM. Defaults to
+          the host-managed `cluster_key.pub` so login runners and
+          runtime runners stay in lockstep. Override only if your test
+          project pins a separate SSH key.
+        '';
+      };
+
+      hypervisor = lib.mkOption {
+        type = lib.types.str;
+        default = "crosvm";
+        description = "Hypervisor for the runtime VMs.";
+      };
+
+      graphics = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Enable virtio-gpu in runtime VMs.";
+      };
+
+      memory = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 2048;
+        description = "Memory per runtime VM in MiB.";
+      };
+    };
+
+    package = lib.mkOption {
+      type = lib.types.package;
+      default = steampipe.packages.${pkgs.system}.default;
+      defaultText = lib.literalExpression "steampipe.packages.\${pkgs.system}.default";
+      description = ''
+        The `cluster-ctl` derivation to install on the host. Override
+        to pin a fork, a debug build, or a locally patched version.
+      '';
+    };
+
+    completions.enable = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Whether to install bash, zsh, and fish completions for
+        `cluster-ctl` to the system completion directories. Disable
+        if you manage completions out of band.
+      '';
+    };
   };
 
   config = lib.mkIf cfg.enable {
@@ -286,7 +372,29 @@ in {
         assertion = !cfg.loginRunners.enable || nixpkgs != null;
         message = "services.steampipe-cluster.loginRunners.enable requires the nixpkgs flake input to be passed to nix/module.nix; use steampipe.nixosModules.default from the flake output.";
       }
+      {
+        assertion = !cfg.loginRunners.enable || microvm != null;
+        message = "services.steampipe-cluster.loginRunners.enable requires the microvm flake input to be passed through _module.args (use steampipe.nixosModules.default from the flake output rather than importing nix/module.nix directly).";
+      }
+      {
+        assertion = !cfg.runners.enable || cfg.tapOwner != null;
+        message = "services.steampipe-cluster.runners.enable requires services.steampipe-cluster.tapOwner so cluster-ctl can read the SSH key without sudo.";
+      }
+      {
+        assertion = !cfg.runners.enable || steampipe != null;
+        message = "services.steampipe-cluster.runners.enable requires the steampipe flake self to be passed to nix/module.nix; use steampipe.nixosModules.default from the flake output.";
+      }
+      {
+        assertion = !cfg.runners.enable || nixpkgs != null;
+        message = "services.steampipe-cluster.runners.enable requires the nixpkgs flake input to be passed to nix/module.nix; use steampipe.nixosModules.default from the flake output.";
+      }
+      {
+        assertion = !cfg.runners.enable || microvm != null;
+        message = "services.steampipe-cluster.runners.enable requires the microvm flake input to be passed through _module.args (use steampipe.nixosModules.default from the flake output rather than importing nix/module.nix directly).";
+      }
     ];
+
+    nixpkgs.overlays = lib.optional (steampipe != null) steampipe.overlays.default;
 
     warnings =
       lib.optional (cfg.natInterface != null)
@@ -294,7 +402,15 @@ in {
       ++ lib.optional (cfg.tapOwner == null)
       "services.steampipe-cluster: tapOwner is not set; loginStateDir will be owned by root and the in-VM Steam user cannot write to it. Set tapOwner to a host user whose numeric UID matches the in-VM vm_user (default 1000)."
       ++ lib.optional (cfg.loginRunners.enable && cfg.loginRunners.sshAuthorizedKey == "")
-      "services.steampipe-cluster.loginRunners is enabled but no sshAuthorizedKey is set and ${loginRunnerSshKey}.pub does not exist yet. The activation script will generate the keypair during this rebuild; run `nixos-rebuild switch` once more to bake the pubkey into the login runners. (Login VMs built by this rebuild will boot but reject SSH.)";
+      "services.steampipe-cluster.loginRunners is enabled but no sshAuthorizedKey is set and ${loginRunnerSshKey}.pub does not exist yet. The activation script will generate the keypair during this rebuild; run `nixos-rebuild switch` once more to bake the pubkey into the login runners. (Login VMs built by this rebuild will boot but reject SSH.)"
+      ++ lib.optional (cfg.runners.enable && cfg.runners.sshAuthorizedKey == "")
+      "services.steampipe-cluster.runners is enabled but no sshAuthorizedKey is set and ${loginRunnerSshKey}.pub does not exist yet. The activation script will generate the keypair during this rebuild; run `nixos-rebuild switch` once more to bake the pubkey into the runtime runners. (Runtime VMs built by this rebuild will boot but reject SSH.)"
+      ++ lib.optional (runnersEnabled && !(pkgs.crosvm.passthru.__steampipeOverlay or false))
+      "services.steampipe-cluster: pkgs.crosvm lacks the steampipe overlay's `__steampipeOverlay` marker. A downstream overlay has shadowed our patched crosvm; login VMs may hit SIGSYS on Linux >= 6.13.";
+
+    environment.systemPackages =
+      [cfg.package]
+      ++ lib.optional cfg.completions.enable clusterCtlCompletions;
 
     # Bridge via NetworkManager
     networking.networkmanager.ensureProfiles.profiles =
@@ -353,6 +469,10 @@ in {
           loginRunnersDir = "/etc/steampipe/login-runners";
           sshKey = loginRunnerSshKey;
         }
+        // lib.optionalAttrs cfg.runners.enable {
+          runnersDir = "/etc/steampipe/runners";
+          sshKey = loginRunnerSshKey;
+        }
         // {
           inherit vmUser;
         });
@@ -360,6 +480,10 @@ in {
 
     environment.etc."steampipe/login-runners" = lib.mkIf cfg.loginRunners.enable {
       source = loginRunnersDir;
+    };
+
+    environment.etc."steampipe/runners" = lib.mkIf cfg.runners.enable {
+      source = runnersDir;
     };
 
     systemd.services.steampipe-loginrunners-ssh-key = lib.mkIf cfg.loginRunners.enable {

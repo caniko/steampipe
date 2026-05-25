@@ -32,10 +32,13 @@
       inherit (pkgs) lib;
 
       steampipeModule = {...}: {
-        imports = [./nix/module.nix];
+        imports = [
+          microvm.nixosModules.host
+          ./nix/module.nix
+        ];
         _module.args = {
-            inherit nixpkgs;
-            steampipe = self;
+          inherit nixpkgs microvm;
+          steampipe = self;
         };
       };
 
@@ -153,6 +156,51 @@
         ];
       };
 
+      hostWarmTimerEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          steampipeModule
+          ./nix/modules/warm-timer.nix
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-cluster = {
+              enable = true;
+              vmCount = 2;
+              tapOwner = "cluster";
+              tapOwnerUid = 1000;
+              runners.enable = true;
+            };
+            services.steampipe-warm-timer.enable = true;
+          }
+        ];
+      };
+
+      hostWarmTimerMissingRunnersEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          steampipeModule
+          ./nix/modules/warm-timer.nix
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-cluster = {
+              enable = true;
+              vmCount = 2;
+              tapOwner = "cluster";
+              tapOwnerUid = 1000;
+            };
+            services.steampipe-warm-timer.enable = true;
+          }
+        ];
+      };
+
       moduleLoginRunnersEnabledEval = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [
@@ -193,6 +241,27 @@
           }
         ];
       };
+
+      moduleRunnersEnabledEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          steampipeModule
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-cluster = {
+              enable = true;
+              vmCount = 2;
+              tapOwner = "cluster";
+              tapOwnerUid = 1000;
+              runners.enable = true;
+            };
+          }
+        ];
+      };
     in {
       packages = {
         default = cluster-ctl;
@@ -227,6 +296,54 @@
             touch "$out"
           '';
 
+        host-warm-timer-eval =
+          pkgs.runCommand "host-warm-timer-eval" {
+            timerOnCalendar = hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.OnCalendar;
+            timerPersistent =
+              if hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.Persistent
+              then "true"
+              else "false";
+            timerRandomizedDelaySec = hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
+            serviceUser = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.User;
+            serviceHome = builtins.elemAt hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.Environment 0;
+            warmCommandText = builtins.readFile hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
+          } ''
+            test "$timerOnCalendar" = weekly
+            test "$timerPersistent" = true
+            test "$timerRandomizedDelaySec" = 1h
+            test "$serviceUser" = cluster
+            test "$serviceHome" = HOME=/home/cluster
+            case "$warmCommandText" in
+              *"--runners-dir"*) echo "host warm timer should rely on module.json, not --runners-dir" >&2; exit 1 ;;
+            esac
+            case "$warmCommandText" in
+              *"cluster-ctl"*"--vm-count 2"*"--ssh-key /var/lib/steampipe/ssh/cluster_key"*"steam warm"*) ;;
+              *) echo "unexpected warm command: $warmCommandText" >&2; exit 1 ;;
+            esac
+            touch "$out"
+          '';
+
+        host-warm-timer-missing-runners-eval =
+          pkgs.runCommand "host-warm-timer-missing-runners-eval" {
+            assertionMessage =
+              let
+                failed =
+                  lib.findFirst
+                  (assertion: !assertion.assertion)
+                  null
+                  hostWarmTimerMissingRunnersEval.config.assertions;
+              in
+                if failed == null
+                then ""
+                else failed.message;
+          } ''
+            case "$assertionMessage" in
+              *"services.steampipe-warm-timer.enable requires services.steampipe-cluster.runners.enable"*) ;;
+              *) echo "expected runners.enable assertion not seen: $assertionMessage" >&2; exit 1 ;;
+            esac
+            touch "$out"
+          '';
+
         module-loginrunners-eval =
           pkgs.runCommand "module-loginrunners-eval" {
             enabledJson = moduleLoginRunnersEnabledEval.config.environment.etc."steampipe/module.json".text;
@@ -258,6 +375,78 @@ PY
             test ! -e "$loginRunnersDir/vm-3"
             touch "$out"
           '';
+
+        module-runners-eval =
+          pkgs.runCommand "module-runners-eval" {
+            enabledJson = moduleRunnersEnabledEval.config.environment.etc."steampipe/module.json".text;
+            disabledJson = moduleLoginRunnersDisabledEval.config.environment.etc."steampipe/module.json".text;
+            runnersDir = moduleRunnersEnabledEval.config.environment.etc."steampipe/runners".source;
+            runnersEtcEnabled =
+              if moduleRunnersEnabledEval.config.environment.etc ? "steampipe/runners"
+              then "true"
+              else "false";
+            runnersEtcDisabled =
+              if moduleLoginRunnersDisabledEval.config.environment.etc ? "steampipe/runners"
+              then "true"
+              else "false";
+          } ''
+            ${pkgs.python3}/bin/python - <<'PY'
+import json
+import os
+
+enabled = json.loads(os.environ["enabledJson"])
+disabled = json.loads(os.environ["disabledJson"])
+
+assert enabled["schemaVersion"] == 2
+assert enabled["vmCount"] == 2
+assert enabled["vmUser"] == "cluster"
+assert enabled["runnersDir"] == "/etc/steampipe/runners"
+assert enabled["sshKey"] == "/var/lib/steampipe/ssh/cluster_key"
+assert "loginRunnersDir" not in enabled
+
+assert disabled["schemaVersion"] == 2
+assert disabled["vmCount"] == 2
+assert disabled["vmUser"] == "cluster"
+assert "runnersDir" not in disabled
+assert "sshKey" not in disabled
+PY
+
+            test "$runnersEtcEnabled" = true
+            test "$runnersEtcDisabled" = false
+            test -x "$runnersDir/vm-1/bin/microvm-run"
+            test -x "$runnersDir/vm-2/bin/microvm-run"
+            test ! -e "$runnersDir/vm-3"
+            touch "$out"
+          '';
+
+        module-cluster-ctl-install-eval =
+          pkgs.runCommand "module-cluster-ctl-install-eval" {
+            packagesText = builtins.concatStringsSep " " (map (p: p.pname or "") moduleLoginRunnersEnabledEval.config.environment.systemPackages);
+          } ''
+            case "$packagesText" in
+              *cluster-ctl*) ;;
+              *) echo "cluster-ctl not in environment.systemPackages: $packagesText" >&2; exit 1 ;;
+            esac
+            touch "$out"
+          '';
+
+        module-overlay-applied-eval =
+          pkgs.runCommand "module-overlay-applied-eval" {
+            crosvmMarker =
+              if (moduleLoginRunnersEnabledEval.pkgs.crosvm.passthru.__steampipeOverlay or false)
+              then "yes"
+              else "no";
+            cloudHypervisorMarker =
+              if (moduleLoginRunnersEnabledEval.pkgs.cloud-hypervisor-graphics.passthru.__steampipeOverlay or false)
+              then "yes"
+              else "no";
+            overlaysCount = toString (builtins.length moduleLoginRunnersEnabledEval.config.nixpkgs.overlays);
+          } ''
+            test "$crosvmMarker" = yes
+            test "$cloudHypervisorMarker" = yes
+            test "$overlaysCount" -gt 0
+            touch "$out"
+          '';
       };
 
       devShells.default = pkgs.mkShell {
@@ -282,9 +471,12 @@ PY
       nixosModules = microvm.nixosModules // {
         # Host networking (bridge, TAPs, NAT)
         default = {...}: {
-          imports = [./nix/module.nix];
+          imports = [
+            microvm.nixosModules.host
+            ./nix/module.nix
+          ];
           _module.args = {
-            inherit nixpkgs;
+            inherit nixpkgs microvm;
             steampipe = self;
           };
         };
@@ -292,6 +484,8 @@ PY
         cluster-vm-base = import ./nix/cluster-vm-base.nix;
         # VM-side graphics setup (mesa, virtio-gpu kernel modules, overlay)
         vm-graphics = import ./nix/vm-graphics.nix;
+        # Host-level timer for refreshing Steam sessions.
+        warmTimer = import ./nix/modules/warm-timer.nix;
       };
 
       lib = {
@@ -318,6 +512,7 @@ PY
             inherit (oldAttrs) src patches;
             hash = "sha256-YYrzd44DbaRT3jieclHrGoDLT14vTzTtNwIRLCtv3Ko=";
           };
+          passthru = (oldAttrs.passthru or {}) // {__steampipeOverlay = true;};
         });
 
         # The nixpkgs crosvm derivation only installs the binary; the source
@@ -345,6 +540,7 @@ PY
           # `.bpf` policies instead.
           version = "107.1-unstable-2026-02-13";
           __intentionallyOverridingVersion = true;
+          passthru = (oldAttrs.passthru or {}) // {__steampipeOverlay = true;};
           buildInputs = (oldAttrs.buildInputs or []) ++ [
             final.aemu
             final.gfxstream

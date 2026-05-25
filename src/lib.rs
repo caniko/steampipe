@@ -477,14 +477,16 @@ fn resolve_path_field(
 /// Require a runners_dir for the microvm backend, or return a dummy path for others.
 fn require_runners_dir(
     runners_dir: Option<PathBuf>,
+    module: Option<&NixosModuleConfig>,
     backend_kind: BackendKind,
+    project_root: Option<&std::path::Path>,
 ) -> anyhow::Result<PathBuf> {
     resolve_path_field(
         runners_dir,
-        None,
-        |_| None,
+        module,
+        |m| m.runners_dir.as_ref(),
         backend_kind,
-        Some(std::path::Path::new(".")),
+        project_root,
         "runners dir",
         "--runners-dir",
         "services.steampipe-cluster.runners.enable",
@@ -815,7 +817,12 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 &config.cluster_name,
             )?;
             config = config.with_vm_ids(&reserved_ids)?;
-            let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            let runners_dir = require_runners_dir(
+                runners_dir,
+                module.as_ref(),
+                config.backend_kind,
+                project_root.as_deref(),
+            )?;
             bridge::ensure_bridge(&config, project_root.as_deref())?;
             let validated = config.validate_or_skip_bridge()?;
             let started = lifecycle::up(&validated, &runners_dir).await?;
@@ -830,7 +837,12 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             target,
             runners_dir,
         } => {
-            let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+            let runners_dir = require_runners_dir(
+                runners_dir,
+                module.as_ref(),
+                config.backend_kind,
+                project_root.as_deref(),
+            )?;
             bridge::ensure_bridge(&config, project_root.as_deref())?;
             let validated = config.validate_or_skip_bridge()?;
             lifecycle::restart(&validated, target.as_deref(), &runners_dir).await?;
@@ -1488,6 +1500,15 @@ mod tests {
             "services.steampipe-cluster.runners.enable",
         )
         .unwrap();
+
+        assert_eq!(resolved, PathBuf::from("/module/runners"));
+    }
+
+    #[test]
+    fn require_runners_dir_uses_module_value_without_project_root() {
+        let module = module_config_with_paths(Some(PathBuf::from("/module/runners")), None);
+        let resolved =
+            require_runners_dir(None, Some(&module), BackendKind::Microvm, None).unwrap();
 
         assert_eq!(resolved, PathBuf::from("/module/runners"));
     }
