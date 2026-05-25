@@ -75,7 +75,8 @@ Field reference:
 
 `runnersDir`, `loginRunnersDir`, `sshKey`, and `vmUser` are additive optional
 fields. They do not require a schema version bump, and readers that do not know
-about them ignore them.
+about them ignore them. The NixOS module emits `loginRunnersDir`, `sshKey`, and
+`vmUser` only when `services.steampipe-cluster.loginRunners.enable = true`.
 
 ## `loginStateDir`
 
@@ -106,8 +107,11 @@ The host config emits `schemaVersion = 2` as of the writable-share persistence
 change. Versions `1` and `2` both parse, with a warning printed on `1`; the
 `1` to `2` change is behavioral. The mount model changed to one writable share
 at `/home/${vm_user}/.local/share/Steam`; no schema field was added or removed.
-A future `cluster-ctl` release will drop `1` support. Run `nixos-rebuild
-switch` with the updated module to regenerate schema-2
+The later `loginRunnersDir`, `sshKey`, and `vmUser` fields are also additive;
+the NixOS module emits them only when
+`services.steampipe-cluster.loginRunners.enable = true`, without a schema
+version bump. A future `cluster-ctl` release will drop `1` support. Run
+`nixos-rebuild switch` with the updated module to regenerate schema-2
 `/etc/steampipe/module.json`.
 
 ### For downstream consumers
@@ -187,7 +191,8 @@ behaviour.
 ## NixOS module walkthrough
 
 ```nix
-{ services.steampipe-cluster = {
+{
+  services.steampipe-cluster = {
     enable = true;
     tapOwner = "can";
     tapOwnerUid = 1000;
@@ -195,6 +200,9 @@ behaviour.
       vm-1 = { steamUser = "alice"; steamPass = config.age.secrets.alice-pw.path; };
       vm-2 = { steamUser = "bob"; steamPass = config.age.secrets.bob-pw.path; };
     };
+
+    # Enable host-level login VM runners so cluster-ctl can run
+    # `steam login` without --login-runners-dir.
     loginRunners.enable = true;
   };
 }
@@ -234,6 +242,14 @@ Discovery trace:
   2. ~/.config/steampipe/host.json                     (not found)
   3. /etc/steampipe/host.json                          (not found)
   4. /etc/steampipe/module.json                        (selected)
+```
+
+The login-runner field should also show that it came from the same module
+config:
+
+```text
+Resolved values:
+  loginRunnersDir  /etc/steampipe/login-runners        /etc/steampipe/module.json
 ```
 
 ## Hand-written walkthrough

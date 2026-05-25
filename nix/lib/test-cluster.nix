@@ -41,11 +41,10 @@
     if nixosIntegration
     then moduleConfig.loginStateDir
     else null;
-  nixosCredentials =
-    if nixosIntegration
-    then moduleConfig.credentialsPath
-    else null;
 in
+  # With nixosIntegration enabled, the shell wrappers expect the host module
+  # to publish /etc/steampipe/login-runners at runtime via
+  # services.steampipe-cluster.loginRunners.enable.
   assert lib.assertMsg (!(nixosIntegration && credentials != null))
   "credentials cannot be set when nixosIntegration is enabled - the NixOS module provides credentials"; let
     clusterConfig = projectConfig.cluster or {};
@@ -180,12 +179,15 @@ in
     loginVMRunners = lib.mapAttrs (mkMicroVM flavors.default) loginVMs;
 
     loginVMRunnersDir =
-      pkgs.linkFarm "cluster-login-vm-runners"
-      (lib.mapAttrsToList (name: runner: {
-          inherit name;
-          path = runner;
-        })
-        loginVMRunners);
+      if nixosIntegration
+      then null
+      else
+        pkgs.linkFarm "cluster-login-vm-runners"
+        (lib.mapAttrsToList (name: runner: {
+            inherit name;
+            path = runner;
+          })
+          loginVMRunners);
 
     # -- Wrapper helpers --------------------------------------------------
 
@@ -255,7 +257,7 @@ in
           ${ctl} --vm-count ${toString count} ${credsFlag} --cluster ${clusterName} test --network steam --players ${toString players} "$@"
       '';
 
-    mkSteamLoginWrapper = name: count: args:
+    mkSteamAuthWrapper = name: count: args:
       pkgs.writeShellScript "cluster-${name}" ''
         ${hostClusterEnv}
         credentials_args=()
@@ -265,6 +267,42 @@ in
           fi
         ''}
         exec ${ctl} --vm-count ${toString count} ${credsFlag} "''${credentials_args[@]}" ${args} "$@"
+      '';
+
+    # mkSteamLoginWrapper:
+    # - When nixosIntegration is true and /etc/steampipe/login-runners exists
+    #   at runtime, the wrapper does not pass --login-runners-dir. cluster-ctl
+    #   reads loginRunnersDir from /etc/steampipe/module.json.
+    # - Otherwise, the wrapper passes --login-runners-dir pointing at the
+    #   project-built linkFarm.
+    mkSteamLoginWrapper = name: count: subcommand:
+      pkgs.writeShellScript "cluster-${name}" ''
+        ${hostClusterEnv}
+        credentials_args=()
+        ${lib.optionalString (credentials == null) ''
+          if [ -f ${systemCredentialsPath} ]; then
+            credentials_args=(--credentials ${systemCredentialsPath})
+          fi
+        ''}
+
+        login_runners_args=()
+        ${
+          if nixosIntegration
+          then ''
+            if [ ! -d /etc/steampipe/login-runners ]; then
+              echo "cluster-${name}: nixosIntegration=true requires services.steampipe-cluster.loginRunners.enable=true and /etc/steampipe/login-runners to exist." >&2
+              echo "cluster-${name}: run nixos-rebuild switch for the host config that enables steampipe login runners, then verify: test -d /etc/steampipe/login-runners." >&2
+              exit 1
+            fi
+          ''
+          else ''
+            login_runners_args=(--login-runners-dir ${loginVMRunnersDir})
+          ''
+        }
+
+        exec ${ctl} --vm-count ${toString count} ${credsFlag} \
+          "''${credentials_args[@]}" \
+          ${subcommand} "''${login_runners_args[@]}" "$@"
       '';
 
     # Per-mode, per-flavor scripts: lifecycle, deploy, test, run.
@@ -332,8 +370,8 @@ in
       (mkAllFlavorScripts "1v1" 1 2)
       // {
         "cluster-1v1-steam-test" = mkSteamTestWrapper "1v1-steam-test" 1 "1v1" 2;
-        "cluster-1v1-steam-login" = mkSteamLoginWrapper "1v1-steam-login" 1 "--cluster 1v1 steam login --login-runners-dir ${loginVMRunnersDir}";
-        "cluster-1v1-steam-guard" = mkSteamLoginWrapper "1v1-steam-guard" 1 "--cluster 1v1 steam guard";
+        "cluster-1v1-steam-login" = mkSteamLoginWrapper "1v1-steam-login" 1 "--cluster 1v1 steam login";
+        "cluster-1v1-steam-guard" = mkSteamAuthWrapper "1v1-steam-guard" 1 "--cluster 1v1 steam guard";
         "cluster-1v1-test-wayland" = cluster1v1WaylandTest;
       }
       // (mkAllFlavorScripts "tournament" vmCount 8)
@@ -361,15 +399,15 @@ in
         cluster-steam-start = mkWrapper "steam-start" vmCount "steam start";
         cluster-steam-check = mkWrapper "steam-check" vmCount "steam check --runners-dir ${vmRunnersDir}";
         cluster-steam-warm = mkWrapper "steam-warm" vmCount "steam warm --runners-dir ${vmRunnersDir}";
-        cluster-steam-login = mkSteamLoginWrapper "steam-login" vmCount "steam login --login-runners-dir ${loginVMRunnersDir}";
-        cluster-steam-guard = mkSteamLoginWrapper "steam-guard" vmCount "steam guard";
+        cluster-steam-login = mkSteamLoginWrapper "steam-login" vmCount "steam login";
+        cluster-steam-guard = mkSteamAuthWrapper "steam-guard" vmCount "steam guard";
       }
       # System-level login persist: boots login VMs with virtiofs-mounted loginStateDir,
       # logs in, and Steam writes session files directly to host.
       // lib.optionalAttrs nixosIntegration {
         cluster-steam-login-persist =
-          mkWrapper "steam-login-persist" vmCount
-          "--credentials ${nixosCredentials} steam login --login-runners-dir ${loginVMRunnersDir}";
+          mkSteamLoginWrapper "steam-login-persist" vmCount
+          "steam login";
       }
       # -- Network simulation (full cluster, requires sudo) --
       // {

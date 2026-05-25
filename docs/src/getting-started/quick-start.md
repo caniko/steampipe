@@ -62,9 +62,30 @@ Each VM boots and `cluster-ctl` waits for SSH to become reachable.
 
 ## 4. Log into Steam
 
+### Recommended: NixOS host (canix)
+
+Set `services.steampipe-cluster.loginRunners.enable = true` and run
+`nixos-rebuild switch`. See also: [NixOS module walkthrough](../configuration/host-config.md#nixos-module-walkthrough).
+Then from any directory:
+
 ```bash
-# Interactive mode - VNC into each VM to complete login + Steam Guard
-cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
+cluster-ctl steam login           # all VMs (default)
+cluster-ctl steam login vm-3      # single VM
+cluster-ctl steam login vm-3 -+   # vm-3..vm-N
+```
+
+No flags needed: the host config provides the runner directory, VM count, SSH
+key, and credentials path.
+
+### Fallback: project flake (non-NixOS hosts)
+
+When `services.steampipe-cluster.loginRunners.enable` is not set, or the host
+isn't running NixOS, supply the runners directory explicitly:
+
+```bash
+# Interactive mode — VNC into each VM to complete login + Steam Guard
+cluster-ctl --vm-count 7 steam login \
+  --login-runners-dir ./result-login
 
 # Or automated mode with a credentials file
 cluster-ctl --vm-count 7 --credentials secrets/steam-creds.toml \

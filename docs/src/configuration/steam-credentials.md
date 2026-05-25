@@ -23,7 +23,7 @@ decrypt with `rage`/`age` via ssh-agent automatically.
 ## Interactive login (VNC)
 
 ```bash
-cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
+cluster-ctl steam login
 ```
 
 For each VM:
@@ -45,10 +45,10 @@ Target specific VMs:
 
 ```bash
 # Login only vm-3
-cluster-ctl --vm-count 7 steam login vm-3 --login-runners-dir ./result-login
+cluster-ctl steam login vm-3
 
 # Login vm-3 through vm-7
-cluster-ctl --vm-count 7 steam login -+ vm-3 --login-runners-dir ./result-login
+cluster-ctl steam login vm-3 -+
 ```
 
 Steam writes its normal Linux client state directly into the writable virtiofs
@@ -61,9 +61,7 @@ instead of being copied out or regenerated at boot.
 ## Automated login
 
 ```bash
-cluster-ctl --vm-count 7 \
-  --credentials secrets/steam-creds.toml \
-  steam login --login-runners-dir ./result-login
+cluster-ctl --credentials secrets/steam-creds.toml steam login
 ```
 
 Runs `steam -login <user> <pass>` on each VM and waits for confirmation. Also
@@ -189,3 +187,14 @@ The aggressive recovery path in `ensure_steam_script` (SIGTERM-then-SIGKILL
 without `steam -shutdown`) is intentional and must not be unified with
 `graceful_stop_steam`: it fires when Steam is detected as wedged and waiting
 for a graceful exit would only delay the recovery.
+
+## Non-NixOS fallback
+
+On NixOS hosts, prefer enabling
+`services.steampipe-cluster.loginRunners.enable = true` so the module publishes
+`loginRunnersDir` in the discovered host config. Hosts that cannot use the
+NixOS module can still pass the login runner directory explicitly:
+
+```bash
+cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
+```

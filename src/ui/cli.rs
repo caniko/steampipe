@@ -113,7 +113,8 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub ssh_key: Option<PathBuf>,
 
-    /// Total number of VMs in the cluster (required)
+    /// Total number of VMs in the cluster. Read from the discovered NixOS
+    /// host config when omitted; required only when no host config exists.
     #[arg(long, global = true)]
     pub vm_count: Option<u8>,
 
@@ -154,7 +155,9 @@ pub enum Commands {
 
     /// Start VMs. Uses --vm-count to determine how many.
     Up {
-        /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
+        /// Path to directory containing vm-N/bin/microvm-run runners. Optional
+        /// when the discovered host config supplies runnersDir; otherwise
+        /// required when using the microvm backend.
         #[arg(long)]
         runners_dir: Option<PathBuf>,
     },
@@ -166,7 +169,9 @@ pub enum Commands {
     Restart {
         /// Target VM: "all", "3", "vm-3" (default: all)
         target: Option<String>,
-        /// Path to directory containing vm-N/bin/microvm-run runners (required for microvm backend)
+        /// Path to directory containing vm-N/bin/microvm-run runners. Optional
+        /// when the discovered host config supplies runnersDir; otherwise
+        /// required when using the microvm backend.
         #[arg(long)]
         runners_dir: Option<PathBuf>,
     },
@@ -552,14 +557,20 @@ impl Commands {
 /// top-level CLI focused.
 #[derive(Subcommand)]
 pub enum SteamAction {
-    /// Interactive Steam login wizard (one VM at a time with VNC)
+    /// Interactive Steam login wizard (one VM at a time with VNC).
+    /// On NixOS hosts with services.steampipe-cluster.loginRunners.enable
+    /// = true, runs without flags; otherwise pass --login-runners-dir.
     Login {
-        /// Target VM: "all", "3", "vm-3"
+        /// Target VM: "all" (default), "3", or "vm-3". Omit to log into all VMs.
         target: Option<String>,
         /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
         #[arg(short = '+', long)]
         continue_from: bool,
-        /// Path to directory containing 4GB login VM runners (required for microvm backend)
+        /// Path to directory containing 4 GB login VM runners. Optional when
+        /// the NixOS module sets `services.steampipe-cluster.loginRunners.enable
+        /// = true` (the path is then read from /etc/steampipe/module.json).
+        /// Required outside a project root when no NixOS host config supplies
+        /// it.
         #[arg(long)]
         login_runners_dir: Option<PathBuf>,
     },
@@ -577,7 +588,10 @@ pub enum SteamAction {
     Check {
         /// Target VM: "all", "3", "vm-3"
         target: Option<String>,
-        /// Path to directory containing VM runners (required for microvm backend)
+        /// Path to directory containing VM runners. Optional when the NixOS
+        /// module sets `services.steampipe-cluster.runners.enable = true`
+        /// (the path is then read from /etc/steampipe/module.json). Required
+        /// outside a project root when no NixOS host config supplies it.
         #[arg(long)]
         runners_dir: Option<PathBuf>,
         /// VM display mode: headless, sway (default), weston, weston-gpu, or sway-gpu
@@ -592,7 +606,10 @@ pub enum SteamAction {
         /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
         #[arg(short = '+', long)]
         continue_from: bool,
-        /// Path to directory containing VM runners
+        /// Path to directory containing VM runners. Optional when the NixOS
+        /// module sets `services.steampipe-cluster.runners.enable = true`
+        /// (the path is then read from /etc/steampipe/module.json). Required
+        /// outside a project root when no NixOS host config supplies it.
         #[arg(long)]
         runners_dir: Option<PathBuf>,
     },
