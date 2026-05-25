@@ -38,12 +38,22 @@ fn command_with_etc(root: &Path, etc_root: &Path) -> assert_cmd::Command {
 }
 
 fn write_host_json(path: &Path, vm_count: u8, accounts: &[(&str, &str)], login_state_dir: &Path) {
+    write_host_json_with_schema(path, 2, vm_count, accounts, login_state_dir);
+}
+
+fn write_host_json_with_schema(
+    path: &Path,
+    schema_version: u8,
+    vm_count: u8,
+    accounts: &[(&str, &str)],
+    login_state_dir: &Path,
+) {
     let accounts = accounts
         .iter()
         .map(|(vm, steam_user)| json!({ "vm": vm, "steamUser": steam_user }))
         .collect::<Vec<_>>();
     let contents = json!({
-        "schemaVersion": 1,
+        "schemaVersion": schema_version,
         "vmCount": vm_count,
         "bridge": "br-cluster",
         "subnet": "10.0.100",
@@ -251,6 +261,34 @@ fn discovery_falls_back_to_legacy_module_json() {
     assert!(stdout.contains("  4. "), "{stdout}");
     assert!(stdout.contains("(selected)"), "{stdout}");
     assert!(stdout.contains("vmCount         4"), "{stdout}");
+}
+
+#[test]
+#[serial]
+fn schema_one_host_config_warns_but_still_loads() {
+    let temp = TempDir::new().expect("tempdir");
+    let host_path = temp.path().join("xdg-config/steampipe/host.json");
+    write_host_json_with_schema(
+        &host_path,
+        1,
+        1,
+        &[("vm-1", "legacy-schema-account")],
+        &temp.path().join("schema-1-logins"),
+    );
+
+    let output = command(temp.path())
+        .args(["steam", "info"])
+        .output()
+        .expect("run cluster-ctl");
+
+    assert!(output.status.success(), "{output:?}");
+    let stdout = output_string(&output);
+    assert!(stdout.contains("schemaVersion 1"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("uses schemaVersion 1; upgrade to 2"),
+        "{stderr}"
+    );
 }
 
 #[test]

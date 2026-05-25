@@ -517,13 +517,17 @@ impl SteampipeMcp {
         text.push_str(&format!("Game stopped on {} VM(s)", config.vms.len()));
 
         if kill_steam {
+            let vm_user = config.vm_user.clone();
             crate::config::par_each_vm(&config.vms, |vm| {
                 let backend = config.backend.clone();
+                let vm_user = vm_user.clone();
                 async move {
+                    let _ =
+                        crate::game::steam::graceful_stop_steam(&backend, &vm.ip, &vm_user).await;
                     backend
                         .run_cmd(
                             &vm.ip,
-                            "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; pkill -x sway 2>/dev/null; true",
+                            "pkill -x weston 2>/dev/null; pkill -x sway 2>/dev/null; true",
                         )
                         .await;
                 }

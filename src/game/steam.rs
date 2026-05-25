@@ -276,6 +276,56 @@ pub async fn ensure_steam(
     Ok(())
 }
 
+/// Stop Steam gracefully so it can flush rotated session tokens to disk.
+///
+/// Sends `steam -shutdown` (Steam's IPC shutdown command), polls for up to 30 s
+/// for the process to exit, then escalates through SIGTERM and SIGKILL.
+/// Use this whenever Steam exits a successful session. Do not use this in
+/// error-recovery paths where Steam is suspected wedged (see
+/// [`ensure_steam_script`]).
+pub async fn graceful_stop_steam(backend: &Backend, ip: &str, vm_user: &str) -> anyhow::Result<()> {
+    let script = graceful_stop_steam_script(vm_user);
+    let result = backend.run_cmd(ip, &script).await;
+    if !result.success {
+        anyhow::bail!(
+            "graceful_stop_steam failed on {ip}: stdout: {} stderr: {}",
+            result.stdout,
+            result.stderr,
+        );
+    }
+    Ok(())
+}
+
+fn graceful_stop_steam_script(vm_user: &str) -> String {
+    format!(
+        r#"export HOME=/home/{vm_user}
+export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
+if ! pgrep -x steam >/dev/null 2>&1; then
+    echo STEAM_ALREADY_STOPPED
+    exit 0
+fi
+steam -shutdown >/dev/null 2>&1 || true
+for i in $(seq 1 30); do
+    if ! pgrep -x steam >/dev/null 2>&1; then
+        echo "STEAM_GRACEFUL_EXIT_AT_$i"
+        exit 0
+    fi
+    sleep 1
+done
+pkill -TERM -x steam 2>/dev/null || true
+for i in $(seq 1 5); do
+    if ! pgrep -x steam >/dev/null 2>&1; then
+        echo "STEAM_TERM_EXIT_AT_$i"
+        exit 0
+    fi
+    sleep 1
+done
+pkill -KILL -x steam 2>/dev/null || true
+echo STEAM_KILLED
+"#
+    )
+}
+
 /// Start weston + Steam on target instances (uses already-running cluster instances).
 pub async fn start<S>(
     config: &ClusterConfig<S>,
@@ -394,6 +444,72 @@ pub async fn check(
         anyhow::bail!("Some VMs failed checks");
     } else {
         println!("  All VMs ready for testing");
+    }
+    Ok(())
+}
+
+/// Boot each target VM, ensure Steam is logged on, gracefully shut down, and stop the VM.
+/// Used to keep refresh tokens rotating ahead of expiry.
+/// Requires `BridgeReady` — starts and stops instances.
+pub async fn warm(
+    config: &ClusterConfig<BridgeReady>,
+    target: Option<&str>,
+    continue_from: bool,
+    runners_dir: &Path,
+) -> anyhow::Result<()> {
+    let targets = config.resolve_targets(target, continue_from)?;
+    let backend = &config.backend;
+
+    println!("==> Warming Steam on {} VM(s)...", targets.len());
+
+    let mut warmed = Vec::new();
+    let mut failed = Vec::new();
+
+    for vm in &targets {
+        println!("\n── {} ({}) ──", vm.name, vm.ip);
+
+        backend.stop_instance(config, vm);
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+        print!("  Boot: ");
+        if let Err(e) = backend.start_instance(config, vm, runners_dir) {
+            println!("FAIL ({e})");
+            failed.push(vm.name.clone());
+            continue;
+        }
+        if !backend.wait_ready(&vm.ip, 30).await {
+            println!("FAIL (SSH timeout)");
+            backend.stop_instance(config, vm);
+            failed.push(vm.name.clone());
+            continue;
+        }
+        println!("OK");
+
+        let compositor = steam_compositor_setup(crate::cli::DisplayMode::Headless, &config.vm_user);
+        match ensure_steam(backend, &vm.ip, &config.vm_user, &compositor).await {
+            Ok(()) => println!("  Steam ready: OK"),
+            Err(e) => {
+                println!("  Steam ready: FAIL ({e})");
+                backend.stop_instance(config, vm);
+                failed.push(vm.name.clone());
+                continue;
+            }
+        }
+
+        if let Err(e) = graceful_stop_steam(backend, &vm.ip, &config.vm_user).await {
+            println!("  Steam stop: WARN ({e})");
+        }
+        backend.stop_instance(config, vm);
+        warmed.push(vm.name.clone());
+    }
+
+    println!("\n════════════════════════════════════════");
+    if !warmed.is_empty() {
+        println!("  WARMED: {}", warmed.join(" "));
+    }
+    if !failed.is_empty() {
+        println!("  FAILED: {}", failed.join(" "));
+        anyhow::bail!("Some VMs failed to warm");
     }
     Ok(())
 }
@@ -533,10 +649,11 @@ pub async fn guard<S>(
 
 async fn shutdown_steam_login_vm<S>(backend: &Backend, config: &ClusterConfig<S>, vm: &VmDef) {
     println!("  Shutting down Steam and VM...");
+    let _ = graceful_stop_steam(backend, &vm.ip, &config.vm_user).await;
     backend
         .run_cmd(
             &vm.ip,
-            "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null; pkill -x tmux 2>/dev/null",
+            "pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null; pkill -x tmux 2>/dev/null",
         )
         .await;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -613,10 +730,11 @@ async fn login_single_vm(
     }
 
     println!("  Shutting down Steam and VM...");
+    let _ = graceful_stop_steam(backend, &vm.ip, &config.vm_user).await;
     backend
         .run_cmd(
             &vm.ip,
-            "pkill -x steam 2>/dev/null; pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
+            "pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
         )
         .await;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
@@ -1016,7 +1134,12 @@ fn steamcmd_state_sync_script(vm_user: &str) -> String {
         r#"HOME=/home/{vm_user}
 GUI_STEAM="$HOME/.local/share/Steam"
 GUI_CONFIG="$GUI_STEAM/config"
+LOGIN_FILE="$GUI_CONFIG/loginusers.vdf"
 mkdir -p "$GUI_CONFIG"
+if [ -s "$LOGIN_FILE" ] && grep -Eq '"[0-9]{{17}}"' "$LOGIN_FILE"; then
+    echo STEAMCMD_SYNC_SKIPPED_LOGIN_PRESENT
+    exit 0
+fi
 copied=0
 copy_file() {{
     src="$1"
@@ -1057,7 +1180,6 @@ fn steam_gui_validation_script(vm_user: &str, steam_user: &str, steam_pass: &str
     let weston = weston_setup(vm_user);
     let user = shell_escape(steam_user);
     let pass = shell_escape(steam_pass);
-    let account = shell_escape(steam_user);
     format!(
         r#"{weston}
 mkdir -p {log_dir}
@@ -1073,30 +1195,9 @@ valid_login_file() {{
     grep -Eq '"[0-9]{{17}}"' "$LOGIN_FILE" || return 1
     grep -Eq '"(PersonaName|AccountName)"' "$LOGIN_FILE" || return 1
 }}
-write_login_file_from_connection_log() {{
-    account_id="$(grep -Eo '\[U:1:[0-9]+\]' {log} 2>/dev/null | grep -Eo '[0-9]+' | tail -1)"
-    [ -n "$account_id" ] || return 1
-    steam_id="$((76561197960265728 + account_id))"
-    [ -n "$steam_id" ] || return 1
-    cat > "$LOGIN_FILE" <<STEAMPIPE_LOGINUSERS
-"users"
-{{
-	"$steam_id"
-	{{
-		"AccountName"		"{account}"
-		"PersonaName"		"{account}"
-		"RememberPassword"		"1"
-		"MostRecent"		"1"
-		"WantsOfflineMode"		"0"
-		"SkipOfflineModeWarning"		"0"
-	}}
-}}
-STEAMPIPE_LOGINUSERS
-}}
 valid_gui_session_evidence() {{
     grep -q 'PollAuthSessionStatus succeeded and has refresh token' {log} 2>/dev/null || return 1
     grep -Eq "RecvMsgClientLogOnResponse\(\) : \[U:1:[0-9]+\] 'OK'" {log} 2>/dev/null || return 1
-    write_login_file_from_connection_log
     valid_login_file
 }}
 echo "STEAM_BIN=$(command -v steam || true)"
@@ -1115,8 +1216,32 @@ for i in $(seq 1 240); do
 done
 if grep -q 'Update complete, launching' {bootstrap_log} 2>/dev/null; then
     echo STEAM_LOGIN_RETRY_AFTER_UPDATE
-    pkill -x steam 2>/dev/null || true
-    sleep 5
+    if pgrep -x steam >/dev/null 2>&1; then
+        steam -shutdown >/dev/null 2>&1 || true
+        for i in $(seq 1 30); do
+            if ! pgrep -x steam >/dev/null 2>&1; then
+                echo "STEAM_GRACEFUL_EXIT_AT_$i"
+                break
+            fi
+            sleep 1
+        done
+        if pgrep -x steam >/dev/null 2>&1; then
+            pkill -TERM -x steam 2>/dev/null || true
+            for i in $(seq 1 5); do
+                if ! pgrep -x steam >/dev/null 2>&1; then
+                    echo "STEAM_TERM_EXIT_AT_$i"
+                    break
+                fi
+                sleep 1
+            done
+        fi
+        if pgrep -x steam >/dev/null 2>&1; then
+            pkill -KILL -x steam 2>/dev/null || true
+            echo STEAM_KILLED
+        fi
+    else
+        echo STEAM_ALREADY_STOPPED
+    fi
     : > {log} 2>/dev/null
     : > {cef_log} 2>/dev/null
     : > {stdout_log} 2>/dev/null
@@ -1287,7 +1412,12 @@ fn steamcmd_guard_submitted(output: &str) -> bool {
 }
 
 fn steamcmd_sync_succeeded(output: &str) -> bool {
-    output.lines().any(|line| line.trim() == "STEAMCMD_SYNC_OK")
+    output.lines().any(|line| {
+        matches!(
+            line.trim(),
+            "STEAMCMD_SYNC_OK" | "STEAMCMD_SYNC_SKIPPED_LOGIN_PRESENT"
+        )
+    })
 }
 
 fn redact_sensitive(text: &str, secrets: &[&str]) -> String {
@@ -1562,6 +1692,9 @@ mod tests {
         assert!(steamcmd_sync_succeeded(
             "copied:.steam/steamcmd/config/config.vdf\nSTEAMCMD_SYNC_OK\n"
         ));
+        assert!(steamcmd_sync_succeeded(
+            "STEAMCMD_SYNC_SKIPPED_LOGIN_PRESENT\n"
+        ));
         assert!(!steamcmd_sync_succeeded("STEAMCMD_SYNC_NO_ARTIFACTS"));
         assert!(!steamcmd_sync_succeeded("NOT_STEAMCMD_SYNC_OK"));
     }
@@ -1574,6 +1707,26 @@ mod tests {
         assert!(steamcmd_guard_submitted("STEAMCMD_GUARD_SUBMITTED\n"));
         assert!(!steamcmd_started("NOT_STEAMCMD_STARTED"));
         assert!(!steamcmd_guard_submitted("NOT_STEAMCMD_GUARD_SUBMITTED"));
+    }
+
+    #[test]
+    fn graceful_stop_script_uses_steam_shutdown_first() {
+        let script = graceful_stop_steam_script("chessbender");
+        let shutdown_pos = script
+            .find("steam -shutdown")
+            .expect("steam -shutdown present");
+        let pkill_pos = script
+            .find("pkill -TERM -x steam")
+            .expect("SIGTERM fallback present");
+        assert!(
+            shutdown_pos < pkill_pos,
+            "steam -shutdown must precede pkill -TERM"
+        );
+        assert!(
+            script.contains("pkill -KILL -x steam"),
+            "SIGKILL fallback present"
+        );
+        assert!(script.contains("STEAM_ALREADY_STOPPED"));
     }
 
     #[test]
@@ -1658,6 +1811,14 @@ mod tests {
     }
 
     #[test]
+    fn steamcmd_state_sync_skips_when_login_present() {
+        let script = steamcmd_state_sync_script("chessbender");
+        assert!(script.contains("STEAMCMD_SYNC_SKIPPED_LOGIN_PRESENT"));
+        assert!(script.contains("[ -s \"$LOGIN_FILE\" ]"));
+        assert!(script.contains("grep -Eq '\"[0-9]{17}\"' \"$LOGIN_FILE\""));
+    }
+
+    #[test]
     fn steam_gui_validation_requires_gui_loginusers_evidence() {
         let script = steam_gui_validation_script("chessbender", "account", "pa'ss");
         assert!(
@@ -1677,8 +1838,15 @@ mod tests {
         assert!(script.contains("valid_gui_session_evidence"));
         assert!(script.contains("PollAuthSessionStatus succeeded and has refresh token"));
         assert!(script.contains("RecvMsgClientLogOnResponse\\(\\) : \\[U:1:[0-9]+\\] 'OK'"));
-        assert!(script.contains("write_login_file_from_connection_log"));
-        assert!(script.contains("steam_id=\"$((76561197960265728 + account_id))\""));
+    }
+
+    #[test]
+    fn steam_gui_validation_no_longer_synthesizes_loginusers() {
+        let script = steam_gui_validation_script("chessbender", "account", "password");
+        let heredoc_marker = ["STEAMPIPE", "_LOGINUSERS"].concat();
+        let synthesis_function = ["write_login_file", "_from_connection_log"].concat();
+        assert!(!script.contains(&heredoc_marker));
+        assert!(!script.contains(&synthesis_function));
     }
 
     #[test]

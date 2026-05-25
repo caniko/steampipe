@@ -2,11 +2,58 @@
   config,
   lib,
   pkgs,
+  steampipe ? null,
+  nixpkgs ? null,
   ...
 }: let
   cfg = config.services.steampipe-cluster;
   vmNames = builtins.genList (i: "vm-${toString (i + 1)}") cfg.vmCount;
   tapNames = map (n: "tap-${n}") vmNames;
+  vmUser = "cluster";
+  loginStateOwner =
+    if cfg.tapOwner != null
+    then cfg.tapOwner
+    else "root";
+  loginRunnerSshDir = "/var/lib/steampipe/ssh";
+  loginRunnerSshKey = "${loginRunnerSshDir}/cluster_key";
+  loginRunnerAuthorizedKeysDir = "/var/lib/steampipe/ssh-authorized";
+
+  loginRunnersDir =
+    (import ./lib/login-runners.nix {
+      inherit pkgs lib nixpkgs steampipe;
+    }) {
+      inherit (cfg) vmCount subnet prefix;
+      inherit vmUser;
+      sshAuthorizedKeysPath = "/run/steampipe/authorized-keys/cluster_key.pub";
+      sshAuthorizedKeysShare = {
+        source = loginRunnerAuthorizedKeysDir;
+        mountPoint = "/run/steampipe/authorized-keys";
+      };
+      hypervisor = cfg.loginRunners.hypervisor;
+      graphics = cfg.loginRunners.graphics;
+      memory = cfg.loginRunners.memory;
+    };
+
+  loginRunnerKeyScript = ''
+    set -euo pipefail
+    keydir=${lib.escapeShellArg loginRunnerSshDir}
+    pubdir=${lib.escapeShellArg loginRunnerAuthorizedKeysDir}
+    key="$keydir/cluster_key"
+
+    ${pkgs.coreutils}/bin/install -d -m 0700 "$keydir"
+    ${pkgs.coreutils}/bin/install -d -m 0755 "$pubdir"
+    if [ ! -f "$key" ]; then
+      ${pkgs.openssh}/bin/ssh-keygen -t ed25519 -N "" \
+        -C "steampipe-loginrunners@$(${pkgs.coreutils}/bin/hostname)" \
+        -f "$key"
+    fi
+    ${pkgs.coreutils}/bin/chmod 0600 "$key"
+    ${pkgs.coreutils}/bin/chmod 0644 "$key.pub"
+    ${pkgs.coreutils}/bin/install -m 0644 "$key.pub" "$pubdir/cluster_key.pub"
+    ${lib.optionalString (cfg.tapOwner != null) ''
+      ${pkgs.coreutils}/bin/chown -R ${cfg.tapOwner}:users "$keydir" "$pubdir"
+    ''}
+  '';
 
   nmConstants.tunMode.tap = "2";
 
@@ -172,16 +219,55 @@ in {
       description = ''
         Host directory where Steam login state is persisted.
         Each VM gets a subdirectory (e.g. vm-1/, vm-2/) containing
-        the Steam config files. Project-level flakes mount these
-        read-only into VMs to reuse login sessions.
+        the Steam state tree. Project-level flakes mount each VM's
+        subdirectory writable at the VM user's ~/.local/share/Steam.
       '';
+    };
+
+    loginRunners = {
+      enable = lib.mkEnableOption "host-level Steam login VM runners";
+
+      hypervisor = lib.mkOption {
+        type = lib.types.str;
+        default = "crosvm";
+        description = "Hypervisor for the login VMs.";
+      };
+
+      graphics = lib.mkOption {
+        type = lib.types.bool;
+        default = true;
+        description = "Enable virtio-gpu in login VMs.";
+      };
+
+      memory = lib.mkOption {
+        type = lib.types.ints.positive;
+        default = 4096;
+        description = "Memory per login VM in MiB. Steam GUI needs about 4 GiB.";
+      };
     };
   };
 
   config = lib.mkIf cfg.enable {
+    assertions = [
+      {
+        assertion = !cfg.loginRunners.enable || cfg.tapOwner != null;
+        message = "services.steampipe-cluster.loginRunners.enable requires services.steampipe-cluster.tapOwner so cluster-ctl can read ${loginRunnerSshKey} without sudo.";
+      }
+      {
+        assertion = !cfg.loginRunners.enable || steampipe != null;
+        message = "services.steampipe-cluster.loginRunners.enable requires the steampipe flake self to be passed to nix/module.nix; use steampipe.nixosModules.default from the flake output.";
+      }
+      {
+        assertion = !cfg.loginRunners.enable || nixpkgs != null;
+        message = "services.steampipe-cluster.loginRunners.enable requires the nixpkgs flake input to be passed to nix/module.nix; use steampipe.nixosModules.default from the flake output.";
+      }
+    ];
+
     warnings =
       lib.optional (cfg.natInterface != null)
-      "services.steampipe-cluster.natInterface is deprecated; NetworkManager shared mode manages NAT via the active default route.";
+      "services.steampipe-cluster.natInterface is deprecated; NetworkManager shared mode manages NAT via the active default route."
+      ++ lib.optional (cfg.tapOwner == null)
+      "services.steampipe-cluster: tapOwner is not set; loginStateDir will be owned by root and the in-VM Steam user cannot write to it. Set tapOwner to a host user whose numeric UID matches the in-VM vm_user (default 1000).";
 
     # Bridge via NetworkManager
     networking.networkmanager.ensureProfiles.profiles =
@@ -197,29 +283,65 @@ in {
 
     # Create login state directories for interactive and automated Steam login.
     systemd.tmpfiles.rules =
-      ["d ${cfg.loginStateDir} 0755 ${cfg.tapOwner or "root"} users -"]
-      ++ (map (name: "d ${cfg.loginStateDir}/${name} 0755 ${cfg.tapOwner or "root"} users -") vmNames);
+      ["d ${cfg.loginStateDir} 0755 ${loginStateOwner} users -"]
+      ++ (map (name: "d ${cfg.loginStateDir}/${name} 0700 ${loginStateOwner} users -") vmNames)
+      ++ lib.optionals cfg.loginRunners.enable [
+        "d /var/lib/steampipe 0755 root root -"
+        "d ${loginRunnerSshDir} 0700 ${loginStateOwner} users -"
+        "d ${loginRunnerAuthorizedKeysDir} 0755 ${loginStateOwner} users -"
+      ];
 
-    # Write module config so project-level flakes can discover NixOS-level settings
+    system.activationScripts.steampipe-loginrunners-ssh-key = lib.mkIf cfg.loginRunners.enable {
+      text = loginRunnerKeyScript;
+    };
+
+    # Write module config so project-level flakes can discover NixOS-level settings.
+    # schemaVersion 2 keeps the JSON shape unchanged but changes loginStateDir
+    # consumers from boot-time read-only injection to one writable Steam share.
     environment.etc."steampipe/module.json" = {
-      text = builtins.toJSON {
-        accounts = lib.mapAttrsToList (name: creds: {
-          steamUser = creds.steamUser;
-          vm = name;
-        }) cfg.accounts;
-        bridge = cfg.bridge;
-        credentialsPath =
-          if cfg.accounts != {}
-          then "/etc/steampipe/credentials.toml"
-          else null;
-        hostIp = cfg.hostIp;
-        loginStateDir = toString cfg.loginStateDir;
-        prefix = cfg.prefix;
-        schemaVersion = 1;
-        subnet = cfg.subnet;
-        tapOwner = cfg.tapOwner;
-        vmCount = cfg.vmCount;
+      text = builtins.toJSON ({
+          accounts =
+            lib.mapAttrsToList (name: creds: {
+              steamUser = creds.steamUser;
+              vm = name;
+            })
+            cfg.accounts;
+          bridge = cfg.bridge;
+          credentialsPath =
+            if cfg.accounts != {}
+            then "/etc/steampipe/credentials.toml"
+            else null;
+          hostIp = cfg.hostIp;
+          loginStateDir = toString cfg.loginStateDir;
+          prefix = cfg.prefix;
+          schemaVersion = 2;
+          subnet = cfg.subnet;
+          tapOwner = cfg.tapOwner;
+          vmCount = cfg.vmCount;
+        }
+        // lib.optionalAttrs cfg.loginRunners.enable {
+          loginRunnersDir = "/etc/steampipe/login-runners";
+          sshKey = loginRunnerSshKey;
+        }
+        // {
+          inherit vmUser;
+        });
+    };
+
+    environment.etc."steampipe/login-runners" = lib.mkIf cfg.loginRunners.enable {
+      source = loginRunnersDir;
+    };
+
+    systemd.services.steampipe-loginrunners-ssh-key = lib.mkIf cfg.loginRunners.enable {
+      description = "Generate steampipe login-runner SSH keypair";
+      wantedBy = ["multi-user.target"];
+      before = ["steampipe-gen-credentials.service"];
+      serviceConfig = {
+        Type = "oneshot";
+        RemainAfterExit = true;
+        UMask = "0077";
       };
+      script = loginRunnerKeyScript;
     };
 
     # Generate credentials TOML at runtime by reading agenix password files

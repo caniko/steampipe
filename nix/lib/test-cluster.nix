@@ -53,6 +53,10 @@ in
     vmGraphics = clusterConfig.graphics or true;
     vmUser = projectConfig.vm_user or "cluster";
     sshKey = projectConfig.ssh_key or "nix/test-cluster/cluster_key";
+    resolvedSshKey =
+      if lib.hasPrefix "/" sshKey
+      then sshKey
+      else toString (projectRoot + "/${sshKey}");
     sshPublicKey = let
       publicKeyPath =
         if lib.hasSuffix ".pub" sshKey
@@ -115,151 +119,15 @@ in
 
     # -- microVM NixOS configurations ------------------------------------
 
-    # mkMicroVM builds a microVM runner.
-    # loginMount controls how Steam login state is handled:
-    #   null        - no login state sharing (default)
-    #   "read"      - mount loginStateDir/vm-N read-only at /mnt/steam-login,
-    #                  systemd copies files into writable home on boot
-    #   "write"     - mount loginStateDir/vm-N as the VM user's home (read-write),
-    #                  used by login runners so Steam writes directly to host
-    mkMicroVM = flavor: loginMount: name: vm:
-      (nixpkgs.lib.nixosSystem {
-        system = "x86_64-linux";
-        modules = [
-          steampipe.nixosModules.microvm
-          steampipe.nixosModules.vm-graphics
-          steampipe.nixosModules.cluster-vm-base
-          ({pkgs, ...}: {
-            nixpkgs.overlays =
-              [steampipe.overlays.default]
-              ++ extraVmOverlays;
-
-            steampipe.clusterVm = {
-              user = vmUser;
-              sshAuthorizedKeys = [sshPublicKey];
-              enableSteam = true;
-              useSystemdStage1 = flavor.useSystemdStage1;
-            };
-
-            networking.hostName = name;
-            environment.sessionVariables = lib.mkIf (flavor.gpuProfile != "egl") {
-              VK_DRIVER_FILES = "/run/opengl-driver/share/vulkan/icd.d/virtio_icd.x86_64.json";
-            };
-            networking.interfaces.eth0.ipv4.addresses = [
-              {
-                address = vm.ip;
-                prefixLength = network.prefix;
-              }
-            ];
-
-            microvm = {
-              hypervisor = flavor.hypervisor;
-              graphics.enable = flavor.graphics;
-              # crosvm's multi-process device proxy uses minijail+seccomp.
-              # We point crosvm at the seccomp policies installed by our
-              # patched crosvm package; the pre-compiled `.bpf` form is what
-              # actually gets loaded (text-mode parsing chokes on intentional
-              # syscall redefinitions across the `@include` chain).
-              #
-              # `--no-usb` skips the xhci proxy fork. The xhci proxy is the
-              # first device crosvm tries to create, and on this host its
-              # post-fork `EventLoop::start` hits a thread spawn failure that
-              # the parent observes as `Failed to configure tube: Connection
-              # reset by peer`. The guest doesn't need USB for our test
-              # workload, so disabling the device sidesteps the issue.
-              crosvm.extraArgs = lib.mkIf (flavor.hypervisor == "crosvm") [
-                "--seccomp-policy-dir=${pkgs.crosvm}/share/policy/${pkgs.stdenv.hostPlatform.linuxArch}"
-                "--no-usb"
-              ];
-              mem =
-                if flavor.memory != null
-                then flavor.memory
-                else vm.memory;
-              vcpu = vm.cores;
-              vsock.cid = vm.index + 3; # CIDs 0-2 are reserved
-
-              # TAP interface (pre-created by NixOS module, attached to br-cluster)
-              interfaces = [
-                {
-                  type = "tap";
-                  id = "tap-${name}";
-                  mac = vm.mac;
-                }
-              ];
-
-              # Home volume: disk image unless login-write mode replaces it with virtiofs
-              volumes = lib.optionals (loginMount != "write") [
-                {
-                  mountPoint = "/home/${vmUser}";
-                  image = "${name}-home.img";
-                  size = 8192;
-                }
-              ];
-
-              # virtiofs shares for login state
-              shares = lib.optionals (loginMount != null && loginStateDir != null) [
-                (
-                  if loginMount == "write"
-                  then {
-                    # Login runners: writable mount as home - Steam writes directly to host
-                    tag = "steam-login-${name}";
-                    source = "${loginStateDir}/${name}";
-                    mountPoint = "/home/${vmUser}";
-                    proto = "virtiofs";
-                  }
-                  else {
-                    # Regular runners: read-only staging mount
-                    tag = "steam-login-${name}";
-                    source = "${loginStateDir}/${name}";
-                    mountPoint = "/mnt/steam-login";
-                    proto = "virtiofs";
-                    readOnly = true;
-                  }
-                )
-              ];
-            };
-          })
-
-          # Copy login state from read-only share into writable home on boot
-          (lib.mkIf (loginMount == "read") {
-            systemd.services.steam-login-inject = {
-              description = "Inject Steam login state from system-level share";
-              after = ["local-fs.target"];
-              wantedBy = ["multi-user.target"];
-              serviceConfig = {
-                Type = "oneshot";
-                RemainAfterExit = true;
-                User = vmUser;
-              };
-              script = ''
-                src="/mnt/steam-login/.local/share/Steam"
-                dst="/home/${vmUser}/.local/share/Steam"
-                if [ -d "$src/config" ] && [ -f "$src/config/loginusers.vdf" ]; then
-                  mkdir -p "$dst/config"
-                  cp -a "$src/config"/* "$dst/config"/
-                  cp -a "$src"/ssfn* "$dst"/ 2>/dev/null || true
-                  if [ -f "$src/registry.vdf" ]; then
-                    cp -a "$src/registry.vdf" "$dst"/
-                  fi
-                  echo "Steam login state injected from system share"
-                else
-                  echo "No system-level Steam login state found at $src"
-                fi
-              '';
-            };
-          })
-        ] ++ extraVmModules;
-      })
-    .config
-    .microvm
-    .declaredRunner;
-
-    # Build all VM runners, per flavor.
-    # When loginStateDir is set, regular VMs read login state from the share.
-    vmLoginMount =
-      if loginStateDir != null
-      then "read"
-      else null;
+    # mkMicroVM builds a microVM runner. When loginStateDir is available,
+    # every runner gets the same writable per-VM Steam state share at
+    # ~/.local/share/Steam; the rest of home remains on the home image.
+    mkMicroVM = import ./microvm-runner.nix {
+      inherit pkgs lib nixpkgs steampipe;
+    } {
+      inherit network vmUser loginStateDir extraVmOverlays extraVmModules;
+      sshAuthorizedKeys = [sshPublicKey];
+    };
 
     # The normal UI-full runner is Vulkan-first and switches microvm.nix's
     # crosvm virtio-gpu defaults to Mesa Venus over virglrenderer. The separate
@@ -298,8 +166,8 @@ in
           inherit name;
           path =
             if flavor.hypervisor == "crosvm" && flavor.graphics
-            then patchCrosvmGpuParams flavor (mkMicroVM flavor vmLoginMount name vm)
-            else mkMicroVM flavor vmLoginMount name vm;
+            then patchCrosvmGpuParams flavor (mkMicroVM flavor name vm)
+            else mkMicroVM flavor name vm;
         })
         linuxVMs);
 
@@ -309,13 +177,7 @@ in
     # Higher-memory runners for Steam login wizard (Sway + VNC + Steam GUI).
     # Login runners always use the default flavor - they don't need flavor variants.
     loginVMs = lib.mapAttrs (_name: vm: vm // {memory = 4096;}) linuxVMs;
-    # Login runners: if loginStateDir is set, mount it writable so Steam
-    # writes login state directly to host. Otherwise use disk image.
-    loginLoginMount =
-      if loginStateDir != null
-      then "write"
-      else null;
-    loginVMRunners = lib.mapAttrs (mkMicroVM flavors.default loginLoginMount) loginVMs;
+    loginVMRunners = lib.mapAttrs (mkMicroVM flavors.default) loginVMs;
 
     loginVMRunnersDir =
       pkgs.linkFarm "cluster-login-vm-runners"
@@ -455,8 +317,15 @@ in
       exec ${pkgs.nix}/bin/nix develop -c \
         ${ctl} --vm-count 1 ${credsFlag} --cluster 1v1 test --players 2 --display headless "$@"
     '';
+
+    warmTimerModule = import ./warm-timer.nix {
+      inherit clusterCtl vmCount;
+      vmRunnersDir = vmRunnersDir;
+      defaultUser = vmUser;
+      defaultSshKey = resolvedSshKey;
+    };
   in {
-    inherit network linuxVMs;
+    inherit network linuxVMs warmTimerModule;
 
     scripts =
       # -- Mode-specific scripts (one set per flavor declared in steampipe.toml) --
@@ -491,6 +360,7 @@ in
       // {
         cluster-steam-start = mkWrapper "steam-start" vmCount "steam start";
         cluster-steam-check = mkWrapper "steam-check" vmCount "steam check --runners-dir ${vmRunnersDir}";
+        cluster-steam-warm = mkWrapper "steam-warm" vmCount "steam warm --runners-dir ${vmRunnersDir}";
         cluster-steam-login = mkSteamLoginWrapper "steam-login" vmCount "steam login --login-runners-dir ${loginVMRunnersDir}";
         cluster-steam-guard = mkSteamLoginWrapper "steam-guard" vmCount "steam guard";
       }

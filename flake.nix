@@ -31,6 +31,14 @@
       };
       inherit (pkgs) lib;
 
+      steampipeModule = {...}: {
+        imports = [./nix/module.nix];
+        _module.args = {
+            inherit nixpkgs;
+            steampipe = self;
+        };
+      };
+
       toolchain = pkgs.rust-bin.nightly.latest.minimal.override {
         extensions = [
           "clippy"
@@ -107,10 +115,149 @@
             --prefix PATH : ${lib.makeBinPath [pkgs.weston]}
         '';
       };
+
+      warmTimerEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          (import ./nix/lib/warm-timer.nix {
+            clusterCtl = pkgs.writeShellScriptBin "cluster-ctl" "exit 0";
+            vmRunnersDir = pkgs.runCommand "warm-timer-runners" {} "mkdir -p $out";
+            vmCount = 7;
+            defaultUser = "cluster";
+            defaultSshKey = "/home/cluster/.ssh/cluster_key";
+          })
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-warm-timer.enable = true;
+          }
+        ];
+      };
+
+      warmTimerDisabledEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          (import ./nix/lib/warm-timer.nix {
+            clusterCtl = pkgs.writeShellScriptBin "cluster-ctl" "exit 0";
+            vmRunnersDir = pkgs.runCommand "warm-timer-runners-disabled" {} "mkdir -p $out";
+            vmCount = 7;
+            defaultUser = "cluster";
+            defaultSshKey = "/home/cluster/.ssh/cluster_key";
+          })
+          {
+            system.stateVersion = "26.05";
+          }
+        ];
+      };
+
+      moduleLoginRunnersEnabledEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          steampipeModule
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-cluster = {
+              enable = true;
+              vmCount = 2;
+              tapOwner = "cluster";
+              tapOwnerUid = 1000;
+              loginRunners.enable = true;
+            };
+          }
+        ];
+      };
+
+      moduleLoginRunnersDisabledEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          steampipeModule
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-cluster = {
+              enable = true;
+              vmCount = 2;
+              tapOwner = "cluster";
+              tapOwnerUid = 1000;
+            };
+          }
+        ];
+      };
     in {
       packages = {
         default = cluster-ctl;
         inherit docs website site;
+      };
+
+      checks = lib.optionalAttrs pkgs.stdenv.isLinux {
+        warm-timer-eval =
+          pkgs.runCommand "warm-timer-eval" {
+            enabled =
+              if warmTimerEval.config.services.steampipe-warm-timer.enable
+              then "true"
+              else "false";
+            disabledByDefault =
+              if warmTimerDisabledEval.config.services.steampipe-warm-timer.enable
+              then "false"
+              else "true";
+            serviceUser = warmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.User;
+            timerOnCalendar = warmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.OnCalendar;
+            timerPersistent =
+              if warmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.Persistent
+              then "true"
+              else "false";
+            timerRandomizedDelaySec = warmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
+          } ''
+            test "$enabled" = true
+            test "$disabledByDefault" = true
+            test "$serviceUser" = cluster
+            test "$timerOnCalendar" = weekly
+            test "$timerPersistent" = true
+            test "$timerRandomizedDelaySec" = 1h
+            touch "$out"
+          '';
+
+        module-loginrunners-eval =
+          pkgs.runCommand "module-loginrunners-eval" {
+            enabledJson = moduleLoginRunnersEnabledEval.config.environment.etc."steampipe/module.json".text;
+            disabledJson = moduleLoginRunnersDisabledEval.config.environment.etc."steampipe/module.json".text;
+            loginRunnersDir = moduleLoginRunnersEnabledEval.config.environment.etc."steampipe/login-runners".source;
+          } ''
+            ${pkgs.python3}/bin/python - <<'PY'
+import json
+import os
+
+enabled = json.loads(os.environ["enabledJson"])
+disabled = json.loads(os.environ["disabledJson"])
+
+assert enabled["schemaVersion"] == 2
+assert enabled["vmCount"] == 2
+assert enabled["vmUser"] == "cluster"
+assert enabled["loginRunnersDir"] == "/etc/steampipe/login-runners"
+assert enabled["sshKey"] == "/var/lib/steampipe/ssh/cluster_key"
+
+assert disabled["schemaVersion"] == 2
+assert disabled["vmCount"] == 2
+assert disabled["vmUser"] == "cluster"
+assert "loginRunnersDir" not in disabled
+assert "sshKey" not in disabled
+PY
+
+            test -x "$loginRunnersDir/vm-1/bin/microvm-run"
+            test -x "$loginRunnersDir/vm-2/bin/microvm-run"
+            test ! -e "$loginRunnersDir/vm-3"
+            touch "$out"
+          '';
       };
 
       devShells.default = pkgs.mkShell {
@@ -134,7 +281,13 @@
     // {
       nixosModules = microvm.nixosModules // {
         # Host networking (bridge, TAPs, NAT)
-        default = import ./nix/module.nix;
+        default = {...}: {
+          imports = [./nix/module.nix];
+          _module.args = {
+            inherit nixpkgs;
+            steampipe = self;
+          };
+        };
         # VM-side base config for reusable steampipe test clusters.
         cluster-vm-base = import ./nix/cluster-vm-base.nix;
         # VM-side graphics setup (mesa, virtio-gpu kernel modules, overlay)

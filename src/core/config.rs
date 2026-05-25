@@ -1283,12 +1283,13 @@ impl ClusterConfig<Unchecked> {
         };
         let ssh_key = match ssh_key_override {
             Some(path) => PathBuf::from(path),
-            None => default_host_config_ssh_key_path(),
+            None => host
+                .ssh_key
+                .clone()
+                .unwrap_or_else(default_host_config_ssh_key_path),
         };
         let backend_kind = backend_override.unwrap_or_default();
-        // Host-config-driven clusters are a host-side fallback path. The project-rooted
-        // flow still owns any explicit vm_user policy.
-        let vm_user = "nixos".to_string();
+        let vm_user = host.vm_user.clone().unwrap_or_else(|| "nixos".to_string());
         let backend = build_backend(backend_kind, &ssh_key, &vm_user, None);
         let vm_ids: Vec<u8> = (1..=vm_count).collect();
         let vms = Self::vm_defs_for_ids(&host.subnet, vm_count, &vm_ids)?;
@@ -2224,6 +2225,74 @@ mod tests {
         assert_eq!(config.host_ip, host.host_ip);
     }
 
+    #[test]
+    fn from_host_config_uses_module_ssh_key_when_cli_key_missing() {
+        let mut host = sample_module_config();
+        host.ssh_key = Some(PathBuf::from("/etc/steampipe/ssh/cluster_key"));
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            None,
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.ssh_key,
+            PathBuf::from("/etc/steampipe/ssh/cluster_key")
+        );
+    }
+
+    #[test]
+    fn from_host_config_cli_ssh_key_overrides_module_ssh_key() {
+        let mut host = sample_module_config();
+        host.ssh_key = Some(PathBuf::from("/etc/steampipe/ssh/cluster_key"));
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(config.ssh_key, ssh_key.path());
+    }
+
+    #[test]
+    fn from_host_config_uses_module_vm_user_when_present() {
+        let mut host = sample_module_config();
+        host.vm_user = Some("cluster".into());
+        let ssh_key = fake_ssh_key();
+        let tempdir = tempfile::tempdir().unwrap();
+        let state_dir = tempdir.path().join("state");
+        let lock_dir = tempdir.path().join("locks");
+        let config = ClusterConfig::from_host_config(
+            &host,
+            host.vm_count,
+            None,
+            Some(BackendKind::Local),
+            Some(ssh_key.path()),
+            Some(&state_dir),
+            Some(&lock_dir),
+        )
+        .unwrap();
+
+        assert_eq!(config.vm_user, "cluster");
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn from_host_config_sentinel_fields_in_debug_have_distinct_marker() {
@@ -2736,6 +2805,10 @@ mod tests {
             login_state_dir: PathBuf::from("/srv/steam-logins"),
             credentials_path: Some(PathBuf::from("/etc/steampipe/credentials.toml")),
             accounts: Vec::new(),
+            runners_dir: None,
+            login_runners_dir: None,
+            ssh_key: None,
+            vm_user: None,
         }
     }
 

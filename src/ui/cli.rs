@@ -585,6 +585,18 @@ pub enum SteamAction {
         display: DisplayMode,
     },
 
+    /// Boot VMs, let Steam rotate refresh tokens, then gracefully stop
+    Warm {
+        /// Target VM: "all", "3", "vm-3"
+        target: Option<String>,
+        /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
+        #[arg(short = '+', long)]
+        continue_from: bool,
+        /// Path to directory containing VM runners
+        #[arg(long)]
+        runners_dir: Option<PathBuf>,
+    },
+
     /// Start compositor + Steam on VMs
     Start {
         /// Target VM: "all", "3", "vm-3"
@@ -595,7 +607,11 @@ pub enum SteamAction {
     },
 
     /// Show Steam account status across all VMs
-    Accounts,
+    Accounts {
+        /// Exit non-zero if any VM's refresh token expires within N days.
+        #[arg(long, default_value_t = 30)]
+        warn_within_days: i64,
+    },
 
     /// Show the discovered global host config + local login-state summary
     Info,
@@ -1110,6 +1126,115 @@ mod tests {
                 assert!(matches!(display, DisplayMode::SwayGpu));
             }
             _ => panic!("expected Steam check"),
+        }
+    }
+
+    #[test]
+    fn steam_accounts_warn_within_days_defaults_to_30() {
+        let cli = parse(&["--vm-count", "7", "steam", "accounts"]);
+        match cli.command {
+            Commands::Steam {
+                action: SteamAction::Accounts { warn_within_days },
+            } => {
+                assert_eq!(warn_within_days, 30);
+            }
+            _ => panic!("expected Steam accounts"),
+        }
+    }
+
+    #[test]
+    fn steam_accounts_accepts_warn_within_days() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam",
+            "accounts",
+            "--warn-within-days",
+            "365",
+        ]);
+        match cli.command {
+            Commands::Steam {
+                action: SteamAction::Accounts { warn_within_days },
+            } => {
+                assert_eq!(warn_within_days, 365);
+            }
+            _ => panic!("expected Steam accounts"),
+        }
+    }
+
+    #[test]
+    fn steam_warm_accepts_runners_dir() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam",
+            "warm",
+            "vm-3",
+            "--runners-dir",
+            "./result",
+        ]);
+        match cli.command {
+            Commands::Steam {
+                action:
+                    SteamAction::Warm {
+                        target,
+                        continue_from,
+                        runners_dir,
+                    },
+            } => {
+                assert_eq!(target.as_deref(), Some("vm-3"));
+                assert!(!continue_from);
+                assert_eq!(runners_dir, Some(std::path::PathBuf::from("./result")));
+            }
+            _ => panic!("expected Steam warm"),
+        }
+    }
+
+    #[test]
+    fn steam_warm_accepts_continue_from_short_flag() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam",
+            "warm",
+            "-+",
+            "vm-3",
+            "--runners-dir",
+            "./result",
+        ]);
+        match cli.command {
+            Commands::Steam {
+                action:
+                    SteamAction::Warm {
+                        target,
+                        continue_from,
+                        runners_dir,
+                    },
+            } => {
+                assert_eq!(target.as_deref(), Some("vm-3"));
+                assert!(continue_from);
+                assert_eq!(runners_dir, Some(std::path::PathBuf::from("./result")));
+            }
+            _ => panic!("expected Steam warm"),
+        }
+    }
+
+    #[test]
+    fn steam_warm_accepts_missing_runners_dir() {
+        let cli = parse(&["--vm-count", "7", "steam", "warm", "vm-3"]);
+        match cli.command {
+            Commands::Steam {
+                action:
+                    SteamAction::Warm {
+                        target,
+                        runners_dir,
+                        ..
+                    },
+            } => {
+                assert_eq!(target.as_deref(), Some("vm-3"));
+                assert!(runners_dir.is_none());
+            }
+            _ => panic!("expected Steam warm"),
         }
     }
 

@@ -12,6 +12,7 @@ use std::path::PathBuf;
 
 use core::config::{self, BackendKind, ClusterConfig, VisualConfig, detect_project_root};
 use core::credentials;
+use core::nixos_module::NixosModuleConfig;
 use core::state;
 use game::{accounts, capture, compositor, run, steam};
 use harness::{bisect, history, output::OutputFormat, runner as test};
@@ -211,7 +212,7 @@ fn command_requires_claimed_vms(command: &Commands) -> bool {
             | Commands::Deploy { .. }
             | Commands::Logs { .. }
             | Commands::Steam {
-                action: SteamAction::Start { .. } | SteamAction::Accounts,
+                action: SteamAction::Start { .. } | SteamAction::Accounts { .. },
             }
             | Commands::Run { .. }
             | Commands::StopGame { .. }
@@ -444,33 +445,68 @@ fn diff_visual_scene(
     }
 }
 
+fn resolve_path_field(
+    flag_value: Option<PathBuf>,
+    module: Option<&NixosModuleConfig>,
+    extract: impl Fn(&NixosModuleConfig) -> Option<&PathBuf>,
+    backend_kind: BackendKind,
+    project_root: Option<&std::path::Path>,
+    field_name: &str,
+    cli_flag: &str,
+    nixos_option: &str,
+) -> anyhow::Result<PathBuf> {
+    if let Some(path) = flag_value {
+        return Ok(path);
+    }
+    if backend_kind != BackendKind::Microvm {
+        return Ok(PathBuf::from("/dev/null"));
+    }
+    if let Some(path) = module.and_then(extract) {
+        return Ok(path.clone());
+    }
+    if project_root.is_none() {
+        anyhow::bail!(
+            "{field_name} is not configured. Either pass `{cli_flag} <path>`, or set `{nixos_option}` in the NixOS module and run `nixos-rebuild switch`.",
+        );
+    }
+    anyhow::bail!(
+        "{field_name} is not configured. Either pass `{cli_flag} <path>` from inside the project root, or set `{nixos_option}` in the NixOS module."
+    );
+}
+
 /// Require a runners_dir for the microvm backend, or return a dummy path for others.
 fn require_runners_dir(
     runners_dir: Option<PathBuf>,
     backend_kind: BackendKind,
 ) -> anyhow::Result<PathBuf> {
-    match runners_dir {
-        Some(p) => Ok(p),
-        None if backend_kind == BackendKind::Microvm => {
-            anyhow::bail!("--runners-dir is required for the microvm backend")
-        }
-        None => Ok(PathBuf::from("/dev/null")), // unused by non-microvm backends
-    }
+    resolve_path_field(
+        runners_dir,
+        None,
+        |_| None,
+        backend_kind,
+        Some(std::path::Path::new(".")),
+        "runners dir",
+        "--runners-dir",
+        "services.steampipe-cluster.runners.enable",
+    )
 }
 
+#[allow(dead_code)]
 fn require_login_runners_dir(
     runners_dir: Option<PathBuf>,
     backend_kind: BackendKind,
     project_root: Option<&std::path::Path>,
 ) -> anyhow::Result<PathBuf> {
-    match runners_dir {
-        Some(path) => Ok(path),
-        None if backend_kind != BackendKind::Microvm => Ok(PathBuf::from("/dev/null")),
-        None if project_root.is_none() => {
-            anyhow::bail!("--login-runners-dir is required when running outside a project root")
-        }
-        None => anyhow::bail!("--login-runners-dir is required for the microvm backend"),
-    }
+    resolve_path_field(
+        runners_dir,
+        None,
+        |_| None,
+        backend_kind,
+        project_root,
+        "login runners dir",
+        "--login-runners-dir",
+        "services.steampipe-cluster.loginRunners.enable",
+    )
 }
 
 /// Resolve a test config field: CLI explicit > profile > default.
@@ -672,6 +708,10 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
     };
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
+    } else if module_only {
+        if let Some(key) = module.as_ref().and_then(|m| m.ssh_key.as_ref()) {
+            config.ssh_key = key.clone();
+        }
     }
     if let Some(dir) = &cli.state_dir {
         config.state_dir = dir.clone();
@@ -700,7 +740,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
 
     // Commands that act on an existing cluster should use the live claimed set,
     // not a synthetic contiguous prefix.
-    if matches!(
+    let use_claimed_vm_set = matches!(
         &cli.command,
         Commands::Restart { .. }
             | Commands::Status
@@ -711,7 +751,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             | Commands::Logs { .. }
             | Commands::Steam {
                 action: SteamAction::Start { .. }
-                    | SteamAction::Accounts
+                    | SteamAction::Accounts { .. }
                     | SteamAction::CleanLogins { .. }
                     | SteamAction::Info,
             }
@@ -733,12 +773,24 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                     | VisualAction::Report { .. },
             }
             | Commands::Watch { .. }
-    ) {
+    ) && !matches!(
+        &cli.command,
+        Commands::Steam {
+            action: SteamAction::CleanLogins { .. },
+        } if cli.vm_count.is_some()
+    );
+
+    if use_claimed_vm_set {
         config = config.with_vm_ids(&claimed_vm_ids)?;
         let allow_host_fallback_without_claims = matches!(
             &cli.command,
             Commands::Steam {
-                action: SteamAction::Accounts | SteamAction::CleanLogins { .. } | SteamAction::Info,
+                action: SteamAction::Accounts { .. },
+            }
+        ) || matches!(
+            &cli.command,
+            Commands::Steam {
+                action: SteamAction::CleanLogins { .. } | SteamAction::Info,
             }
         ) && module.is_some();
         if command_requires_claimed_vms(&cli.command)
@@ -789,21 +841,55 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 runners_dir,
                 display,
             } => {
-                let runners_dir = require_runners_dir(runners_dir, config.backend_kind)?;
+                let runners_dir = resolve_path_field(
+                    runners_dir,
+                    module.as_ref(),
+                    |m| m.runners_dir.as_ref(),
+                    config.backend_kind,
+                    project_root.as_deref(),
+                    "runners dir",
+                    "--runners-dir",
+                    "services.steampipe-cluster.runners.enable",
+                )?;
                 ensure_module_only_ssh_key_available(&config, module_only)?;
                 bridge::ensure_bridge(&config, project_root.as_deref())?;
                 let validated = config.validate_or_skip_bridge()?;
                 steam::check(&validated, target.as_deref(), &runners_dir, display).await?;
+            }
+            SteamAction::Warm {
+                target,
+                continue_from,
+                runners_dir,
+            } => {
+                let runners_dir = resolve_path_field(
+                    runners_dir,
+                    module.as_ref(),
+                    |m| m.runners_dir.as_ref(),
+                    config.backend_kind,
+                    project_root.as_deref(),
+                    "runners dir",
+                    "--runners-dir",
+                    "services.steampipe-cluster.runners.enable",
+                )?;
+                ensure_module_only_ssh_key_available(&config, module_only)?;
+                bridge::ensure_bridge(&config, project_root.as_deref())?;
+                let validated = config.validate_or_skip_bridge()?;
+                steam::warm(&validated, target.as_deref(), continue_from, &runners_dir).await?;
             }
             SteamAction::Login {
                 target,
                 continue_from,
                 login_runners_dir,
             } => {
-                let login_runners_dir = require_login_runners_dir(
+                let login_runners_dir = resolve_path_field(
                     login_runners_dir,
+                    module.as_ref(),
+                    |m| m.login_runners_dir.as_ref(),
                     config.backend_kind,
                     project_root.as_deref(),
+                    "login runners dir",
+                    "--login-runners-dir",
+                    "services.steampipe-cluster.loginRunners.enable",
                 )?;
                 ensure_module_only_ssh_key_available(&config, module_only)?;
                 bridge::ensure_bridge(&config, project_root.as_deref())?;
@@ -827,7 +913,9 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 ensure_module_only_ssh_key_available(&config, module_only)?;
                 steam::start(&config, target.as_deref(), display).await?;
             }
-            SteamAction::Accounts => accounts::show(&config, module.as_ref()).await?,
+            SteamAction::Accounts { warn_within_days } => {
+                accounts::show(&config, module.as_ref(), warn_within_days).await?
+            }
             SteamAction::Info => steam::info(&discovery, module.as_ref(), Some(&config))?,
             SteamAction::CleanLogins {
                 target,
@@ -1321,11 +1409,134 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
+    fn module_config_with_paths(
+        runners_dir: Option<PathBuf>,
+        login_runners_dir: Option<PathBuf>,
+    ) -> NixosModuleConfig {
+        NixosModuleConfig {
+            schema_version: 2,
+            vm_count: 7,
+            bridge: "br-cluster".into(),
+            subnet: "10.0.100".into(),
+            prefix: 24,
+            host_ip: "10.0.100.254".into(),
+            tap_owner: None,
+            login_state_dir: PathBuf::from("/var/lib/steampipe/logins"),
+            credentials_path: None,
+            accounts: Vec::new(),
+            runners_dir,
+            login_runners_dir,
+            ssh_key: None,
+            vm_user: None,
+        }
+    }
+
     fn profile_with_backend(backend: &str) -> core::config::TestProfile {
         core::config::TestProfile {
             screenshot_backend: Some(backend.into()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn resolve_path_field_uses_cli_flag_first() {
+        let module = module_config_with_paths(None, Some(PathBuf::from("/module/login-runners")));
+        let resolved = resolve_path_field(
+            Some(PathBuf::from("/cli/login-runners")),
+            Some(&module),
+            |m| m.login_runners_dir.as_ref(),
+            BackendKind::Microvm,
+            None,
+            "login runners dir",
+            "--login-runners-dir",
+            "services.steampipe-cluster.loginRunners.enable",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, PathBuf::from("/cli/login-runners"));
+    }
+
+    #[test]
+    fn resolve_path_field_uses_module_value_without_project_root() {
+        let module = module_config_with_paths(None, Some(PathBuf::from("/module/login-runners")));
+        let resolved = resolve_path_field(
+            None,
+            Some(&module),
+            |m| m.login_runners_dir.as_ref(),
+            BackendKind::Microvm,
+            None,
+            "login runners dir",
+            "--login-runners-dir",
+            "services.steampipe-cluster.loginRunners.enable",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, PathBuf::from("/module/login-runners"));
+    }
+
+    #[test]
+    fn resolve_path_field_uses_module_value_with_project_root() {
+        let module = module_config_with_paths(Some(PathBuf::from("/module/runners")), None);
+        let resolved = resolve_path_field(
+            None,
+            Some(&module),
+            |m| m.runners_dir.as_ref(),
+            BackendKind::Microvm,
+            Some(std::path::Path::new("/project")),
+            "runners dir",
+            "--runners-dir",
+            "services.steampipe-cluster.runners.enable",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, PathBuf::from("/module/runners"));
+    }
+
+    #[test]
+    fn resolve_path_field_error_names_flag_and_nixos_option() {
+        let err = resolve_path_field(
+            None,
+            None,
+            |m| m.login_runners_dir.as_ref(),
+            BackendKind::Microvm,
+            None,
+            "login runners dir",
+            "--login-runners-dir",
+            "services.steampipe-cluster.loginRunners.enable",
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("--login-runners-dir"), "{err}");
+        assert!(
+            err.contains("services.steampipe-cluster.loginRunners.enable"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn resolve_path_field_accepts_loaded_host_config_fixture() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            temp.path(),
+            r#"{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"hostIp":"10.0.100.254","loginRunnersDir":"/fixture/login-runners","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":2,"subnet":"10.0.100","tapOwner":null,"vmCount":7}"#,
+        )
+        .unwrap();
+        let module = core::nixos_module::load_from(temp.path()).unwrap().unwrap();
+
+        let resolved = resolve_path_field(
+            None,
+            Some(&module),
+            |m| m.login_runners_dir.as_ref(),
+            BackendKind::Microvm,
+            None,
+            "login runners dir",
+            "--login-runners-dir",
+            "services.steampipe-cluster.loginRunners.enable",
+        )
+        .unwrap();
+
+        assert_eq!(resolved, PathBuf::from("/fixture/login-runners"));
     }
 
     #[test]

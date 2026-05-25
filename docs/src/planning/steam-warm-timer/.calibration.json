@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "plan": {
+    "id": "0d54b776-dc92-4604-aaea-f5e1b8bd54ed",
+    "name": "Plan: Steam warm timer",
+    "flavor": "codex",
+    "worktype": null,
+    "created_at": 1779689744,
+    "phase_count": 2,
+    "wave_count": 2,
+    "max_chain_depth": 2,
+    "repo_spread": 3,
+    "routing_dist": {
+      "low": 1,
+      "medium": 1
+    },
+    "shape_hash": "cc409f19ba886b5cde605d08be9e6a5291e5a11f64a5c2c1f7598be53f82ec49"
+  },
+  "triggers": [
+    {
+      "name": "shared-file-contention",
+      "input_value": 1.0,
+      "threshold": 2.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "external-repo-phases",
+      "input_value": 2.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": "External repo coordination"
+    },
+    {
+      "name": "convergence-point",
+      "input_value": 1.0,
+      "threshold": 3.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "ownership-boundary-spread",
+      "input_value": 3.0,
+      "threshold": 2.0,
+      "fired": true,
+      "section_added": "PR sequencing & cross-owner coordination"
+    },
+    {
+      "name": "risk-concentration",
+      "input_value": 0.0,
+      "threshold": 2.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "risk-late-in-plan",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "infrastructure-spof",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "revendor-phase",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "long-serial-chain",
+      "input_value": 2.0,
+      "threshold": 4.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "mid-plan-rerouting",
+      "input_value": 2.0,
+      "threshold": 10.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "trivial-phase-swamp",
+      "input_value": 2.0,
+      "threshold": 4.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "no-integrated-verification",
+      "input_value": 1.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": null
+    },
+    {
+      "name": "routing-tier-inversion",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "mechanical-streak",
+      "input_value": 1.0,
+      "threshold": 3.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "hidden-prerequisite",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    }
+  ],
+  "phases": [
+    {
+      "ordinal": 1,
+      "slug": "timer-module",
+      "routing_tier": "medium",
+      "files": [
+        "nix/lib/test-cluster.nix",
+        "optional new `nix/lib/warm-timer.nix"
+      ]
+    },
+    {
+      "ordinal": 2,
+      "slug": "docs",
+      "routing_tier": "low",
+      "files": [
+        "docs/src/configuration/host-config.md",
+        "docs/src/configuration/steam-credentials.md"
+      ]
+    }
+  ],
+  "meta_heuristics_fired": [
+    "threshold-proximity"
+  ],
+  "tags": {
+    "flavor": "codex",
+    "risk": "low",
+    "scope": "cross-org"
+  },
+  "verify": null
+}

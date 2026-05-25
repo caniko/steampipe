@@ -18,7 +18,8 @@ use serde::Deserialize;
 const DEFAULT_PATH: &str = "/etc/steampipe/module.json";
 const LEGACY_SYSTEM_PATH: &str = DEFAULT_PATH;
 const SYSTEM_PATH: &str = "/etc/steampipe/host.json";
-const SUPPORTED_SCHEMA_VERSION: u32 = 1;
+const SUPPORTED_SCHEMA_VERSIONS: &[u32] = &[1, 2];
+const LATEST_SCHEMA_VERSION: u32 = 2;
 const MODULE_CONFIG_ENV: &str = "STEAMPIPE_MODULE_CONFIG";
 const ETC_DIR_ENV: &str = "STEAMPIPE_ETC_DIR";
 const USER_PATH_SUFFIX: &str = "steampipe/host.json";
@@ -65,6 +66,14 @@ pub struct NixosModuleConfig {
     #[serde(rename = "credentialsPath")]
     pub credentials_path: Option<PathBuf>,
     pub accounts: Vec<NixosModuleAccount>,
+    #[serde(rename = "runnersDir")]
+    pub runners_dir: Option<PathBuf>,
+    #[serde(rename = "loginRunnersDir")]
+    pub login_runners_dir: Option<PathBuf>,
+    #[serde(rename = "sshKey")]
+    pub ssh_key: Option<PathBuf>,
+    #[serde(rename = "vmUser")]
+    pub vm_user: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -116,12 +125,21 @@ pub fn load_from(path: &Path) -> anyhow::Result<Option<NixosModuleConfig>> {
     let config: NixosModuleConfig =
         serde_json::from_slice(&bytes).with_context(|| format!("parse {}", path.display()))?;
 
-    if config.schema_version != SUPPORTED_SCHEMA_VERSION {
+    if !SUPPORTED_SCHEMA_VERSIONS.contains(&config.schema_version) {
         anyhow::bail!(
-            "{} has schemaVersion {}, but cluster-ctl only supports schemaVersion {} (see docs/src/configuration/host-config.md)",
+            "{} has schemaVersion {}, but cluster-ctl supports {:?} (see docs/src/configuration/host-config.md)",
             path.display(),
             config.schema_version,
-            SUPPORTED_SCHEMA_VERSION
+            SUPPORTED_SCHEMA_VERSIONS
+        );
+    }
+
+    if config.schema_version < LATEST_SCHEMA_VERSION {
+        eprintln!(
+            "warning: {} uses schemaVersion {}; upgrade to {} (the NixOS module emits the new version automatically after `nixos-rebuild`)",
+            path.display(),
+            config.schema_version,
+            LATEST_SCHEMA_VERSION
         );
     }
 
@@ -273,61 +291,102 @@ mod tests {
     }
 
     #[test]
-    fn load_from_parses_minimal_fixture() {
-        let path = write_fixture(
-            r#"{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"hostIp":"10.0.100.254","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":1,"subnet":"10.0.100","tapOwner":null,"vmCount":7}"#,
-        );
+    fn load_from_parses_minimal_fixtures_for_supported_schema_versions() {
+        for schema_version in [1, 2] {
+            let path = write_fixture(&format!(
+                r#"{{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"hostIp":"10.0.100.254","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":{schema_version},"subnet":"10.0.100","tapOwner":null,"vmCount":7}}"#,
+            ));
 
-        let loaded = load_from(&path)
-            .expect("minimal fixture should parse")
-            .expect("fixture should exist");
+            let loaded = load_from(&path)
+                .expect("minimal fixture should parse")
+                .expect("fixture should exist");
 
-        assert_eq!(loaded.schema_version, 1);
-        assert_eq!(loaded.vm_count, 7);
-        assert_eq!(loaded.bridge, "br-cluster");
-        assert_eq!(loaded.subnet, "10.0.100");
-        assert_eq!(loaded.prefix, 24);
-        assert_eq!(loaded.host_ip, "10.0.100.254");
-        assert_eq!(loaded.tap_owner, None);
-        assert_eq!(
-            loaded.login_state_dir,
-            PathBuf::from("/var/lib/steampipe/logins")
-        );
-        assert_eq!(loaded.credentials_path, None);
-        assert!(loaded.accounts.is_empty());
+            assert_eq!(loaded.schema_version, schema_version);
+            assert_eq!(loaded.vm_count, 7);
+            assert_eq!(loaded.bridge, "br-cluster");
+            assert_eq!(loaded.subnet, "10.0.100");
+            assert_eq!(loaded.prefix, 24);
+            assert_eq!(loaded.host_ip, "10.0.100.254");
+            assert_eq!(loaded.tap_owner, None);
+            assert_eq!(
+                loaded.login_state_dir,
+                PathBuf::from("/var/lib/steampipe/logins")
+            );
+            assert_eq!(loaded.credentials_path, None);
+            assert!(loaded.accounts.is_empty());
+            assert_eq!(loaded.runners_dir, None);
+            assert_eq!(loaded.login_runners_dir, None);
+            assert_eq!(loaded.ssh_key, None);
+            assert_eq!(loaded.vm_user, None);
+        }
     }
 
     #[test]
-    fn load_from_parses_full_fixture() {
+    fn load_from_parses_full_fixtures_for_supported_schema_versions() {
+        for schema_version in [1, 2] {
+            let path = write_fixture(&format!(
+                r#"{{"accounts":[{{"vm":"vm-1","steamUser":"testaccount1"}},{{"vm":"vm-2","steamUser":"testaccount2"}}],"bridge":"br-cluster","credentialsPath":"/etc/steampipe/credentials.toml","hostIp":"10.0.100.254","loginRunnersDir":"/run/current-system/sw/share/steampipe/login-runners","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"runnersDir":"/run/current-system/sw/share/steampipe/runners","schemaVersion":{schema_version},"sshKey":"/etc/steampipe/ssh/cluster_key","subnet":"10.0.100","tapOwner":"can","vmCount":7,"vmUser":"cluster"}}"#,
+            ));
+
+            let loaded = load_from(&path)
+                .expect("full fixture should parse")
+                .expect("fixture should exist");
+
+            assert_eq!(loaded.schema_version, schema_version);
+            assert_eq!(loaded.tap_owner.as_deref(), Some("can"));
+            assert_eq!(
+                loaded.credentials_path,
+                Some(PathBuf::from("/etc/steampipe/credentials.toml"))
+            );
+            assert_eq!(loaded.accounts.len(), 2);
+            assert_eq!(loaded.accounts[0].vm, "vm-1");
+            assert_eq!(loaded.accounts[0].steam_user, "testaccount1");
+            assert_eq!(loaded.accounts[1].vm, "vm-2");
+            assert_eq!(loaded.accounts[1].steam_user, "testaccount2");
+            assert_eq!(
+                loaded.runners_dir,
+                Some(PathBuf::from(
+                    "/run/current-system/sw/share/steampipe/runners"
+                ))
+            );
+            assert_eq!(
+                loaded.login_runners_dir,
+                Some(PathBuf::from(
+                    "/run/current-system/sw/share/steampipe/login-runners"
+                ))
+            );
+            assert_eq!(
+                loaded.ssh_key,
+                Some(PathBuf::from("/etc/steampipe/ssh/cluster_key"))
+            );
+            assert_eq!(loaded.vm_user.as_deref(), Some("cluster"));
+        }
+    }
+
+    #[test]
+    fn load_from_ignores_unknown_fields() {
         let path = write_fixture(
-            r#"{"schemaVersion":1,"vmCount":7,"bridge":"br-cluster","subnet":"10.0.100","prefix":24,"hostIp":"10.0.100.254","tapOwner":"can","loginStateDir":"/var/lib/steampipe/logins","credentialsPath":"/etc/steampipe/credentials.toml","accounts":[{"vm":"vm-1","steamUser":"testaccount1"},{"vm":"vm-2","steamUser":"testaccount2"}]}"#,
+            r#"{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"futureField":"x","hostIp":"10.0.100.254","loginRunnersDir":null,"loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":2,"subnet":"10.0.100","tapOwner":null,"vmCount":7}"#,
         );
 
         let loaded = load_from(&path)
-            .expect("full fixture should parse")
+            .expect("fixture with unknown field should parse")
             .expect("fixture should exist");
 
-        assert_eq!(loaded.tap_owner.as_deref(), Some("can"));
-        assert_eq!(
-            loaded.credentials_path,
-            Some(PathBuf::from("/etc/steampipe/credentials.toml"))
-        );
-        assert_eq!(loaded.accounts.len(), 2);
-        assert_eq!(loaded.accounts[0].vm, "vm-1");
-        assert_eq!(loaded.accounts[0].steam_user, "testaccount1");
-        assert_eq!(loaded.accounts[1].vm, "vm-2");
-        assert_eq!(loaded.accounts[1].steam_user, "testaccount2");
+        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.vm_count, 7);
     }
 
     #[test]
     fn load_from_rejects_unknown_schema_version() {
         let path = write_fixture(
-            r#"{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"hostIp":"10.0.100.254","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":2,"subnet":"10.0.100","tapOwner":null,"vmCount":7}"#,
+            r#"{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"hostIp":"10.0.100.254","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":3,"subnet":"10.0.100","tapOwner":null,"vmCount":7}"#,
         );
 
         let error = load_from(&path).expect_err("unknown schema version should fail");
         let message = error.to_string();
-        assert!(message.contains("schemaVersion 2"));
+        assert!(message.contains("schemaVersion 3"));
+        assert!(message.contains("[1, 2]"));
         assert!(message.contains("host-config.md"));
     }
 

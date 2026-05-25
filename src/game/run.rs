@@ -28,13 +28,16 @@ pub async fn stop_game<S>(config: &ClusterConfig<S>, kill_steam: bool) -> anyhow
     if kill_steam {
         println!("==> Stopping Steam and Weston...");
         let backend = config.backend.clone();
+        let vm_user = config.vm_user.clone();
         par_each_vm(&config.vms, |vm| {
             let backend = backend.clone();
+            let vm_user = vm_user.clone();
             async move {
+                let _ = steam::graceful_stop_steam(&backend, &vm.ip, &vm_user).await;
                 backend
                     .run_cmd(
                         &vm.ip,
-                        "pkill -x steam 2>/dev/null; pkill -x weston 2>/dev/null; pkill -x sway 2>/dev/null; true",
+                        "pkill -x weston 2>/dev/null; pkill -x sway 2>/dev/null; true",
                     )
                     .await;
             }

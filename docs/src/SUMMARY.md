@@ -24,3 +24,22 @@
 
 - [Cluster Network](./networking/cluster-network.md)
 - [Network Simulation](./networking/network-simulation.md)
+
+# Planning
+
+- [Steam session longevity research](./planning/steam-session-longevity-research.md)
+- [Steam session longevity design](./planning/steam-session-longevity-design.md)
+- [Plan: steam warm timer](./planning/steam-warm-timer/README.md)
+  - [01 Timer NixOS module](./planning/steam-warm-timer/01-timer-module.md)
+  - [02 Documentation](./planning/steam-warm-timer/02-docs.md)
+- [Config-less CLI research](./planning/cli-configless-from-nixos-research.md)
+- [Plan: config-less CLI from NixOS](./planning/cli-configless-from-nixos/README.md)
+  - [01 Host config schema fields](./planning/cli-configless-from-nixos/01-host-config-schema-fields.md)
+  - [02 CLI resolver refactor](./planning/cli-configless-from-nixos/02-cli-resolver-refactor.md)
+  - [03 NixOS module login runners](./planning/cli-configless-from-nixos/03-nixos-module-login-runners.md)
+  - [04 canix wiring + smoke](./planning/cli-configless-from-nixos/04-canix-wiring-and-smoke.md)
+  - [05 Docs + UX cleanup](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/README.md)
+    - [05.01 README + quick start](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-01-readme-quickstart.md)
+    - [05.02 Configuration docs](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-02-configuration-docs.md)
+    - [05.03 CLI help text](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-03-cli-help-text.md)
+  - [06 Migrate project wrappers](./planning/cli-configless-from-nixos/06-migrate-project-wrappers.md)
