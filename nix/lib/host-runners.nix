@@ -44,10 +44,8 @@
     inherit pkgs lib nixpkgs steampipe;
   } {
     inherit network vmUser;
-    # Empty key produces empty authorized_keys; runners build but are
-    # unreachable. This is the intentional first-rebuild state: the host
-    # activation script generates the keypair, the next rebuild's eval
-    # reads it via the module's default, and the runners gain a usable key.
+    # Empty key is impossible through the NixOS module: it asserts before
+    # runners can be built.
     sshAuthorizedKeys = lib.optional (sshAuthorizedKey != "") sshAuthorizedKey;
     loginStateDir = null;
   };

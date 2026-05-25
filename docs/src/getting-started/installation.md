@@ -37,12 +37,11 @@ bare binary is the fallback for non-NixOS hosts.
                tapOwner = "yourhostuser";
                tapOwnerUid = 1000;
 
-               # Optional: bake Steam login-runner VMs into the system.
-               loginRunners.enable = true;
+               # Bootstrap first; enable after pasting sshAuthorizedKey below.
+               loginRunners.enable = false;
 
-               # Optional: bake runtime VM runners into the system.
-               # This adds roughly 7 GiB to the host closure at vmCount = 7.
-               runners.enable = true;
+               # Runtime VM runners also require sshAuthorizedKey before enabling.
+               runners.enable = false;
              };
            })
          ];
@@ -54,24 +53,52 @@ bare binary is the fallback for non-NixOS hosts.
 3. Replace `yourhostuser` and `tapOwnerUid` with the host user that will run
    `cluster-ctl`. The UID should match the in-VM user, normally `1000`.
 
-4. Run the first rebuild:
+4. First rebuild — bootstrap the cluster keypair. In your initial config, set
+   `loginRunners.enable = false;` and `runners.enable = false;`, then:
 
    ```bash
    sudo nixos-rebuild switch --flake .#myhost
    ```
 
-5. If `loginRunners.enable` or `runners.enable` is set, run a second rebuild
-   after the first activation creates `/var/lib/steampipe/ssh/cluster_key.pub`.
-   The second evaluation bakes that public key into the VM runners.
+   The activation script creates the cluster keypair at
+   `/var/lib/steampipe/ssh/cluster_key{,.pub}`.
 
-6. Check the installed binary and host config:
+5. Paste the pubkey into the host config. Read the generated pubkey:
+
+   ```bash
+   sudo cat /var/lib/steampipe/ssh/cluster_key.pub
+   ```
+
+   Add it to your config:
+
+   ```nix
+   services.steampipe-cluster.loginRunners = {
+     enable = true;
+     sshAuthorizedKey = "ssh-ed25519 AAAA... steampipe-loginrunners@host";
+   };
+   # And the same for runners.sshAuthorizedKey if you enabled runners.
+   ```
+
+6. Rebuild with the key baked in:
+
+   ```bash
+   sudo nixos-rebuild switch --flake .#myhost
+   ```
+
+   The pubkey now lives in every login-runner's authorized_keys.
+
+Why two rebuilds? Flake evaluation runs in pure-eval mode, which forbids
+reading `/var/lib/*` from disk. The first rebuild creates the key on the host;
+the second rebuild bakes the key you just read into the VM closure.
+
+7. Check the installed binary and host config:
 
    ```bash
    cluster-ctl --help
    cluster-ctl steam info
    ```
 
-7. If `runners.enable = true;`, start the cluster or warm/check Steam from any
+8. If `runners.enable = true;`, start the cluster or warm/check Steam from any
    directory:
 
    ```bash

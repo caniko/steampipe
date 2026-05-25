@@ -172,7 +172,10 @@
               vmCount = 2;
               tapOwner = "cluster";
               tapOwnerUid = 1000;
-              runners.enable = true;
+              runners = {
+                enable = true;
+                sshAuthorizedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForSteampipeEvalChecksOnly steampipe-test";
+              };
             };
             services.steampipe-warm-timer.enable = true;
           }
@@ -216,7 +219,10 @@
               vmCount = 2;
               tapOwner = "cluster";
               tapOwnerUid = 1000;
-              loginRunners.enable = true;
+              loginRunners = {
+                enable = true;
+                sshAuthorizedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForSteampipeEvalChecksOnly steampipe-test";
+              };
             };
           }
         ];
@@ -257,7 +263,10 @@
               vmCount = 2;
               tapOwner = "cluster";
               tapOwnerUid = 1000;
-              runners.enable = true;
+              runners = {
+                enable = true;
+                sshAuthorizedKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKeyForSteampipeEvalChecksOnly steampipe-test";
+              };
             };
           }
         ];
@@ -306,13 +315,14 @@
             timerRandomizedDelaySec = hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
             serviceUser = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.User;
             serviceHome = builtins.elemAt hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.Environment 0;
-            warmCommandText = builtins.readFile hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
+            warmCommand = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
           } ''
             test "$timerOnCalendar" = weekly
             test "$timerPersistent" = true
             test "$timerRandomizedDelaySec" = 1h
             test "$serviceUser" = cluster
             test "$serviceHome" = HOME=/home/cluster
+            warmCommandText="$(cat "$warmCommand")"
             case "$warmCommandText" in
               *"--runners-dir"*) echo "host warm timer should rely on module.json, not --runners-dir" >&2; exit 1 ;;
             esac

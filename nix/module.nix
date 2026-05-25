@@ -250,34 +250,20 @@ in {
 
       sshAuthorizedKey = lib.mkOption {
         type = lib.types.str;
-        default =
-          if builtins.pathExists "${loginRunnerSshKey}.pub"
-          then lib.removeSuffix "\n" (builtins.readFile "${loginRunnerSshKey}.pub")
-          else "";
-        defaultText = lib.literalExpression ''
-          # Auto-read from the host-generated pubkey, if it exists yet.
-          if builtins.pathExists "''${loginRunnerSshKey}.pub"
-          then lib.removeSuffix "\n" (builtins.readFile "''${loginRunnerSshKey}.pub")
-          else ""
-        '';
+        default = "";
         example = "ssh-ed25519 AAAA... steampipe-loginrunners@host";
         description = ''
           Cluster SSH public key authorized inside each login VM, as a
-          single-line string. Required when `loginRunners.enable` is set.
+          single-line string. Required when `loginRunners.enable = true`.
 
-          By default the value is read at evaluation time from the
-          host-managed keypair at ${loginRunnerSshKey}.pub (the
-          activation script generates this keypair on every rebuild
-          when the module is enabled). Override only if you provide
-          the key out of band, for example through a flake input or a
-          pre-committed pubkey.
+          The module's activation script generates the host-managed
+          keypair at ${loginRunnerSshKey}{,.pub}. Flake pure-eval cannot
+          read that file from /var/lib at evaluation time, so operators
+          must paste the generated public key into this option before
+          enabling login runners.
 
           The key is baked into the login-runner derivation, so
           rotating it requires a `nixos-rebuild` (≈30 s).
-
-          Fresh installs need two rebuilds: the first activation
-          creates the keypair, and the second rebuild's evaluation
-          picks it up via the default reader.
         '';
       };
 
@@ -305,16 +291,17 @@ in {
 
       sshAuthorizedKey = lib.mkOption {
         type = lib.types.str;
-        default =
-          if builtins.pathExists "${loginRunnerSshKey}.pub"
-          then lib.removeSuffix "\n" (builtins.readFile "${loginRunnerSshKey}.pub")
-          else "";
-        defaultText = lib.literalExpression "<host-generated key, see loginRunners.sshAuthorizedKey>";
+        default = "";
+        example = "ssh-ed25519 AAAA... steampipe-loginrunners@host";
         description = ''
-          SSH public key authorized inside each runtime VM. Defaults to
-          the host-managed `cluster_key.pub` so login runners and
-          runtime runners stay in lockstep. Override only if your test
-          project pins a separate SSH key.
+          SSH public key authorized inside each runtime VM, as a
+          single-line string. Required when `runners.enable = true`.
+
+          Use the same generated public key as
+          `loginRunners.sshAuthorizedKey` unless your deployment
+          intentionally separates login-runner and runtime-runner SSH
+          keys. Flake pure-eval cannot read
+          ${loginRunnerSshKey}.pub from /var/lib at evaluation time.
         '';
       };
 
@@ -377,6 +364,28 @@ in {
         message = "services.steampipe-cluster.loginRunners.enable requires the microvm flake input to be passed through _module.args (use steampipe.nixosModules.default from the flake output rather than importing nix/module.nix directly).";
       }
       {
+        assertion = !cfg.loginRunners.enable || cfg.loginRunners.sshAuthorizedKey != "";
+        message = ''
+          services.steampipe-cluster.loginRunners.enable is true but
+          sshAuthorizedKey is empty. Login VMs would build with an empty
+          authorized_keys file and reject every SSH connection.
+
+          Bootstrap workflow:
+            1. Set loginRunners.enable = false; (or leave the cluster
+               service unconfigured), nixos-rebuild switch. This runs the
+               activation script that generates the cluster keypair at
+               /var/lib/steampipe/ssh/cluster_key{,.pub}.
+            2. Read /var/lib/steampipe/ssh/cluster_key.pub and paste its
+               single-line contents (no trailing newline) into
+               services.steampipe-cluster.loginRunners.sshAuthorizedKey.
+            3. Re-enable loginRunners and rebuild. The pubkey now lands in
+               the runner closure and SSH works.
+
+          This indirection exists because flake pure-eval cannot read
+          /var/lib/* at evaluation time.
+        '';
+      }
+      {
         assertion = !cfg.runners.enable || cfg.tapOwner != null;
         message = "services.steampipe-cluster.runners.enable requires services.steampipe-cluster.tapOwner so cluster-ctl can read the SSH key without sudo.";
       }
@@ -392,6 +401,28 @@ in {
         assertion = !cfg.runners.enable || microvm != null;
         message = "services.steampipe-cluster.runners.enable requires the microvm flake input to be passed through _module.args (use steampipe.nixosModules.default from the flake output rather than importing nix/module.nix directly).";
       }
+      {
+        assertion = !cfg.runners.enable || cfg.runners.sshAuthorizedKey != "";
+        message = ''
+          services.steampipe-cluster.runners.enable is true but
+          sshAuthorizedKey is empty. Runtime VMs would build with an empty
+          authorized_keys file and reject every SSH connection.
+
+          Bootstrap workflow:
+            1. Set runners.enable = false; (or leave the cluster service
+               unconfigured), nixos-rebuild switch. This runs the activation
+               script that generates the cluster keypair at
+               /var/lib/steampipe/ssh/cluster_key{,.pub}.
+            2. Read /var/lib/steampipe/ssh/cluster_key.pub and paste its
+               single-line contents (no trailing newline) into
+               services.steampipe-cluster.runners.sshAuthorizedKey.
+            3. Re-enable runners and rebuild. The pubkey now lands in the
+               runner closure and SSH works.
+
+          This indirection exists because flake pure-eval cannot read
+          /var/lib/* at evaluation time.
+        '';
+      }
     ];
 
     nixpkgs.overlays = lib.optional (steampipe != null) steampipe.overlays.default;
@@ -401,10 +432,6 @@ in {
       "services.steampipe-cluster.natInterface is deprecated; NetworkManager shared mode manages NAT via the active default route."
       ++ lib.optional (cfg.tapOwner == null)
       "services.steampipe-cluster: tapOwner is not set; loginStateDir will be owned by root and the in-VM Steam user cannot write to it. Set tapOwner to a host user whose numeric UID matches the in-VM vm_user (default 1000)."
-      ++ lib.optional (cfg.loginRunners.enable && cfg.loginRunners.sshAuthorizedKey == "")
-      "services.steampipe-cluster.loginRunners is enabled but no sshAuthorizedKey is set and ${loginRunnerSshKey}.pub does not exist yet. The activation script will generate the keypair during this rebuild; run `nixos-rebuild switch` once more to bake the pubkey into the login runners. (Login VMs built by this rebuild will boot but reject SSH.)"
-      ++ lib.optional (cfg.runners.enable && cfg.runners.sshAuthorizedKey == "")
-      "services.steampipe-cluster.runners is enabled but no sshAuthorizedKey is set and ${loginRunnerSshKey}.pub does not exist yet. The activation script will generate the keypair during this rebuild; run `nixos-rebuild switch` once more to bake the pubkey into the runtime runners. (Runtime VMs built by this rebuild will boot but reject SSH.)"
       ++ lib.optional (runnersEnabled && !(pkgs.crosvm.passthru.__steampipeOverlay or false))
       "services.steampipe-cluster: pkgs.crosvm lacks the steampipe overlay's `__steampipeOverlay` marker. A downstream overlay has shadowed our patched crosvm; login VMs may hit SIGSYS on Linux >= 6.13.";
 
