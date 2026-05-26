@@ -38,6 +38,13 @@
     libGL
     vulkan-loader
     stdenv.cc.cc.lib
+    xorg.libX11
+    xorg.libXcursor
+    xorg.libXext
+    xorg.libXi
+    xorg.libXrandr
+    xorg.libXrender
+    xorg.libxcb
   ];
 
   graphicalRuntimeLibPath = lib.makeLibraryPath graphicalRuntimeLibs;
@@ -97,8 +104,11 @@ in {
       '';
 
       environment.systemPackages = with pkgs; [
+        grim
+        mesa-demos
         vulkan-tools
         wayland-utils
+        xorg.xdpyinfo
       ];
     })
 
