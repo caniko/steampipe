@@ -41,6 +41,27 @@ visual harness: there is no Weston readiness probe and `wayvnc` will not
 attach. `cluster-ctl` rejects these combinations at startup. See the matrix
 in [steampipe.toml](./steampipe-toml.md#supported-display--screenshot-backend-matrix).
 
+### Why sway, and not hyprland
+
+The VM compositor is sway, with weston as a fallback. Hyprland is intentionally
+not supported.
+
+- wayvnc is documented as a VNC server for wlroots-based compositors. Hyprland
+  forked from wlroots to its own Aquamarine renderer (~0.40+) and is
+  partial-compat with wayvnc; cursor sync, multi-output bookkeeping, and resize
+  behaviour all diverge.
+- The Rust harness consumes sway's IPC (`swaymsg -t get_tree`,
+  `swaymsg -t get_outputs`) directly in ~70 call sites, including
+  `SwayOutput`/`SwayNode` parsers in `src/game/compositor.rs`. Hyprland's IPC
+  (`hyprctl`) emits a different JSON shape; switching would mean re-recording
+  every golden fixture and rewriting the typed parsers.
+- Hyprland's resident memory footprint is notably larger than sway's, fighting
+  the per-VM memory budget the cluster targets.
+
+See [hypervisor-restructure-design.md](../planning/hypervisor-restructure-design.md)
+("Compositor — Final Stance") and the research dossier adjacent for the full
+evaluation.
+
 Fixture golden regeneration (`scripts/regenerate.sh` →
 `cluster-ctl fixture golden regenerate`) brings up the **default** fixture
 flavor, which is crosvm + sway; regenerating against any other flavor is
