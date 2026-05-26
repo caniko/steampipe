@@ -136,7 +136,10 @@ Import the warm timer module next to the host module:
     enable = true;
     tapOwner = "yourhostuser";
     tapOwnerUid = 1000;
-    runners.enable = true;
+    runners = {
+      enable = true;
+      sshAuthorizedKey = "ssh-ed25519 AAAA... steampipe-loginrunners@host";
+    };
   };
 
   services.steampipe-warm-timer.enable = true;
