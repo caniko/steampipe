@@ -66,7 +66,7 @@
     ${pkgs.coreutils}/bin/install -d -m 0700 "$keydir"
     if [ ! -f "$key" ]; then
       ${pkgs.openssh}/bin/ssh-keygen -t ed25519 -N "" \
-        -C "steampipe-loginrunners@$(${pkgs.coreutils}/bin/hostname)" \
+        -C ${lib.escapeShellArg "steampipe-loginrunners@${config.networking.hostName}"} \
         -f "$key"
     fi
     ${pkgs.coreutils}/bin/chmod 0600 "$key"
