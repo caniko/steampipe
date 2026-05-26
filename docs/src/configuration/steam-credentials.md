@@ -112,20 +112,36 @@ cluster-ctl --vm-count 7 steam warm -+ vm-3 --runners-dir ./result
 ### Automated rotation
 
 Add the warm-timer module to your host configuration to refresh tokens on a
-weekly schedule without manual invocation. The opt-in uses the runner directory
-baked into `mkTestCluster`, so the only flag you need to flip is `enable`:
+weekly schedule without manual invocation. Host-level warm timers use the
+runner directory published by `services.steampipe-cluster.runners.enable`, so
+import the timer module next to the host module and enable runtime runners:
 
 ```nix
-{ steampipeCluster, ... }: {
-  imports = [ steampipeCluster.warmTimerModule ];
+{
+  imports = [
+    inputs.steampipe.nixosModules.default
+    inputs.steampipe.nixosModules.warmTimer
+  ];
+
+  services.steampipe-cluster = {
+    enable = true;
+    tapOwner = "yourhostuser";
+    tapOwnerUid = 1000;
+    runners.enable = true;
+  };
+
   services.steampipe-warm-timer.enable = true;
 }
 ```
 
-Defaults: weekly cadence, 1-hour randomized delay, the project `vm_user`
-(normally the same numeric user as the host `tapOwner`), and the cluster SSH key
-from `steampipe.toml`. Override with `onCalendar`, `randomizedDelaySec`, `user`,
-and `sshKey`. The full options list is in [Global host config](./host-config.md#steampipe-warm-timer).
+Defaults: weekly cadence, 1-hour randomized delay, the module `tapOwner`, and
+`/var/lib/steampipe/ssh/cluster_key`. Override with `onCalendar`,
+`randomizedDelaySec`, `user`, `sshKey`, and `extraArgs`. The full options list
+is in [Global host config](./host-config.md#steampipe-warm-timer).
+
+Project-flake consumers can still use `(mkTestCluster {...}).warmTimerModule`
+when the timer should be bound to that project-built runner set instead of the
+host-level `/etc/steampipe/runners` configuration.
 
 Verify the timer is doing its job by running `cluster-ctl steam accounts` and
 checking that `RefreshAge` stays under your `--warn-within-days` threshold.

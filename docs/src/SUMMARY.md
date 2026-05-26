@@ -11,9 +11,11 @@
 
 - [steampipe.toml](./configuration/steampipe-toml.md)
 - [Visual Testing](./configuration/visual-testing.md)
+- [Graphics and games](./configuration/graphics-and-games.md)
 - [Global host config](./configuration/host-config.md)
 - [Steam Credentials](./configuration/steam-credentials.md)
 - [VM Lifecycle](./configuration/vm-lifecycle.md)
+- [VM resources](./configuration/vm-resources.md)
 
 # Testing
 
@@ -25,19 +27,32 @@
 - [Cluster Network](./networking/cluster-network.md)
 - [Network Simulation](./networking/network-simulation.md)
 
-# Planning
+# Plan: login-runner-ssh-fix
 
-- [Steam session longevity research](./planning/steam-session-longevity-research.md)
-- [Steam session longevity design](./planning/steam-session-longevity-design.md)
-- [Config-less CLI research](./planning/cli-configless-from-nixos-research.md)
-- [Plan: config-less CLI from NixOS](./planning/cli-configless-from-nixos/README.md)
-  - [01 Host config schema fields](./planning/cli-configless-from-nixos/01-host-config-schema-fields.md)
-  - [02 CLI resolver refactor](./planning/cli-configless-from-nixos/02-cli-resolver-refactor.md)
-  - [03 NixOS module login runners](./planning/cli-configless-from-nixos/03-nixos-module-login-runners.md)
-  - [04 canix wiring + smoke](./planning/cli-configless-from-nixos/04-canix-wiring-and-smoke.md)
-  - [05 Docs + UX cleanup](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/README.md)
-    - [05.01 README + quick start](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-01-readme-quickstart.md)
-    - [05.02 Configuration docs](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-02-configuration-docs.md)
-    - [05.03 CLI help text](./planning/cli-configless-from-nixos/05-docs-ux-cleanup/sub-03-cli-help-text.md)
-  - [06 Migrate project wrappers](./planning/cli-configless-from-nixos/06-migrate-project-wrappers.md)
-- [Nix input install gaps research](./planning/nix-input-install-gaps-research.md)
+- [Overview](./planning/login-runner-ssh-fix/README.md)
+- [01 — canix explicit key unblock](./planning/login-runner-ssh-fix/01-canix-explicit-key-unblock.md)
+- [02 — drop pathExists default and assert](./planning/login-runner-ssh-fix/02-drop-pathexists-default-and-assert.md)
+- [03 — flake check empty-key regression](./planning/login-runner-ssh-fix/03-flake-check-empty-key-regression.md)
+- [04 — vm.log tail unavailable fix](./planning/login-runner-ssh-fix/04-vm-log-tail-unavailable-fix.md)
+- [05 — cluster-key hostname cosmetic](./planning/login-runner-ssh-fix/05-cluster-key-hostname-cosmetic.md)
+- [Findings dossier](./planning/login-runner-ssh-unreachable-findings.md)
+
+# Research
+
+- [Hypervisor + compositor research](./planning/hypervisor-restructure-research.md)
+- [Hypervisor + compositor design](./planning/hypervisor-restructure-design.md)
+
+# Plan: hypervisor-restructure
+
+- [Overview](./planning/hypervisor-restructure/README.md)
+- [01 — validate QEMU virgl on atlas](./planning/hypervisor-restructure/01-validate-qemu-virgl-on-atlas.md)
+- [02 — add cloud-hypervisor headless](./planning/hypervisor-restructure/02-add-cloud-hypervisor-headless.md)
+- [03 — shrink login home image + reset](./planning/hypervisor-restructure/03-shrink-login-home-image.md)
+- [04 — empty-stderr diagnostic](./planning/hypervisor-restructure/04-empty-stderr-diagnostic.md)
+- [05 — document hyprland-no](./planning/hypervisor-restructure/05-document-hyprland-no.md)
+- [06 — memory-admission gate](./planning/hypervisor-restructure/06-memory-admission-gate.md)
+- [07 — canix rebuild + KSM](./planning/hypervisor-restructure/07-canix-rebuild-and-ksm.md)
+- [08 — flip login default to QEMU](./planning/hypervisor-restructure/08-flip-login-default-to-qemu.md)
+- [09 — memory budgets](./planning/hypervisor-restructure/09-memory-budgets.md)
+- [10 — drop CHV-graphics override + overlay marker](./planning/hypervisor-restructure/10-drop-crosvm-overlays.md)
+- [11 — document graphics-and-games](./planning/hypervisor-restructure/11-document-graphics-and-games.md)

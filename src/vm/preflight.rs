@@ -467,6 +467,7 @@ async fn gpu_preflight_booting(
         let mut started_here = false;
         if !config.backend.is_reachable(&vm.ip).await {
             config.backend.stop_instance(config, vm);
+            crate::core::admission::admit().await;
             let _ = config.backend.start_instance(config, vm, runners_dir)?;
             started_here = true;
             if !config.backend.wait_ready(&vm.ip, 30).await {

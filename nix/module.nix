@@ -10,7 +10,6 @@
   # Read this from _module.args manually so missing hand-import plumbing
   # becomes our assertion below instead of a raw module-argument error.
   microvm = config._module.args.microvm or null;
-  runnersEnabled = cfg.loginRunners.enable || cfg.runners.enable;
   vmNames = builtins.genList (i: "vm-${toString (i + 1)}") cfg.vmCount;
   tapNames = map (n: "tap-${n}") vmNames;
   vmUser = "cluster";
@@ -43,6 +42,7 @@
       hypervisor = cfg.loginRunners.hypervisor;
       graphics = cfg.loginRunners.graphics;
       memory = cfg.loginRunners.memory;
+      loginStateDir = cfg.loginStateDir;
     };
 
   runnersDir =
@@ -269,14 +269,24 @@ in {
 
       hypervisor = lib.mkOption {
         type = lib.types.str;
-        default = "crosvm";
-        description = "Hypervisor for the login VMs.";
+        default = "qemu";
+        example = "qemu";
+        description = ''
+          Hypervisor for the login VMs. The default is `qemu` with
+          graphics disabled; login VMs run sway-headless and Steam GUI on
+          Mesa llvmpipe. `crosvm` remains available as a deprecated escape
+          hatch.
+        '';
       };
 
       graphics = lib.mkOption {
         type = lib.types.bool;
-        default = true;
-        description = "Enable virtio-gpu in login VMs.";
+        default = false;
+        description = ''
+          Deprecated host-module escape hatch. Host-level login VMs do not
+          enable virtio-gpu; they use software rendering even if this option
+          is set by older configurations.
+        '';
       };
 
       memory = lib.mkOption {
@@ -307,14 +317,23 @@ in {
 
       hypervisor = lib.mkOption {
         type = lib.types.str;
-        default = "crosvm";
-        description = "Hypervisor for the runtime VMs.";
+        default = "cloud-hypervisor";
+        example = "cloud-hypervisor";
+        description = ''
+          Hypervisor for the runtime VMs. The default is
+          `cloud-hypervisor` because host-level runtime VMs are headless.
+          `crosvm` remains available as a deprecated escape hatch.
+        '';
       };
 
       graphics = lib.mkOption {
         type = lib.types.bool;
-        default = true;
-        description = "Enable virtio-gpu in runtime VMs.";
+        default = false;
+        description = ''
+          Deprecated host-module escape hatch. Host-level runtime VMs do not
+          enable virtio-gpu; graphical project workloads should use
+          `mkTestCluster` instead.
+        '';
       };
 
       memory = lib.mkOption {
@@ -364,6 +383,15 @@ in {
         message = "services.steampipe-cluster.loginRunners.enable requires the microvm flake input to be passed through _module.args (use steampipe.nixosModules.default from the flake output rather than importing nix/module.nix directly).";
       }
       {
+        assertion = !cfg.loginRunners.enable || builtins.elem cfg.loginRunners.hypervisor ["qemu" "crosvm" "cloud-hypervisor"];
+        message = ''
+          services.steampipe-cluster.loginRunners.hypervisor must be one
+          of "qemu" (default, supported), "crosvm" (deprecated; see
+          docs/src/planning/hypervisor-restructure-design.md), or
+          "cloud-hypervisor".
+        '';
+      }
+      {
         assertion = !cfg.loginRunners.enable || cfg.loginRunners.sshAuthorizedKey != "";
         message = ''
           services.steampipe-cluster.loginRunners.enable is true but
@@ -402,6 +430,14 @@ in {
         message = "services.steampipe-cluster.runners.enable requires the microvm flake input to be passed through _module.args (use steampipe.nixosModules.default from the flake output rather than importing nix/module.nix directly).";
       }
       {
+        assertion = !cfg.runners.enable || builtins.elem cfg.runners.hypervisor ["cloud-hypervisor" "qemu" "crosvm"];
+        message = ''
+          services.steampipe-cluster.runners.hypervisor must be one of
+          "cloud-hypervisor" (default, supported), "qemu", or "crosvm"
+          (deprecated).
+        '';
+      }
+      {
         assertion = !cfg.runners.enable || cfg.runners.sshAuthorizedKey != "";
         message = ''
           services.steampipe-cluster.runners.enable is true but
@@ -432,7 +468,17 @@ in {
       "services.steampipe-cluster.natInterface is deprecated; NetworkManager shared mode manages NAT via the active default route."
       ++ lib.optional (cfg.tapOwner == null)
       "services.steampipe-cluster: tapOwner is not set; loginStateDir will be owned by root and the in-VM Steam user cannot write to it. Set tapOwner to a host user whose numeric UID matches the in-VM vm_user (default 1000)."
-      ++ lib.optional (runnersEnabled && !(pkgs.crosvm.passthru.__steampipeOverlay or false))
+      ++ lib.optional (cfg.loginRunners.enable && cfg.loginRunners.hypervisor == "crosvm")
+      "services.steampipe-cluster.loginRunners.hypervisor = \"crosvm\" is deprecated and scheduled for removal in steampipe 0.4. crosvm + virgl + Vulkan crashes the guest VCPU on Steam GUI startup; switch to \"qemu\" (host-module classes run sway-headless + llvmpipe; no virgl needed)."
+      ++ lib.optional (cfg.runners.enable && cfg.runners.hypervisor == "crosvm")
+      "services.steampipe-cluster.runners.hypervisor = \"crosvm\" is deprecated and scheduled for removal in steampipe 0.4. Switch to \"cloud-hypervisor\" (the warm path uses DisplayMode::Headless; no graphics device needed)."
+      ++ lib.optional (
+        (
+          (cfg.loginRunners.enable && cfg.loginRunners.hypervisor == "crosvm")
+          || (cfg.runners.enable && cfg.runners.hypervisor == "crosvm")
+        )
+        && !(pkgs.crosvm.passthru.__steampipeOverlay or false)
+      )
       "services.steampipe-cluster: pkgs.crosvm lacks the steampipe overlay's `__steampipeOverlay` marker. A downstream overlay has shadowed our patched crosvm; login VMs may hit SIGSYS on Linux >= 6.13.";
 
     environment.systemPackages =

@@ -10,10 +10,14 @@
   vmUser ? "cluster",
   sshAuthorizedKey ? "",
   hypervisor ? "crosvm",
-  graphics ? true,
+  # Ignored for host-module classes. They always run without virtio-gpu and
+  # use software rendering when a GUI is needed.
+  graphics ? false,
   memory ? 2048,
   linkFarmName ? "steampipe-vm-runners",
   useSystemdStage1 ? false,
+  loginStateDir ? null,
+  extraVmModules ? [],
 }: let
   network = {
     bridge = "br-cluster";
@@ -35,20 +39,29 @@
     });
 
   flavor = {
-    inherit hypervisor graphics useSystemdStage1;
+    inherit hypervisor useSystemdStage1;
+    graphics = false;
     memory = null;
-    gpuProfile = "vulkan";
+    gpuProfile = "none";
   };
 
-  mkMicroVM = import ./microvm-runner.nix {
-    inherit pkgs lib nixpkgs steampipe;
-  } {
-    inherit network vmUser;
-    # Empty key is impossible through the NixOS module: it asserts before
-    # runners can be built.
-    sshAuthorizedKeys = lib.optional (sshAuthorizedKey != "") sshAuthorizedKey;
-    loginStateDir = null;
-  };
+  mkMicroVM =
+    import ./microvm-runner.nix {
+      inherit pkgs lib nixpkgs steampipe;
+    } {
+      inherit network vmUser;
+      # Empty key is impossible through the NixOS module: it asserts before
+      # runners can be built.
+      sshAuthorizedKeys = lib.optional (sshAuthorizedKey != "") sshAuthorizedKey;
+      inherit loginStateDir;
+      extraVmModules =
+        extraVmModules
+        ++ [
+          {
+            steampipe.vmGraphics.softwareRendering = true;
+          }
+        ];
+    };
 
   vmRunners = lib.mapAttrs (mkMicroVM flavor) vms;
 in

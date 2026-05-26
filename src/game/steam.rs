@@ -390,6 +390,7 @@ pub async fn check(
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         print!("  Boot: ");
+        crate::core::admission::admit().await;
         if let Err(e) = backend.start_instance(config, vm, runners_dir) {
             println!("FAIL ({e})");
             failed.push(vm.name.clone());
@@ -472,6 +473,7 @@ pub async fn warm(
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
         print!("  Boot: ");
+        crate::core::admission::admit().await;
         if let Err(e) = backend.start_instance(config, vm, runners_dir) {
             println!("FAIL ({e})");
             failed.push(vm.name.clone());
@@ -593,13 +595,29 @@ pub async fn guard<S>(
     }
     let password_secrets = [&vm_creds.steam_pass as &str];
 
-    match wait_for_steamcmd_bootstrap(backend, vm, &config.vm_user, &password_secrets).await? {
+    match wait_for_steamcmd_bootstrap(
+        backend,
+        vm,
+        &config.vm_user,
+        &config.state_dir,
+        &password_secrets,
+    )
+    .await?
+    {
         SteamCmdWait::Complete => {
             println!(
                 "==> SteamCMD already completed for {}; resuming validation...",
                 vm.name
             );
-            finish_steam_login(backend, vm, vm_creds, &config.vm_user, &password_secrets).await?;
+            finish_steam_login(
+                backend,
+                vm,
+                vm_creds,
+                &config.vm_user,
+                &config.state_dir,
+                &password_secrets,
+            )
+            .await?;
             shutdown_steam_login_vm(backend, config, vm).await;
             return Ok(());
         }
@@ -623,15 +641,33 @@ pub async fn guard<S>(
         .await;
     let secrets = [&vm_creds.steam_pass as &str, code.as_str()];
     if !submit.success || !steamcmd_guard_submitted(&submit.stdout) {
+        let stdout = redact_sensitive(&submit.stdout, &secrets);
+        let stderr = redact_sensitive(&submit.stderr, &secrets);
+        if stdout.trim().is_empty() && stderr.trim().is_empty() {
+            let tail =
+                vm_log_tail(&config.state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+            anyhow::bail!(
+                "{}: Steam Guard submit produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+                vm.name
+            );
+        }
         anyhow::bail!(
             "{}: Steam Guard submit failed. stdout: {} stderr: {}",
             vm.name,
-            redact_sensitive(&submit.stdout, &secrets),
-            redact_sensitive(&submit.stderr, &secrets)
+            stdout,
+            stderr
         );
     }
 
-    match wait_for_steamcmd_guard_completion(backend, vm, &config.vm_user, &secrets).await? {
+    match wait_for_steamcmd_guard_completion(
+        backend,
+        vm,
+        &config.vm_user,
+        &config.state_dir,
+        &secrets,
+    )
+    .await?
+    {
         SteamCmdWait::Complete => {}
         SteamCmdWait::GuardRequired => {
             anyhow::bail!(
@@ -640,7 +676,15 @@ pub async fn guard<S>(
             );
         }
     }
-    finish_steam_login(backend, vm, vm_creds, &config.vm_user, &secrets).await?;
+    finish_steam_login(
+        backend,
+        vm,
+        vm_creds,
+        &config.vm_user,
+        &config.state_dir,
+        &secrets,
+    )
+    .await?;
 
     shutdown_steam_login_vm(backend, config, vm).await;
 
@@ -693,6 +737,7 @@ async fn login_single_vm(
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     println!("  Booting VM...");
+    crate::core::admission::admit().await;
     let pid = backend.start_instance(config, vm, login_runners_dir)?;
     lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
 
@@ -716,7 +761,7 @@ async fn login_single_vm(
 
     let outcome = if let Some(creds) = creds {
         // Automated login via SteamCMD state bootstrap + GUI validation.
-        automated_login(backend, vm, creds, &config.vm_user).await?
+        automated_login(backend, vm, creds, &config.vm_user, &config.state_dir).await?
     } else {
         // Interactive VNC-based login (original flow)
         interactive_login(backend, vm, &config.vm_user).await?
@@ -745,6 +790,14 @@ async fn login_single_vm(
     Ok(())
 }
 
+pub fn vm_log_tail(state_dir: &Path, vm: &VmDef) -> Option<String> {
+    let path = microvm_log_path(state_dir, vm);
+    let log = read_vm_log_lossy(&path).ok()?;
+    // vm.log is host-side hypervisor output; remote command stdout/stderr is
+    // still redacted separately before being included in user-facing errors.
+    Some(vm_log_tail_lines(&log).join("\n"))
+}
+
 fn print_vm_log_tail(state_dir: &Path, vm: &VmDef) {
     let path = microvm_log_path(state_dir, vm);
     let log = match read_vm_log_lossy(&path) {
@@ -761,11 +814,19 @@ fn print_vm_log_tail(state_dir: &Path, vm: &VmDef) {
             return;
         }
     };
-    println!("  --- {} tail ---", path.display());
-    for line in vm_log_tail_lines(&log) {
-        println!("  {line}");
+    let tail = vm_log_tail_lines(&log).join("\n");
+    if tail.is_empty() {
+        println!(
+            "  VM log unavailable: {} (log file is empty)",
+            path.display()
+        );
+    } else {
+        println!("  --- {} tail ---", path.display());
+        for line in tail.lines() {
+            println!("  {line}");
+        }
+        println!("  --- end VM log tail ---");
     }
-    println!("  --- end VM log tail ---");
 }
 
 fn read_vm_log_lossy(path: &Path) -> io::Result<String> {
@@ -803,16 +864,18 @@ pub async fn auto_login<S>(
     println!("==> Auto-login Steam on {} VM(s)...", with_creds.len());
     let backend = config.backend.clone();
     let vm_user = config.vm_user.clone();
+    let state_dir = config.state_dir.clone();
 
     let results = par_each_vm(vms, |vm| {
         let backend = backend.clone();
         let vm_user = vm_user.clone();
+        let state_dir = state_dir.clone();
         let creds = creds.clone();
         async move {
             let Some(vm_creds) = creds.get::<str>(&vm.name) else {
                 return (vm.name, None);
             };
-            match automated_login(&backend, &vm, vm_creds, &vm_user).await {
+            match automated_login(&backend, &vm, vm_creds, &vm_user, &state_dir).await {
                 Ok(LoginOutcome::Completed) => (vm.name, Some(true)),
                 Ok(LoginOutcome::LeftRunning) => {
                     eprintln!(
@@ -868,6 +931,7 @@ async fn automated_login(
     vm: &VmDef,
     creds: &VmCredentials,
     vm_user: &str,
+    state_dir: &Path,
 ) -> anyhow::Result<LoginOutcome> {
     println!("  Logging in as {}...", creds.steam_user);
     println!("  Starting SteamCMD bootstrap session...");
@@ -875,15 +939,25 @@ async fn automated_login(
     let steamcmd = steamcmd_bootstrap_command(vm_user, &creds.steam_user, &creds.steam_pass);
     let started = backend.run_cmd(&vm.ip, &steamcmd).await;
     if !started.success || !steamcmd_started(&started.stdout) {
+        let stdout = redact_sensitive(&started.stdout, &[&creds.steam_pass]);
+        let stderr = redact_sensitive(&started.stderr, &[&creds.steam_pass]);
+        if stdout.trim().is_empty() && stderr.trim().is_empty() {
+            let tail = vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+            anyhow::bail!(
+                "{}: SteamCMD bootstrap produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+                vm.name
+            );
+        }
         anyhow::bail!(
             "{}: SteamCMD bootstrap failed to start. stdout: {} stderr: {}",
             vm.name,
-            redact_sensitive(&started.stdout, &[&creds.steam_pass]),
-            redact_sensitive(&started.stderr, &[&creds.steam_pass])
+            stdout,
+            stderr
         );
     }
 
-    let wait = wait_for_steamcmd_bootstrap(backend, vm, vm_user, &[&creds.steam_pass]).await?;
+    let wait =
+        wait_for_steamcmd_bootstrap(backend, vm, vm_user, state_dir, &[&creds.steam_pass]).await?;
     if wait == SteamCmdWait::GuardRequired {
         println!("  Steam Guard required for {}.", creds.steam_user);
         println!(
@@ -897,7 +971,7 @@ async fn automated_login(
         return Ok(LoginOutcome::LeftRunning);
     }
 
-    finish_steam_login(backend, vm, creds, vm_user, &[&creds.steam_pass]).await?;
+    finish_steam_login(backend, vm, creds, vm_user, state_dir, &[&creds.steam_pass]).await?;
     Ok(LoginOutcome::Completed)
 }
 
@@ -945,6 +1019,7 @@ async fn wait_for_steamcmd_bootstrap(
     backend: &Backend,
     vm: &VmDef,
     vm_user: &str,
+    state_dir: &Path,
     secrets: &[&str],
 ) -> anyhow::Result<SteamCmdWait> {
     let wait = backend
@@ -958,6 +1033,13 @@ async fn wait_for_steamcmd_bootstrap(
     if wait.success && steamcmd_bootstrap_succeeded(&stdout) {
         return Ok(SteamCmdWait::Complete);
     }
+    if stdout.trim().is_empty() && stderr.trim().is_empty() {
+        let tail = vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+        anyhow::bail!(
+            "{}: SteamCMD bootstrap wait produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+            vm.name
+        );
+    }
     anyhow::bail!(
         "{}: SteamCMD bootstrap failed. stdout: {} stderr: {}",
         vm.name,
@@ -970,6 +1052,7 @@ async fn wait_for_steamcmd_guard_completion(
     backend: &Backend,
     vm: &VmDef,
     vm_user: &str,
+    state_dir: &Path,
     secrets: &[&str],
 ) -> anyhow::Result<SteamCmdWait> {
     let wait = backend
@@ -982,6 +1065,13 @@ async fn wait_for_steamcmd_guard_completion(
     }
     if wait.success && steamcmd_bootstrap_succeeded(&stdout) {
         return Ok(SteamCmdWait::Complete);
+    }
+    if stdout.trim().is_empty() && stderr.trim().is_empty() {
+        let tail = vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+        anyhow::bail!(
+            "{}: Steam Guard completion wait produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+            vm.name
+        );
     }
     anyhow::bail!(
         "{}: SteamCMD bootstrap failed. stdout: {} stderr: {}",
@@ -1094,6 +1184,7 @@ async fn finish_steam_login(
     vm: &VmDef,
     creds: &VmCredentials,
     vm_user: &str,
+    state_dir: &Path,
     secrets: &[&str],
 ) -> anyhow::Result<()> {
     println!("  Syncing SteamCMD login state into Steam GUI profile...");
@@ -1101,11 +1192,20 @@ async fn finish_steam_login(
         .run_cmd(&vm.ip, &steamcmd_state_sync_script(vm_user))
         .await;
     if !sync.success || !steamcmd_sync_succeeded(&sync.stdout) {
+        let stdout = redact_sensitive(&sync.stdout, secrets);
+        let stderr = redact_sensitive(&sync.stderr, secrets);
+        if stdout.trim().is_empty() && stderr.trim().is_empty() {
+            let tail = vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+            anyhow::bail!(
+                "{}: SteamCMD state sync produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+                vm.name
+            );
+        }
         anyhow::bail!(
             "{}: SteamCMD state sync failed. stdout: {} stderr: {}",
             vm.name,
-            redact_sensitive(&sync.stdout, secrets),
-            redact_sensitive(&sync.stderr, secrets)
+            stdout,
+            stderr
         );
     }
 
@@ -1120,6 +1220,13 @@ async fn finish_steam_login(
     let stderr = redact_sensitive(validate.stderr.trim(), secrets);
 
     if !validate.success || !steam_login_succeeded(&output) {
+        if output.is_empty() && stderr.is_empty() {
+            let tail = vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+            anyhow::bail!(
+                "{}: Steam GUI validation produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+                vm.name
+            );
+        }
         anyhow::bail!(
             "{}: Steam GUI validation failed ({}). stderr: {}. Use VNC fallback if Steam Guard requires GUI confirmation.",
             vm.name,
@@ -1195,11 +1302,11 @@ fn steam_gui_validation_script(vm_user: &str, steam_user: &str, steam_pass: &str
     let console_log = format!("{log_dir}/console-linux.txt");
     let updateui_log = format!("{log_dir}/updateui_child.txt");
     let stdout_log = format!("{log_dir}/steampipe_login_stdout.log");
-    let weston = weston_setup(vm_user);
+    let compositor = sway_setup(vm_user);
     let user = shell_escape(steam_user);
     let pass = shell_escape(steam_pass);
     format!(
-        r#"{weston}
+        r#"{compositor}
 mkdir -p {log_dir}
 : > {log} 2>/dev/null
 : > {bootstrap_log} 2>/dev/null
@@ -1719,6 +1826,24 @@ mod tests {
             vm_log_tail_lines(&log),
             vec!["boot line", "raw byte: \u{fffd}", "ssh never came up"]
         );
+    }
+
+    #[test]
+    fn empty_run_cmd_output_falls_back_to_vm_log_tail() {
+        let temp = tempfile::tempdir().unwrap();
+        let vm = VmDef {
+            name: VmName("vm-1".to_string()),
+            ip: IpAddr("10.0.100.1".to_string()),
+            index: 1,
+        };
+        let log_path = microvm_log_path(temp.path(), &vm);
+        std::fs::create_dir_all(log_path.parent().unwrap()).unwrap();
+        std::fs::write(&log_path, b"line one\nline two\nlast line\n").unwrap();
+
+        let tail = vm_log_tail(temp.path(), &vm).expect("tail");
+
+        assert!(tail.contains("last line"));
+        assert!(tail.contains("line one"));
     }
 
     #[test]

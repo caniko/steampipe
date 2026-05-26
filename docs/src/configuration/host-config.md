@@ -235,6 +235,12 @@ wrapper per configured VM. It also emits
 root. This option is off by default because enabling seven runtime VM runners
 adds roughly 7 GiB of VM closure paths to the host system closure.
 
+For headless runtime VMs, `services.steampipe-cluster.runners.hypervisor`
+defaults to `"cloud-hypervisor"`. Login VMs default to `"qemu"` and run the
+Steam login UI through sway-headless and Mesa llvmpipe, without virtio-gpu.
+`"crosvm"` remains available as a deprecated escape hatch for older
+configurations.
+
 When `services.steampipe-cluster.loginRunners.enable = true`, the module
 publishes `/etc/steampipe/login-runners` as a link-farm containing one
 `vm-N/bin/microvm-run` wrapper per configured VM. It also emits

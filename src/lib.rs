@@ -18,8 +18,8 @@ use game::{accounts, capture, compositor, run, steam};
 use harness::{bisect, history, output::OutputFormat, runner as test};
 use net::{bridge, deploy, netem};
 use ui::cli::{
-    self, CaptureMode, Commands, DisplayMode, HistoryAction, NetworkMode, ScreenshotBackend,
-    SteamAction, VisualAction,
+    self, AdmissionAction, CaptureMode, Commands, DisplayMode, HistoryAction, NetworkMode,
+    ScreenshotBackend, SteamAction, VisualAction,
 };
 #[cfg(feature = "fixture-tools")]
 use ui::cli::{FixtureAction, FixtureGoldenAction};
@@ -539,6 +539,13 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         ui::cli::print_completions(*shell);
         return Ok(());
     }
+    if let Commands::Admission {
+        action: AdmissionAction::Status,
+    } = &cli.command
+    {
+        cli::print_admission_status();
+        return Ok(());
+    }
 
     let (discovery, module) = core::nixos_module::load_with_trace(cli.host_config.as_deref())?;
 
@@ -558,6 +565,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             {
                 None
             }
+            Err(_) if matches!(&cli.command, Commands::Reset { .. }) && module.is_some() => None,
             Err(error) => return Err(error),
         },
     };
@@ -846,6 +854,12 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             bridge::ensure_bridge(&config, project_root.as_deref())?;
             let validated = config.validate_or_skip_bridge()?;
             lifecycle::restart(&validated, target.as_deref(), &runners_dir).await?;
+        }
+        Commands::Reset { vm, home } => {
+            if !home {
+                anyhow::bail!("reset requires --home");
+            }
+            lifecycle::reset_vm_home(&config, &vm)?;
         }
         Commands::Steam { action } => match action {
             SteamAction::Check {
@@ -1404,6 +1418,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         Commands::Init
         | Commands::YhConfig { .. }
         | Commands::Completions { .. }
+        | Commands::Admission { .. }
         | Commands::Mcp => {
             unreachable!()
         }

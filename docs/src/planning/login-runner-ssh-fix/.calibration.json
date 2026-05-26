@@ -1,29 +1,28 @@
 {
   "schema_version": 1,
   "plan": {
-    "id": "a476e3b5-f0d3-49b3-9dfd-37ebac6c15c2",
-    "name": "Plan: Config-less CLI from NixOS module",
+    "id": "97dfc890-fe90-43d3-a836-9091c62a88b1",
+    "name": "Plan: Login Runner SSH Unreachable Fix",
     "flavor": "codex",
     "worktype": null,
-    "created_at": 1779691550,
-    "phase_count": 6,
-    "wave_count": 4,
-    "max_chain_depth": 4,
+    "created_at": 1779745966,
+    "phase_count": 5,
+    "wave_count": 2,
+    "max_chain_depth": 2,
     "repo_spread": 4,
     "routing_dist": {
-      "high": 1,
-      "low": 2,
-      "medium": 3
+      "low": 3,
+      "medium": 2
     },
-    "shape_hash": "d10db090e8b4df34c657535790f0a4de3a3e1ddd490fd9cc1c88a26041f1fa57"
+    "shape_hash": "4a20e5d518201ea6a641b9400dcd21c14cd7bd4e47d58db9856c26f44b3d6a41"
   },
   "triggers": [
     {
       "name": "shared-file-contention",
-      "input_value": 2.0,
+      "input_value": 1.0,
       "threshold": 2.0,
-      "fired": true,
-      "section_added": "Shared-file lockstep"
+      "fired": false,
+      "section_added": null
     },
     {
       "name": "external-repo-phases",
@@ -34,7 +33,7 @@
     },
     {
       "name": "convergence-point",
-      "input_value": 2.0,
+      "input_value": 1.0,
       "threshold": 3.0,
       "fired": false,
       "section_added": null
@@ -76,14 +75,14 @@
     },
     {
       "name": "long-serial-chain",
-      "input_value": 4.0,
+      "input_value": 2.0,
       "threshold": 4.0,
-      "fired": true,
-      "section_added": "Serial-chain recovery"
+      "fired": false,
+      "section_added": null
     },
     {
       "name": "mid-plan-rerouting",
-      "input_value": 6.0,
+      "input_value": 5.0,
       "threshold": 10.0,
       "fired": false,
       "section_added": null
@@ -97,16 +96,16 @@
     },
     {
       "name": "no-integrated-verification",
-      "input_value": 0.0,
+      "input_value": 1.0,
       "threshold": 1.0,
-      "fired": false,
+      "fired": true,
       "section_added": null
     },
     {
       "name": "routing-tier-inversion",
-      "input_value": 0.0,
+      "input_value": 1.0,
       "threshold": 1.0,
-      "fired": false,
+      "fired": true,
       "section_added": null
     },
     {
@@ -127,64 +126,47 @@
   "phases": [
     {
       "ordinal": 1,
-      "slug": "host-config-schema-fields",
+      "slug": "canix-explicit-key-unblock",
       "routing_tier": "low",
       "files": [
-        "../../../../docs/src/configuration/host-config.md",
-        "../../../../src/core/nixos_module.rs"
+        "canix: `root/hosts/atlas/features/steampipe.nix` — add the"
       ]
     },
     {
       "ordinal": 2,
-      "slug": "cli-resolver-refactor",
+      "slug": "drop-pathexists-default-and-assert",
       "routing_tier": "medium",
       "files": [
-        "../../../../src/core/config.rs",
-        "../../../../src/core/nixos_module.rs",
-        "../../../../src/lib.rs",
-        "New tests added inline to either of the above."
+        "docs/src/getting-started/installation.md` — the bootstrap walkthrough.",
+        "flake.nix` — likely one or two existing eval checks need their",
+        "nix/lib/host-runners.nix` — the misleading comment near",
+        "nix/module.nix` — option defaults, `defaultText`, assertions block,"
       ]
     },
     {
       "ordinal": 3,
-      "slug": "nixos-module-login-runners",
-      "routing_tier": "high",
+      "slug": "flake-check-empty-key-regression",
+      "routing_tier": "low",
       "files": [
-        "../../../../docs/src/configuration/host-config.md",
-        "../../../../nix/lib/login-runners.nix",
-        "../../../../nix/lib/microvm-runner.nix",
-        "../../../../nix/lib/test-cluster.nix",
-        "../../../../nix/module.nix",
-        "Possibly `tests/module-loginrunners.nix` or whatever the project's nixosTest convention is."
+        "flake.nix` — only file. Additions only; no removals."
       ]
     },
     {
       "ordinal": 4,
-      "slug": "canix-wiring-and-smoke",
+      "slug": "vm-log-tail-unavailable-fix",
       "routing_tier": "medium",
       "files": [
-        "/data/nvme0/can/Projects/canix/flake.lock` — `nix flake update steampipe` output.",
-        "/data/nvme0/can/Projects/canix/root/hosts/atlas/features/steampipe.nix` — one new line.",
-        "/tmp/steam-login-smoke.log` — captured smoke evidence (not committed; attach to PR description or paste into the verify run)."
+        "Possibly a small new test in `src/core/backend.rs` or",
+        "src/core/backend.rs` — possibly export",
+        "src/game/steam.rs` — `print_vm_log_tail` and its call site."
       ]
     },
     {
       "ordinal": 5,
-      "slug": "README",
+      "slug": "cluster-key-hostname-cosmetic",
       "routing_tier": "low",
       "files": [
-        "README.md",
-        "docs/src/configuration/*.md",
-        "src/ui/cli.rs` help strings"
-      ]
-    },
-    {
-      "ordinal": 6,
-      "slug": "migrate-project-wrappers",
-      "routing_tier": "medium",
-      "files": [
-        "../../../../nix/lib/test-cluster.nix",
-        "/data/nvme0/can/Projects/chessbender/flake.lock` (or equivalent) — `nix flake update steampipe` to pick up the new wrapper."
+        "nix/module.nix` — only the `loginRunnerKeyScript` body. The two"
       ]
     }
   ],
@@ -193,7 +175,7 @@
   ],
   "tags": {
     "flavor": "codex",
-    "risk": "mixed",
+    "risk": "low",
     "scope": "cross-org"
   },
   "verify": null

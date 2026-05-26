@@ -82,19 +82,22 @@ pub async fn up(
     let mut started = Vec::new();
     for vm in &config.vms {
         match resources::check_ram(&ram_req) {
-            Ok(avail) => match config.backend.start_instance(config, vm, runners_dir) {
-                Ok(pid) => {
-                    // Write claim file so other commands can find this VM
-                    lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
-                    println!(
-                        "  {} started (PID {pid}, {:.1} GB available)",
-                        vm.name,
-                        avail as f64 / 1e9
-                    );
-                    started.push(vm.clone());
+            Ok(avail) => {
+                crate::core::admission::admit().await;
+                match config.backend.start_instance(config, vm, runners_dir) {
+                    Ok(pid) => {
+                        // Write claim file so other commands can find this VM
+                        lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
+                        println!(
+                            "  {} started (PID {pid}, {:.1} GB available)",
+                            vm.name,
+                            avail as f64 / 1e9
+                        );
+                        started.push(vm.clone());
+                    }
+                    Err(e) => eprintln!("  {} FAILED: {e}", vm.name),
                 }
-                Err(e) => eprintln!("  {} FAILED: {e}", vm.name),
-            },
+            }
             Err(e) => {
                 eprintln!("  {} REFUSED: {e}", vm.name);
                 break; // No point trying more VMs if RAM is exhausted
@@ -135,6 +138,37 @@ pub fn down<S>(config: &ClusterConfig<S>) {
     println!("==> Done");
 }
 
+/// Delete a VM's persistent home image after confirming no live lease owns it.
+pub fn reset_vm_home<S>(config: &ClusterConfig<S>, target: &str) -> anyhow::Result<()> {
+    let vm = config
+        .find_vm(target)
+        .ok_or_else(|| anyhow::anyhow!("Unknown VM: {target}"))?;
+
+    if let Some(claim) = lease::probe_holder(vm.index, &config.lock_dir) {
+        anyhow::bail!(
+            "{}: VM is running (PID {}, cluster '{}'). Run `cluster-ctl --cluster {} down` first.",
+            vm.name,
+            claim.pid,
+            claim.cluster,
+            claim.cluster
+        );
+    }
+
+    let home = config
+        .state_dir
+        .join(&*vm.name)
+        .join(format!("{}-home.img", vm.name));
+    if !home.exists() {
+        println!("{}: no home image at {}", vm.name, home.display());
+        return Ok(());
+    }
+
+    std::fs::remove_file(&home)
+        .map_err(|error| anyhow::anyhow!("remove {}: {error}", home.display()))?;
+    println!("{}: removed {}", vm.name, home.display());
+    Ok(())
+}
+
 /// Run the `restart` subcommand: stop then start target instances.
 pub async fn restart(
     config: &ClusterConfig<BridgeReady>,
@@ -157,6 +191,7 @@ pub async fn restart(
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     for vm in &targets {
+        crate::core::admission::admit().await;
         match config.backend.start_instance(config, vm, runners_dir) {
             Ok(pid) => {
                 lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
@@ -169,4 +204,51 @@ pub async fn restart(
     wait_and_report(config, &targets).await;
     println!("==> Done");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::config::{BackendKind, ClusterConfig, ProjectConfig};
+    use tempfile::tempdir;
+
+    fn test_config(state_dir: &Path, lock_dir: &Path) -> ClusterConfig {
+        let project_root = tempdir().unwrap();
+        let proj = ProjectConfig {
+            backend: Some(BackendKind::Local),
+            vm_user: Some("cluster".into()),
+            remote_dir: Some("/tmp/steampipe".into()),
+            binary_name: Some("game".into()),
+            cargo_package: Some("game".into()),
+            cluster: Some(crate::core::config::ClusterSection {
+                name: Some("default".into()),
+                state_dir: Some(state_dir.display().to_string()),
+            }),
+            ..Default::default()
+        };
+        ClusterConfig::from_parts(
+            project_root.path(),
+            Some(proj),
+            1,
+            Some("default"),
+            Some(BackendKind::Local),
+            Some(lock_dir),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn reset_home_removes_file_when_no_claim() {
+        let tmp = tempdir().unwrap();
+        let vm_dir = tmp.path().join("vm-1");
+        std::fs::create_dir(&vm_dir).unwrap();
+        let home = vm_dir.join("vm-1-home.img");
+        std::fs::write(&home, b"fake").unwrap();
+        let lock = tempdir().unwrap();
+        let config = test_config(tmp.path(), lock.path());
+
+        reset_vm_home(&config, "vm-1").unwrap();
+
+        assert!(!home.exists());
+    }
 }

@@ -12,6 +12,14 @@
   extraVmModules ? [],
 }: flavor: name: vm: let
   shareSteamState = loginStateDir != null;
+  memoryBudget = import ./microvm-memory-budget.nix {
+    inherit shareSteamState;
+    inherit (flavor) hypervisor;
+  };
+  memoryMiB =
+    if flavor.memory != null
+    then flavor.memory
+    else vm.memory;
 in
   (nixpkgs.lib.nixosSystem {
     system = "x86_64-linux";
@@ -33,7 +41,7 @@ in
           };
 
           networking.hostName = name;
-          environment.sessionVariables = lib.mkIf (flavor.gpuProfile != "egl") {
+          environment.sessionVariables = lib.mkIf (flavor.graphics && flavor.gpuProfile != "egl") {
             VK_DRIVER_FILES = "/run/opengl-driver/share/vulkan/icd.d/virtio_icd.x86_64.json";
           };
           networking.interfaces.eth0.ipv4.addresses = [
@@ -46,6 +54,9 @@ in
           microvm = {
             hypervisor = flavor.hypervisor;
             graphics.enable = flavor.graphics;
+            cloud-hypervisor.package =
+              lib.mkIf (flavor.hypervisor == "cloud-hypervisor" && !flavor.graphics)
+              pkgs.cloud-hypervisor;
             # crosvm's multi-process device proxy uses minijail+seccomp.
             # We point crosvm at the seccomp policies installed by our
             # patched crosvm package; the pre-compiled `.bpf` form is what
@@ -54,10 +65,14 @@ in
               "--seccomp-policy-dir=${pkgs.crosvm}/share/policy/${pkgs.stdenv.hostPlatform.linuxArch}"
               "--no-usb"
             ];
-            mem =
-              if flavor.memory != null
-              then flavor.memory
-              else vm.memory;
+            mem = memoryMiB;
+            balloon = lib.mkIf memoryBudget.balloon true;
+            deflateOnOOM = lib.mkIf memoryBudget.deflateOnOOM true;
+            # The pinned microvm.nix QEMU runner rejects non-zero
+            # initialBalloonMem; cloud-hypervisor supports it.
+            initialBalloonMem =
+              lib.mkIf memoryBudget.supportsInitialBalloon
+              memoryBudget.initialBalloonMem;
             vcpu = vm.cores;
             vsock.cid = vm.index + 3; # CIDs 0-2 are reserved
 
@@ -75,7 +90,12 @@ in
               {
                 mountPoint = "/home/${vmUser}";
                 image = "${name}-home.img";
-                size = 8192;
+                # Login runners mount Steam state from `loginStateDir`; their
+                # home image holds only small residual config and login state.
+                size =
+                  if shareSteamState
+                  then 2048
+                  else 8192;
               }
             ];
 

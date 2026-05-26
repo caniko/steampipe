@@ -880,6 +880,22 @@ pub async fn run<S>(
                     verbose,
                 );
             } else {
+                if result.stdout.trim().is_empty() && result.stderr.trim().is_empty() {
+                    let tail = crate::steam::vm_log_tail(&config.state_dir, vm)
+                        .unwrap_or_else(|| "(vm.log unavailable)".into());
+                    print_and_push(
+                        &mut output,
+                        &format!(
+                            "  {}: compositor FAILED — no remote output; vm.log tail:\n{tail}",
+                            vm.name
+                        ),
+                        verbose,
+                    );
+                    anyhow::bail!(
+                        "{}: compositor setup produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+                        vm.name
+                    );
+                }
                 print_and_push(
                     &mut output,
                     &format!("  {}: compositor FAILED — {}", vm.name, result.stderr),

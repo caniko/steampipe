@@ -147,6 +147,12 @@ pub struct Cli {
 #[derive(Subcommand)]
 #[allow(clippy::large_enum_variant)]
 pub enum Commands {
+    /// Inspect admission gates used before VM startup
+    Admission {
+        #[command(subcommand)]
+        action: AdmissionAction,
+    },
+
     /// Show status of the VMs currently leased by this cluster
     Status,
 
@@ -174,6 +180,15 @@ pub enum Commands {
         /// required when using the microvm backend.
         #[arg(long)]
         runners_dir: Option<PathBuf>,
+    },
+
+    /// Remove on-disk VM state so next boot starts fresh
+    Reset {
+        /// VM name: "3" or "vm-3"
+        vm: String,
+        /// Remove the home image. Required.
+        #[arg(long, required = true)]
+        home: bool,
     },
 
     /// Set up cluster networking (bridge, TAP devices, NAT rules). Requires sudo.
@@ -536,6 +551,44 @@ pub enum Commands {
     },
 }
 
+#[derive(Subcommand)]
+pub enum AdmissionAction {
+    /// Print host memory stats and configured watermarks
+    Status,
+}
+
+pub fn print_admission_status() {
+    let policy = crate::core::admission::policy();
+    match crate::core::admission::current_stats() {
+        Some(stats) => {
+            println!("memory-admission status:");
+            println!("  total_mb       = {}", stats.total_bytes / 1024 / 1024);
+            println!("  available_mb   = {}", stats.available_bytes / 1024 / 1024);
+            println!(
+                "  page_cache_mb  = {}",
+                stats.page_cache_bytes / 1024 / 1024
+            );
+            println!("  high watermark = {} MB", policy.high_watermark_mb);
+            println!("  low  watermark = {} MB", policy.low_watermark_mb);
+            println!(
+                "  memory scheduler = {}",
+                if policy.memory_scheduler_enabled {
+                    "active"
+                } else {
+                    "disengaged"
+                }
+            );
+            println!("  max_ram_fraction = {:.4}", policy.max_ram_fraction);
+            println!("  resume_hysteresis = {:.4}", policy.resume_hysteresis);
+        }
+        None => {
+            println!(
+                "memory-admission status: provider unavailable (gate is disengaged; startup is not throttled)"
+            );
+        }
+    }
+}
+
 impl Commands {
     /// Whether this command requires the global `--vm-count` flag.
     ///
@@ -546,9 +599,11 @@ impl Commands {
     pub fn needs_vm_count(&self) -> bool {
         !matches!(
             self,
-            Self::Steam {
-                action: SteamAction::Guard { .. } | SteamAction::Info
-            } | Self::Netem { .. }
+            Self::Admission { .. }
+                | Self::Steam {
+                    action: SteamAction::Guard { .. } | SteamAction::Info
+                }
+                | Self::Netem { .. }
         )
     }
 }

@@ -1,10 +1,10 @@
 # Test cluster: NixOS microVMs for multiplayer testing
 #
 # Hypervisor and graphics are configured in steampipe.toml [cluster]:
-#   hypervisor = "crosvm" - crosvm is the supported default. cloud-hypervisor,
-#                           qemu, firecracker, stratovirt, etc. are experimental
-#                           and may break without notice.
-#   graphics   = true     - enable virtio-gpu (mesa/DRI in guest)
+#   graphics   = true     - default: qemu with software-rendered UI
+#   graphics   = false    - default: cloud-hypervisor for headless runners
+#   hypervisor = "crosvm" - deprecated graphical escape hatch for projects that
+#                           still need the patched crosvm virgl path.
 #
 # Two first-class modes:
 #   1v1        - 1 VM  + host = 2 players    (nix run .#cluster-1v1-*)
@@ -48,8 +48,17 @@ in
   assert lib.assertMsg (!(nixosIntegration && credentials != null))
   "credentials cannot be set when nixosIntegration is enabled - the NixOS module provides credentials"; let
     clusterConfig = projectConfig.cluster or {};
-    vmHypervisor = clusterConfig.hypervisor or "crosvm";
     vmGraphics = clusterConfig.graphics or true;
+    clusterHypervisor =
+      if clusterConfig ? hypervisor
+      then clusterConfig.hypervisor
+      else null;
+    vmHypervisor =
+      if clusterHypervisor != null
+      then clusterHypervisor
+      else if vmGraphics
+      then "qemu"
+      else "cloud-hypervisor";
     vmUser = projectConfig.vm_user or "cluster";
     sshKey = projectConfig.ssh_key or "nix/test-cluster/cluster_key";
     resolvedSshKey =
@@ -74,10 +83,19 @@ in
     # without colliding on VM index, state dir, lease, or test history.
     extraFlavors = clusterConfig.flavors or {};
     mkFlavor = f: let
-      hypervisor = f.hypervisor or vmHypervisor;
-    in {
-      inherit hypervisor;
       graphics = f.graphics or vmGraphics;
+      hypervisor =
+        if f ? hypervisor
+        then f.hypervisor
+        else if clusterHypervisor != null
+        then clusterHypervisor
+        else if graphics == vmGraphics
+        then vmHypervisor
+        else if graphics
+        then "qemu"
+        else "cloud-hypervisor";
+    in {
+      inherit hypervisor graphics;
       memory = f.memory or null;
       gpuProfile = f.gpu_profile or "vulkan";
       useSystemdStage1 =
@@ -121,12 +139,13 @@ in
     # mkMicroVM builds a microVM runner. When loginStateDir is available,
     # every runner gets the same writable per-VM Steam state share at
     # ~/.local/share/Steam; the rest of home remains on the home image.
-    mkMicroVM = import ./microvm-runner.nix {
-      inherit pkgs lib nixpkgs steampipe;
-    } {
-      inherit network vmUser loginStateDir extraVmOverlays extraVmModules;
-      sshAuthorizedKeys = [sshPublicKey];
-    };
+    mkMicroVM =
+      import ./microvm-runner.nix {
+        inherit pkgs lib nixpkgs steampipe;
+      } {
+        inherit network vmUser loginStateDir extraVmOverlays extraVmModules;
+        sshAuthorizedKeys = [sshPublicKey];
+      };
 
     # The normal UI-full runner is Vulkan-first and switches microvm.nix's
     # crosvm virtio-gpu defaults to Mesa Venus over virglrenderer. The separate
@@ -157,8 +176,6 @@ in
     # reserves at boot). Under flexible scheduling the lease may pick any
     # slot; the wrapper's runner-dir must contain a microvm-run for every
     # slot the lease can return, not just the lowest N.
-    #
-    # See docs/src/planning/vm-scheduling-flexibility/03-runner-dir-full-range.md
     mkRunnersDir = flavorName: flavor: _count:
       pkgs.linkFarm "cluster-vm-runners-${flavorName}"
       (lib.mapAttrsToList (name: vm: {

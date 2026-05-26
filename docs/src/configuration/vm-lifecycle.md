@@ -9,9 +9,14 @@ cluster-ctl --vm-count 7 up --runners-dir ./result
 For each VM:
 
 1. Stops any existing instance (PID file + orphan cleanup)
-2. Launches `<runners-dir>/vm-N/bin/microvm-run`
-3. Records PID in `$XDG_STATE_HOME/steampipe/vm-N.pid`
-4. Waits for SSH readiness (30s timeout with exponential backoff)
+2. Waits on the host memory admission gate
+3. Launches `<runners-dir>/vm-N/bin/microvm-run`
+4. Records PID in `$XDG_STATE_HOME/steampipe/vm-N.pid`
+5. Waits for SSH readiness (30s timeout with exponential backoff)
+
+The admission gate is silent under normal load. See
+[VM resources](./vm-resources.md) for the memory contract, admission status
+command, and guest-side ballooning behavior.
 
 ## Stopping VMs
 
@@ -31,6 +36,16 @@ cluster-ctl --vm-count 7 restart --runners-dir ./result
 # Restart only vm-3
 cluster-ctl --vm-count 7 restart vm-3 --runners-dir ./result
 ```
+
+## Resetting VM Home Images
+
+```bash
+cluster-ctl --vm-count 7 reset vm-1 --home
+```
+
+Deletes the VM home image so the next boot recreates it from the runner's
+current default size. See [VM resources](./vm-resources.md) for disk sizing and
+the reset guard.
 
 ## Status
 

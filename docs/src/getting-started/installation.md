@@ -117,6 +117,10 @@ the second rebuild bakes the key you just read into the VM closure.
 - `/etc/steampipe/login-runners/` when `loginRunners.enable = true;`.
 - `/etc/steampipe/runners/` when `runners.enable = true;`.
 
+The module defaults are already tuned for host-level Steam workflows: login
+runners use QEMU without virtio-gpu, and runtime runners use
+cloud-hypervisor for headless warm/check flows.
+
 To pin a different binary derivation, set `services.steampipe-cluster.package`.
 See [Global host config](../configuration/host-config.md) for the full option
 surface.

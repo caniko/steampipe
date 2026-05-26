@@ -28,6 +28,7 @@ crossterm = "0.29"
 dirs = "6.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 image-compare = "=0.4.2"
+memory-admission = { version = "*", default-features = false, features = ["async"] }
 ratatui = "0.30"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -47,6 +48,7 @@ tokio = { version = "1", features = [
 toml = "1"
 rmcp = { version = "0.17", features = ["server", "transport-io"] }
 schemars = "1"
+tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 vnc = "0.4"
 

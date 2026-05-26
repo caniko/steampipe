@@ -1187,6 +1187,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "memory-admission"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb6da96cd44938affbd6337f4f0f09b731e7a73f9ee50c451d9b5ec54ddab2d9"
+dependencies = [
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2059,6 +2069,7 @@ dependencies = [
  "dirs",
  "image",
  "image-compare",
+ "memory-admission",
  "ratatui",
  "regex",
  "rmcp",
@@ -2070,6 +2081,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "tracing",
  "tracing-subscriber",
  "vnc",
 ]
