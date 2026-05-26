@@ -228,6 +228,27 @@
         ];
       };
 
+      moduleLoginRunnersEmptyKeyEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          steampipeModule
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-cluster = {
+              enable = true;
+              vmCount = 2;
+              tapOwner = "cluster";
+              tapOwnerUid = 1000;
+              loginRunners.enable = true;
+            };
+          }
+        ];
+      };
+
       moduleLoginRunnersDisabledEval = nixpkgs.lib.nixosSystem {
         inherit system;
         modules = [
@@ -243,6 +264,27 @@
               vmCount = 2;
               tapOwner = "cluster";
               tapOwnerUid = 1000;
+            };
+          }
+        ];
+      };
+
+      moduleRunnersEmptyKeyEval = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [
+          steampipeModule
+          {
+            system.stateVersion = "26.05";
+            users.users.cluster = {
+              isNormalUser = true;
+              home = "/home/cluster";
+            };
+            services.steampipe-cluster = {
+              enable = true;
+              vmCount = 2;
+              tapOwner = "cluster";
+              tapOwnerUid = 1000;
+              runners.enable = true;
             };
           }
         ];
@@ -426,6 +468,67 @@ PY
             test -x "$runnersDir/vm-1/bin/microvm-run"
             test -x "$runnersDir/vm-2/bin/microvm-run"
             test ! -e "$runnersDir/vm-3"
+            touch "$out"
+          '';
+
+        # Regression guard: loginRunners must not silently build VMs with an
+        # empty sshAuthorizedKey default under pure flake evaluation.
+        module-loginrunners-empty-key-asserts =
+          pkgs.runCommand "module-loginrunners-empty-key-asserts" {
+            assertionMessage =
+              let
+                failed =
+                  lib.findFirst
+                  (assertion: !assertion.assertion)
+                  null
+                  moduleLoginRunnersEmptyKeyEval.config.assertions;
+              in
+                if failed == null
+                then ""
+                else failed.message;
+          } ''
+            case "$assertionMessage" in
+              *"loginRunners.enable is true but"*"sshAuthorizedKey is empty"*) ;;
+              *) echo "expected loginRunners empty sshAuthorizedKey assertion not seen: $assertionMessage" >&2; exit 1 ;;
+            esac
+            touch "$out"
+          '';
+
+        # Regression guard: legacy runners must not silently build VMs with an
+        # empty sshAuthorizedKey default under pure flake evaluation.
+        module-runners-empty-key-asserts =
+          pkgs.runCommand "module-runners-empty-key-asserts" {
+            assertionMessage =
+              let
+                failed =
+                  lib.findFirst
+                  (assertion: !assertion.assertion)
+                  null
+                  moduleRunnersEmptyKeyEval.config.assertions;
+              in
+                if failed == null
+                then ""
+                else failed.message;
+          } ''
+            case "$assertionMessage" in
+              *"runners.enable is true but"*"sshAuthorizedKey is empty"*) ;;
+              *) echo "expected runners empty sshAuthorizedKey assertion not seen: $assertionMessage" >&2; exit 1 ;;
+            esac
+            touch "$out"
+          '';
+
+        # Regression guard: the empty-key assertion must not reject a configured
+        # loginRunners.sshAuthorizedKey on the normal happy path.
+        module-loginrunners-with-key-evals =
+          pkgs.runCommand "module-loginrunners-with-key-evals" {
+            enabled =
+              if moduleLoginRunnersEnabledEval.config.services.steampipe-cluster.loginRunners.enable
+              then "true"
+              else "false";
+            loginRunnersDir = moduleLoginRunnersEnabledEval.config.environment.etc."steampipe/login-runners".source;
+          } ''
+            test "$enabled" = true
+            test -x "$loginRunnersDir/vm-1/bin/microvm-run"
             touch "$out"
           '';
 
