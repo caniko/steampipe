@@ -26,7 +26,12 @@
     microvm,
     ...
   }:
-    (flake-utils.lib.eachDefaultSystem (system: let
+    # Steampipe is x86_64-linux only: the cluster targets QEMU/KVM,
+    # cloud-hypervisor, and crosvm — all of which we run exclusively on
+    # x86_64 hardware. Restricting the system set here also keeps
+    # `nix flake check --all-systems` from doubling the evaluator's
+    # peak heap by re-evaluating every NixOS check on aarch64.
+    (flake-utils.lib.eachSystem ["x86_64-linux"] (system: let
       root = ./.;
       pkgs = import nixpkgs {
         inherit system;

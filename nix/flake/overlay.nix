@@ -16,18 +16,12 @@ nixpkgs.lib.composeExtensions microvm.overlay (final: prev: {
   # `parse_seccomp_filters` text parser does not allow syscall
   # redefinition across `@include`s, so the `.bpf` form is what's
   # actually used unless `--seccomp-log-failures` forces text mode.
+  # REMOVE-AT-0.4: this whole `crosvm.overrideAttrs` block backs the
+  # deprecated `hypervisor = "crosvm"` graphical escape hatch
+  # (`docs/src/configuration/graphics-and-games.md`). Schedule: drop
+  # together with the hypervisor enum value at the 2026-Q4 re-evaluation
+  # window (post QEMU 11.x / Mesa 27.x).
   crosvm = prev.crosvm.overrideAttrs (oldAttrs: {
-    # microvm.nix's crosvm runner adds `--seccomp-log-failures` for any
-    # crosvm older than 107.1 (a "workaround" tagged at the line in
-    # `lib/runners/crosvm.nix`). Our nixpkgs crosvm reports its version
-    # as `0-unstable-<date>` because upstream doesn't tag releases, so
-    # the comparison flags it as old. `--seccomp-log-failures` forces
-    # text-mode policy parsing, which crashes on the redefinitions
-    # baked into crosvm's `@include` chain. Pretend to be 107.1 so the
-    # microvm runner skips that workaround and uses our pre-compiled
-    # `.bpf` policies instead.
-    version = "107.1-unstable-2026-02-13";
-    __intentionallyOverridingVersion = true;
     buildInputs =
       (oldAttrs.buildInputs or [])
       ++ [
@@ -127,11 +121,15 @@ nixpkgs.lib.composeExtensions microvm.overlay (final: prev: {
             #
             # Filed upstream:
             #   - nixpkgs: NixOS/nixpkgs#517363 (install policies +
-            #     widen prctl/madvise in common_device.policy)
+            #     widen prctl/madvise in common_device.policy) — STILL
+            #     OPEN. Once merged and reaching our nixpkgs pin, the
+            #     `postPatch` and the policy-install half of
+            #     `postInstall` below can be deleted.
             #   - microvm.nix: microvm-nix/microvm.nix#516 (drop
-            #     --seccomp-log-failures version-gate, makes the
-            #     `version = "107.1-..."` override above unnecessary
-            #     once it lands)
+            #     --seccomp-log-failures version-gate) — MERGED
+            #     2026-05-07, in our microvm input since the bump to
+            #     4fe5ab55 (2026-05-24). That is why this overlay no
+            #     longer needs to override `version` to "107.1-...".
             #
             # Apply the same widenings to gpu_common.policy. The GPU
             # device's seccomp filter is layered on gpu_common, which
