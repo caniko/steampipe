@@ -1,7 +1,0 @@
-==> Reserving 1 VM(s)...
-  Reserved: vm-1
-  vm-1 started (PID 619603, 47.2 GB available)
-==> Waiting for SSH...
-  vm-1: ready
-==> All VMs ready
-==> 1 VM(s) running
