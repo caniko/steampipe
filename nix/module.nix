@@ -471,15 +471,7 @@ in {
       ++ lib.optional (cfg.loginRunners.enable && cfg.loginRunners.hypervisor == "crosvm")
       "services.steampipe-cluster.loginRunners.hypervisor = \"crosvm\" is deprecated and scheduled for removal in steampipe 0.4. crosvm + virgl + Vulkan crashes the guest VCPU on Steam GUI startup; switch to \"qemu\" (host-module classes run sway-headless + llvmpipe; no virgl needed)."
       ++ lib.optional (cfg.runners.enable && cfg.runners.hypervisor == "crosvm")
-      "services.steampipe-cluster.runners.hypervisor = \"crosvm\" is deprecated and scheduled for removal in steampipe 0.4. Switch to \"cloud-hypervisor\" (the warm path uses DisplayMode::Headless; no graphics device needed)."
-      ++ lib.optional (
-        (
-          (cfg.loginRunners.enable && cfg.loginRunners.hypervisor == "crosvm")
-          || (cfg.runners.enable && cfg.runners.hypervisor == "crosvm")
-        )
-        && !(pkgs.crosvm.passthru.__steampipeOverlay or false)
-      )
-      "services.steampipe-cluster: pkgs.crosvm lacks the steampipe overlay's `__steampipeOverlay` marker. A downstream overlay has shadowed our patched crosvm; login VMs may hit SIGSYS on Linux >= 6.13.";
+      "services.steampipe-cluster.runners.hypervisor = \"crosvm\" is deprecated and scheduled for removal in steampipe 0.4. Switch to \"cloud-hypervisor\" (the warm path uses DisplayMode::Headless; no graphics device needed).";
 
     environment.systemPackages =
       [cfg.package]

@@ -2,29 +2,7 @@
   microvm,
   nixpkgs,
 }:
-# Overlay providing cloud-hypervisor-graphics (from microvm.nix +
-# spectrum-os patches) plus a hash override so it stays buildable when
-# nixpkgs' rustPlatform vendoring drifts ahead of spectrum's pinned hash.
-#
-# Background: microvm.nix's overlay defines `cloud-hypervisor-graphics`
-# by importing spectrum-os's `pkgs/cloud-hypervisor`. Spectrum pins a
-# specific cargoDeps hash for the patched build; when downstream consumers
-# follow nixos-unstable ahead of spectrum's pin, the hash goes stale and
-# `cloud-hypervisor-graphics` fails to build with
-# `Cargo.lock is not the same in /build/cargo-deps-vendor`.
-#
-# We pin the corrected hash here so steampipe consumers don't have to
-# redo this dance. Drop this override when the upstream spectrum pin
-# catches up: <https://spectrum-os.org/git/spectrum> pkgs/cloud-hypervisor
 nixpkgs.lib.composeExtensions microvm.overlay (final: prev: {
-  cloud-hypervisor-graphics = prev.cloud-hypervisor-graphics.overrideAttrs (oldAttrs: {
-    cargoDeps = final.rustPlatform.fetchCargoVendor {
-      inherit (oldAttrs) src patches;
-      hash = "sha256-YYrzd44DbaRT3jieclHrGoDLT14vTzTtNwIRLCtv3Ko=";
-    };
-    passthru = (oldAttrs.passthru or {}) // {__steampipeOverlay = true;};
-  });
-
   # The nixpkgs crosvm derivation only installs the binary; the source
   # ships seccomp policies in `jail/seccomp/<arch>/`, and crosvm only
   # uses external policies when the operator passes `--seccomp-policy-dir`
@@ -50,7 +28,6 @@ nixpkgs.lib.composeExtensions microvm.overlay (final: prev: {
     # `.bpf` policies instead.
     version = "107.1-unstable-2026-02-13";
     __intentionallyOverridingVersion = true;
-    passthru = (oldAttrs.passthru or {}) // {__steampipeOverlay = true;};
     buildInputs =
       (oldAttrs.buildInputs or [])
       ++ [

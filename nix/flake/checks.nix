@@ -396,10 +396,6 @@ in
                 test "$defaultHypervisor" = cloud-hypervisor
                 test -x "$runnersDir/vm-1/bin/microvm-run"
                 grep -q cloud-hypervisor "$runnerScript"
-                if grep -q cloud-hypervisor-graphics "$runnerScript"; then
-                  echo "runner script references cloud-hypervisor-graphics: $runnerScript" >&2
-                  exit 1
-                fi
                 touch "$out"
       '';
 
@@ -551,21 +547,4 @@ in
         touch "$out"
       '';
 
-    module-overlay-applied-eval =
-      pkgs.runCommand "module-overlay-applied-eval" {
-        crosvmMarker =
-          if (moduleLoginRunnersEnabledEval.pkgs.crosvm.passthru.__steampipeOverlay or false)
-          then "yes"
-          else "no";
-        cloudHypervisorMarker =
-          if (moduleLoginRunnersEnabledEval.pkgs.cloud-hypervisor-graphics.passthru.__steampipeOverlay or false)
-          then "yes"
-          else "no";
-        overlaysCount = toString (builtins.length moduleLoginRunnersEnabledEval.config.nixpkgs.overlays);
-      } ''
-        test "$crosvmMarker" = yes
-        test "$cloudHypervisorMarker" = yes
-        test "$overlaysCount" -gt 0
-        touch "$out"
-      '';
   }
