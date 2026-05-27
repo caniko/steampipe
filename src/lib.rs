@@ -235,8 +235,25 @@ fn command_requires_claimed_vms(command: &Commands) -> bool {
     )
 }
 
-fn steam_only_command(command: &Commands) -> bool {
-    matches!(command, Commands::Steam { .. })
+/// Commands that operate entirely on host-config-derivable state (cluster
+/// name, VM grid, runners dir, SSH key, state dir, lock dir) and so can run
+/// from any working directory when a host config is discovered. Anything that
+/// needs `cargo_package` / `binary_name` / `remote_dir` / visual config /
+/// project paths stays gated on project-root discovery.
+fn command_runs_without_project_root_when_module_present(command: &Commands) -> bool {
+    matches!(
+        command,
+        Commands::Steam { .. }
+            | Commands::Reset { .. }
+            | Commands::Down
+            | Commands::Status
+            | Commands::CompositorStatus
+            | Commands::Up { .. }
+            | Commands::Restart { .. }
+            | Commands::NetUp { .. }
+            | Commands::NetDown { .. }
+            | Commands::GpuPreflight { .. }
+    )
 }
 
 fn command_uses_credentials(command: &Commands) -> bool {
@@ -553,19 +570,30 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         Some(path) => Some(path.clone()),
         None => match detect_project_root() {
             Ok(path) => Some(path),
+            // `steam info` can render the discovery trace even with no
+            // module and no project — keep that special case explicit.
             Err(_)
-                if steam_only_command(&cli.command)
-                    && (module.is_some()
-                        || matches!(
-                            &cli.command,
-                            Commands::Steam {
-                                action: SteamAction::Info
-                            }
-                        )) =>
+                if matches!(
+                    &cli.command,
+                    Commands::Steam {
+                        action: SteamAction::Info
+                    }
+                ) =>
             {
                 None
             }
-            Err(_) if matches!(&cli.command, Commands::Reset { .. }) && module.is_some() => None,
+            // Any host-config-derivable command (down, status, up, restart,
+            // net-up/down, gpu-preflight, the full steam family, reset) runs
+            // from anywhere when a host config is discovered. Project-rooted
+            // commands (deploy/test/run/visual/snapshot/...) still require
+            // steampipe.toml because they reference cargo metadata or local
+            // assets that host.json does not carry.
+            Err(_)
+                if command_runs_without_project_root_when_module_present(&cli.command)
+                    && module.is_some() =>
+            {
+                None
+            }
             Err(error) => return Err(error),
         },
     };
