@@ -6,6 +6,7 @@ use crate::core::backend::{Backend, microvm_log_path};
 use crate::core::config::{BridgeReady, ClusterConfig, Unchecked, VmDef, par_each_vm};
 use crate::core::credentials::{CredentialsMap, VmCredentials};
 use crate::core::nixos_module::{Discovery, NixosModuleConfig, RowStatus};
+use crate::game::accounts::{self, SessionStatus};
 use crate::vm::lease;
 
 const LOGIN_SSH_TIMEOUT_SECS: u32 = 180;
@@ -553,17 +554,67 @@ pub async fn login(
     continue_from: bool,
     login_runners_dir: &Path,
     creds: Option<&CredentialsMap>,
+    force: bool,
+    login_state_dir: Option<&Path>,
 ) -> anyhow::Result<()> {
     let targets = config.resolve_targets(target, continue_from)?;
+    let login_state_dir = match login_state_dir {
+        Some(path) if std::fs::read_dir(path).is_ok() => Some(path),
+        Some(path) => {
+            println!(
+                "==> Cannot read loginStateDir {}; cannot fill-the-gaps. Logging in every selected VM.",
+                path.display()
+            );
+            None
+        }
+        None => {
+            println!(
+                "==> No loginStateDir configured; cannot fill-the-gaps. Logging in every selected VM."
+            );
+            None
+        }
+    };
 
     let mut failed = 0usize;
+    let mut logged_in = 0usize;
+    let mut skipped = 0usize;
     for vm in &targets {
+        if !force {
+            if let Some(login_state_dir) = login_state_dir {
+                let vm_name = vm.name.to_string();
+                let status = accounts::classify_session_status(
+                    login_state_dir,
+                    &vm_name,
+                    accounts::DEFAULT_WARN_WITHIN_DAYS,
+                );
+                if status == SessionStatus::Ok {
+                    let info = accounts::read_account_info(
+                        login_state_dir,
+                        vm_name,
+                        None,
+                        accounts::DEFAULT_WARN_WITHIN_DAYS,
+                    );
+                    let persona = info.persona.as_deref().unwrap_or("unknown");
+                    println!(
+                        "  {}: already logged in ({persona}), skipping (use --force to re-login)",
+                        vm.name
+                    );
+                    skipped += 1;
+                    continue;
+                }
+                println!("  {}: {}, logging in", vm.name, status.login_reason());
+            }
+        }
+
         let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
         if let Err(e) = login_single_vm(config, vm, login_runners_dir, vm_creds).await {
             eprintln!("Error with {}: {e}", vm.name);
             failed += 1;
+        } else {
+            logged_in += 1;
         }
     }
+    println!("==> Logged in: {logged_in}, Skipped: {skipped}, Failed: {failed}");
     if failed > 0 {
         anyhow::bail!("{failed}/{} Steam login target(s) failed", targets.len());
     }

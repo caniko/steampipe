@@ -628,6 +628,9 @@ pub enum SteamAction {
         /// it.
         #[arg(long)]
         login_runners_dir: Option<PathBuf>,
+        /// Re-login every selected VM even if it already has a valid Steam session.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Submit Steam Guard code to a running SteamCMD login VM
@@ -921,12 +924,36 @@ mod tests {
                         target,
                         continue_from,
                         login_runners_dir,
+                        force,
                     },
             } => {
                 assert_eq!(target.as_deref(), Some("vm-1"));
                 assert!(!continue_from);
                 assert!(login_runners_dir.is_none());
+                assert!(!force);
             }
+            _ => panic!("expected Steam login command"),
+        }
+    }
+
+    #[test]
+    fn steam_login_force_flag_parses_and_defaults_false() {
+        let cli = parse(&["--vm-count", "7", "steam", "login"]);
+        match cli.command {
+            Commands::Steam {
+                action: SteamAction::Login { force, .. },
+            } => assert!(!force),
+            _ => panic!("expected Steam login command"),
+        }
+    }
+
+    #[test]
+    fn steam_login_force_flag_flips_true() {
+        let cli = parse(&["--vm-count", "7", "steam", "login", "--force"]);
+        match cli.command {
+            Commands::Steam {
+                action: SteamAction::Login { force, .. },
+            } => assert!(force),
             _ => panic!("expected Steam login command"),
         }
     }

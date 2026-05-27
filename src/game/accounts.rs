@@ -9,16 +9,50 @@ use crate::core::nixos_module::NixosModuleConfig;
 
 /// Per-VM account info collected from the host login state directory.
 #[derive(Debug)]
-struct AccountInfo {
-    vm_name: String,
-    account: Option<String>,
-    persona: Option<String>,
-    steam_id: Option<String>,
-    logged_in: bool,
-    refresh_age_days: Option<i64>,
-    expires_in_days: Option<i64>,
-    status: &'static str,
+pub(crate) struct AccountInfo {
+    pub(crate) vm_name: String,
+    pub(crate) account: Option<String>,
+    pub(crate) persona: Option<String>,
+    pub(crate) steam_id: Option<String>,
+    pub(crate) logged_in: bool,
+    pub(crate) refresh_age_days: Option<i64>,
+    pub(crate) expires_in_days: Option<i64>,
+    pub(crate) status: SessionStatus,
 }
+
+/// Host-side Steam session status derived from persisted login state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SessionStatus {
+    Ok,
+    Stale,
+    Expired,
+    NoToken,
+    Unknown,
+}
+
+impl SessionStatus {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "OK",
+            Self::Stale => "STALE",
+            Self::Expired => "EXPIRED",
+            Self::NoToken => "NO_TOKEN",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+
+    pub(crate) fn login_reason(self) -> &'static str {
+        match self {
+            Self::Ok => "session is healthy",
+            Self::Stale => "refresh token is stale",
+            Self::Expired => "refresh token expired",
+            Self::NoToken => "no refresh token found",
+            Self::Unknown => "session status unknown",
+        }
+    }
+}
+
+pub(crate) const DEFAULT_WARN_WITHIN_DAYS: i64 = 30;
 
 /// Show Steam account status across all instances.
 pub async fn show<S>(
@@ -104,7 +138,7 @@ pub async fn show<S>(
             steam_id,
             format_days(info.refresh_age_days),
             format_days(info.expires_in_days),
-            info.status
+            info.status.as_str()
         );
         if info.logged_in {
             logged_in += 1;
@@ -118,7 +152,7 @@ pub async fn show<S>(
         let missing = total - logged_in;
         println!("  {logged_in}/{total} VMs logged in ({missing} need login)");
         if missing > 0 {
-            println!("  Run `cluster-ctl steam login` to log in missing VMs");
+            println!("  Run `cluster-ctl steam login` to fill the gaps automatically");
         }
     }
 
@@ -204,13 +238,26 @@ fn account_targets<S>(
         .collect()
 }
 
-fn read_account_info(
+pub(crate) fn read_account_info(
     login_state_dir: &Path,
     vm_name: String,
     account: Option<String>,
     warn_within_days: i64,
 ) -> AccountInfo {
     let login_dir = login_state_dir.join(&vm_name);
+    if !login_dir.is_dir() {
+        return AccountInfo {
+            vm_name,
+            account,
+            persona: None,
+            steam_id: None,
+            logged_in: false,
+            refresh_age_days: None,
+            expires_in_days: None,
+            status: SessionStatus::Unknown,
+        };
+    }
+
     let loginusers = login_dir.join("config").join("loginusers.vdf");
     let (persona, steam_id) = parse_loginusers_file(&loginusers).unwrap_or((None, None));
     let logged_in = steam_id.is_some();
@@ -224,7 +271,7 @@ fn read_account_info(
             logged_in,
             refresh_age_days: None,
             expires_in_days: None,
-            status: "NO_TOKEN",
+            status: SessionStatus::NoToken,
         };
     };
 
@@ -237,7 +284,7 @@ fn read_account_info(
             logged_in,
             refresh_age_days: None,
             expires_in_days: None,
-            status: "NO_TOKEN",
+            status: SessionStatus::NoToken,
         };
     };
 
@@ -245,10 +292,10 @@ fn read_account_info(
     let refresh_age_days = modified_unix(&token_path).map(|mtime| (now - mtime) / 86_400);
     let expires_in_days = jwt_exp_unix(&jwt).map(|exp| (exp - now) / 86_400);
     let status = match expires_in_days {
-        Some(days) if days < 0 => "EXPIRED",
-        Some(days) if days < warn_within_days => "STALE",
-        Some(_) => "OK",
-        None => "NO_TOKEN",
+        Some(days) if days < 0 => SessionStatus::Expired,
+        Some(days) if days < warn_within_days => SessionStatus::Stale,
+        Some(_) => SessionStatus::Ok,
+        None => SessionStatus::NoToken,
     };
 
     AccountInfo {
@@ -261,6 +308,14 @@ fn read_account_info(
         expires_in_days,
         status,
     }
+}
+
+pub(crate) fn classify_session_status(
+    login_state_dir: &Path,
+    vm_name: &str,
+    warn_within_days: i64,
+) -> SessionStatus {
+    read_account_info(login_state_dir, vm_name.to_owned(), None, warn_within_days).status
 }
 
 fn parse_loginusers_file(path: &Path) -> Option<(Option<String>, Option<String>)> {
@@ -339,6 +394,38 @@ fn format_days(days: Option<i64>) -> String {
 mod tests {
     use super::*;
 
+    fn test_jwt(exp: i64) -> String {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+        format!("{header}.{payload}.")
+    }
+
+    fn write_vm_state(root: &Path, vm_name: &str, persona: &str, steam_id: &str, exp: i64) {
+        let config_dir = root.join(vm_name).join("config");
+        let token_dir = config_dir.join(steam_id);
+        std::fs::create_dir_all(&token_dir).expect("create token dir");
+        std::fs::write(
+            config_dir.join("loginusers.vdf"),
+            format!(
+                r#""users"
+{{
+    "{steam_id}"
+    {{
+        "PersonaName"    "{persona}"
+    }}
+}}
+"#
+            ),
+        )
+        .expect("write loginusers.vdf");
+        std::fs::write(
+            token_dir.join("local.vdf"),
+            format!(r#""RefreshToken_{steam_id}"   "{}""#, test_jwt(exp)),
+        )
+        .expect("write local.vdf");
+    }
+
     #[test]
     fn extract_refresh_jwt_picks_jwt_shaped_string() {
         let vdf = r#""RefreshToken_76561198000000001"   "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE3OTUxNzgwMDB9.sig" "#;
@@ -350,5 +437,56 @@ mod tests {
     fn jwt_exp_unix_parses_payload() {
         let jwt = "eyJhbGciOiJub25lIn0.eyJleHAiOjE3OTUxNzgwMDB9.";
         assert_eq!(jwt_exp_unix(jwt), Some(1_795_178_000));
+    }
+
+    #[test]
+    fn classify_session_status_handles_each_state() {
+        let temp = tempfile::tempdir().expect("temp login state dir");
+        let now = chrono::Utc::now().timestamp();
+
+        write_vm_state(
+            temp.path(),
+            "vm-ok",
+            "PersonaOk",
+            "76561198000000001",
+            now + 90 * 86_400,
+        );
+        write_vm_state(
+            temp.path(),
+            "vm-stale",
+            "PersonaStale",
+            "76561198000000002",
+            now + 7 * 86_400,
+        );
+        write_vm_state(
+            temp.path(),
+            "vm-expired",
+            "PersonaExpired",
+            "76561198000000003",
+            now - 86_400,
+        );
+        std::fs::create_dir_all(temp.path().join("vm-no-token").join("config"))
+            .expect("create no-token dir");
+
+        assert_eq!(
+            classify_session_status(temp.path(), "vm-ok", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::Ok
+        );
+        assert_eq!(
+            classify_session_status(temp.path(), "vm-stale", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::Stale
+        );
+        assert_eq!(
+            classify_session_status(temp.path(), "vm-expired", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::Expired
+        );
+        assert_eq!(
+            classify_session_status(temp.path(), "vm-no-token", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::NoToken
+        );
+        assert_eq!(
+            classify_session_status(temp.path(), "vm-missing", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::Unknown
+        );
     }
 }

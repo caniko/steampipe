@@ -26,7 +26,11 @@ decrypt with `rage`/`age` via ssh-agent automatically.
 cluster-ctl steam login
 ```
 
-For each VM:
+By default, `steam login` skips VMs whose persisted host-side session is
+already `OK`. VMs with `STALE`, `EXPIRED`, or `NO_TOKEN` status are logged in;
+pass `--force` to re-login every selected VM regardless.
+
+For each VM selected for login:
 
 1. Boots the VM using a 4GB-RAM login image.
 2. Mounts that VM's persistent Steam state share from
@@ -64,8 +68,13 @@ instead of being copied out or regenerated at boot.
 cluster-ctl --credentials secrets/steam-creds.toml steam login
 ```
 
-Runs `steam -login <user> <pass>` on each VM and waits for confirmation. Also
-activates game keys if provided.
+Runs `steam -login <user> <pass>` on each VM selected for login and waits for
+confirmation. Also activates game keys if provided.
+
+By default, automated `steam login` also fills the gaps only: sessions already
+reported as `OK` are skipped, while `STALE`, `EXPIRED`, and `NO_TOKEN` sessions
+are refreshed through the login flow. Pass `--force` to re-login every selected
+VM.
 
 Use interactive login for a VM's first trust-establishing login when Steam
 Guard requires confirmation. After that, the persistent share preserves the

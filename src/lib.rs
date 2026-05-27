@@ -906,6 +906,7 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 target,
                 continue_from,
                 login_runners_dir,
+                force,
             } => {
                 let login_runners_dir = resolve_path_field(
                     login_runners_dir,
@@ -920,12 +921,15 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 ensure_module_only_ssh_key_available(&config, module_only)?;
                 bridge::ensure_bridge(&config, project_root.as_deref())?;
                 let validated = config.validate_or_skip_bridge()?;
+                let login_state_dir = module.as_ref().map(|m| m.login_state_dir.as_path());
                 steam::login(
                     &validated,
                     target.as_deref(),
                     continue_from,
                     &login_runners_dir,
                     creds.as_ref(),
+                    force,
+                    login_state_dir,
                 )
                 .await?;
             }
