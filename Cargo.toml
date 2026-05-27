@@ -69,3 +69,13 @@ new_without_default = "warn"
 too_many_arguments = "allow"
 type_complexity = "allow"
 unnecessary_get_then_check = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 16
+strip = "symbols"
+
+[profile.release-fast]
+inherits = "release"
+panic = "abort"
+strip = true

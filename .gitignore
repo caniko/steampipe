@@ -1,4 +1,6 @@
 /target
+.cargo/config.toml
+.cargo/config.toml.bak
 docs/book/
 website/public/
 tests/fixture/result*

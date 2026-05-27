@@ -7,18 +7,20 @@
   };
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    rs-harbor.url = "git+https://codeberg.org/caniko/rs-harbor.git";
+    nixpkgs.follows = "rs-harbor/nixpkgs";
     rust-overlay = {
-      url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
+      follows = "rs-harbor/rust-overlay";
     };
-    flake-utils.url = "github:numtide/flake-utils";
+    crane.follows = "rs-harbor/crane";
+    flake-utils.follows = "rs-harbor/flake-utils";
     microvm.url = "github:astro/microvm.nix";
   };
 
   outputs = {
     self,
     nixpkgs,
+    rs-harbor,
     rust-overlay,
     flake-utils,
     microvm,
@@ -32,15 +34,17 @@
       };
       inherit (pkgs) lib;
 
-      toolchain = pkgs.rust-bin.nightly.latest.minimal.override {
-        extensions = [
-          "clippy"
-          "rustfmt"
-        ];
+      toolchain = rs-harbor.lib.mkToolchain {inherit pkgs;};
+      inherit (toolchain) craneLib rustToolchain;
+
+      cross = rs-harbor.lib.mkCross {inherit pkgs system;};
+      cargoConfig = rs-harbor.lib.mkCargoConfig {
+        inherit pkgs;
+        channel = "nightly";
       };
 
       packages = import ./nix/flake/packages.nix {
-        inherit lib pkgs root toolchain;
+        inherit craneLib lib pkgs root;
       };
     in {
       inherit packages;
@@ -50,7 +54,8 @@
       };
 
       devShells = import ./nix/flake/dev-shells.nix {
-        inherit packages pkgs toolchain;
+        inherit cargoConfig craneLib cross packages pkgs rustToolchain;
+        rsHarborLib = rs-harbor.lib;
       };
     }))
     // (import ./nix/flake/flake-modules.nix {

@@ -1,0 +1,11 @@
+label: without-opts
+exit: 0
+elapsed_s: 7.42
+ld.lld VmHWM peak (kB): 0
+rustc  VmHWM peak (kB): 1130156
+clang  VmHWM peak (kB): 66456
+mold   VmHWM peak (kB): 0
+MemAvailable start (kB): 45572708
+MemAvailable min   (kB): 41440160
+system memory committed (kB): 4132548
+cargo MaxRSS (kB): 1130156

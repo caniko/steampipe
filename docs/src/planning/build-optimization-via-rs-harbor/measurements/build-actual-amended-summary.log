@@ -1,0 +1,11 @@
+label: actual-amended
+exit: 0
+elapsed_s: 7.21
+ld.lld VmHWM peak (kB): 0
+rustc  VmHWM peak (kB): 1133256
+clang  VmHWM peak (kB): 66596
+mold   VmHWM peak (kB): 0
+MemAvailable start (kB): 47952268
+MemAvailable min   (kB): 44631360
+system memory committed (kB): 3320908
+cargo MaxRSS (kB): 1133256

@@ -1,8 +1,8 @@
 {
+  craneLib,
   lib,
   pkgs,
   root,
-  toolchain,
 }: let
   docs = pkgs.stdenv.mkDerivation {
     pname = "steampipe-docs";
@@ -62,17 +62,26 @@
     cp -r ${docs}/* $out/docs/
   '';
 
-  cluster-ctl = pkgs.rustPlatform.buildRustPackage {
-    pname = "cluster-ctl";
-    version = "0.1.0";
-    src = root;
-    cargoHash = "sha256-aFNo2WmFIkG66EMz4nR4uwvaw/s9DlXpl6H2+JXhE8Y=";
-    nativeBuildInputs = [toolchain pkgs.makeWrapper];
-    postInstall = ''
-      wrapProgram $out/bin/cluster-ctl \
-        --prefix PATH : ${lib.makeBinPath [pkgs.weston]}
-    '';
+  src = craneLib.cleanCargoSource root;
+
+  commonArgs = {
+    inherit src;
+    strictDeps = true;
+    nativeBuildInputs = [pkgs.makeWrapper];
   };
+
+  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+
+  cluster-ctl = craneLib.buildPackage (commonArgs
+    // {
+      pname = "cluster-ctl";
+      version = "0.1.0";
+      inherit cargoArtifacts;
+      postInstall = ''
+        wrapProgram $out/bin/cluster-ctl \
+          --prefix PATH : ${lib.makeBinPath [pkgs.weston]}
+      '';
+    });
 in {
   default = cluster-ctl;
   inherit docs website site;

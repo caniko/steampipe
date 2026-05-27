@@ -1,0 +1,204 @@
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling libc v0.2.183
+   Compiling cfg-if v1.0.4
+   Compiling strsim v0.11.1
+   Compiling ident_case v1.0.1
+   Compiling bitflags v2.11.0
+   Compiling log v0.4.29
+   Compiling itoa v1.0.18
+   Compiling heck v0.5.0
+   Compiling thiserror v2.0.18
+   Compiling unicode-segmentation v1.13.2
+   Compiling serde_core v1.0.228
+   Compiling either v1.15.0
+   Compiling rustversion v1.0.22
+   Compiling autocfg v1.5.0
+   Compiling memchr v2.8.0
+   Compiling fnv v1.0.7
+   Compiling equivalent v1.0.2
+   Compiling foldhash v0.2.0
+   Compiling pin-project-lite v0.2.17
+   Compiling allocator-api2 v0.2.21
+   Compiling typenum v1.19.0
+   Compiling crossbeam-utils v0.8.21
+   Compiling zmij v1.0.21
+   Compiling rustix v1.1.4
+   Compiling indoc v2.0.7
+   Compiling once_cell v1.21.4
+   Compiling find-msvc-tools v0.1.9
+   Compiling simd-adler32 v0.3.9
+   Compiling shlex v1.3.0
+   Compiling parking_lot_core v0.9.12
+   Compiling unicode-width v0.2.2
+   Compiling futures-sink v0.3.32
+   Compiling ryu v1.0.23
+   Compiling static_assertions v1.1.0
+   Compiling crc32fast v1.5.0
+   Compiling futures-core v0.3.32
+   Compiling signal-hook v0.3.18
+   Compiling instability v0.3.10
+   Compiling smallvec v1.15.1
+   Compiling powerfmt v0.2.0
+   Compiling linux-raw-sys v0.12.1
+   Compiling itertools v0.14.0
+   Compiling utf8parse v0.2.2
+   Compiling cc v1.2.58
+   Compiling adler2 v2.0.1
+   Compiling serde v1.0.228
+   Compiling scopeguard v1.2.0
+   Compiling futures-channel v0.3.32
+   Compiling anstyle-parse v1.0.0
+   Compiling miniz_oxide v0.8.9
+   Compiling tracing-core v0.1.36
+   Compiling lock_api v0.4.14
+   Compiling deranged v0.5.8
+   Compiling num-traits v0.2.19
+   Compiling serde_json v1.0.149
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling hashbrown v0.16.1
+   Compiling convert_case v0.10.0
+   Compiling anstyle v1.0.14
+   Compiling litrs v1.0.0
+   Compiling time-core v0.1.7
+   Compiling anstyle-query v1.1.5
+   Compiling num_threads v0.1.7
+   Compiling rayon-core v1.13.0
+   Compiling num-conv v0.1.0
+   Compiling slab v0.4.12
+   Compiling futures-io v0.3.32
+   Compiling futures-task v0.3.32
+   Compiling ref-cast v1.0.25
+   Compiling colorchoice v1.0.5
+   Compiling bytes v1.11.1
+   Compiling fdeflate v0.3.7
+   Compiling line-clipping v0.3.6
+   Compiling clap_lex v1.1.0
+   Compiling anstream v1.0.0
+   Compiling flate2 v1.1.9
+   Compiling pxfm v0.1.29
+   Compiling getrandom v0.4.2
+   Compiling iana-time-zone v0.1.65
+   Compiling aho-corasick v1.1.4
+   Compiling rmcp v0.17.0
+   Compiling byteorder-lite v0.1.0
+   Compiling anyhow v1.0.102
+   Compiling lazy_static v1.5.0
+   Compiling const-oid v0.10.2
+   Compiling winnow v1.0.0
+   Compiling option-ext v0.2.0
+   Compiling regex-syntax v0.8.10
+   Compiling bytemuck v1.25.0
+   Compiling dyn-clone v1.0.20
+   Compiling sharded-slab v0.1.7
+   Compiling document-features v0.2.12
+   Compiling clap_builder v4.6.0
+   Compiling log v0.3.9
+   Compiling crossbeam-epoch v0.9.18
+   Compiling thread_local v1.1.9
+   Compiling png v0.18.1
+   Compiling pastey v0.2.1
+   Compiling byteorder v0.5.3
+   Compiling lru v0.16.3
+   Compiling base64 v0.22.1
+   Compiling cpufeatures v0.3.0
+   Compiling toml_parser v1.1.0+spec-1.1.0
+   Compiling castaway v0.2.4
+   Compiling toml_writer v1.1.0+spec-1.1.0
+   Compiling fastrand v2.4.1
+   Compiling compact_str v0.9.0
+   Compiling syn v2.0.117
+   Compiling crossbeam-deque v0.8.6
+   Compiling hybrid-array v0.4.8
+   Compiling miniz-sys v0.1.12
+   Compiling tracing-subscriber v0.3.23
+   Compiling errno v0.3.14
+   Compiling mio v1.2.0
+   Compiling unicode-truncate v2.0.1
+   Compiling time v0.3.45
+   Compiling dirs-sys v0.5.0
+   Compiling signal-hook-registry v1.4.8
+   Compiling parking_lot v0.12.5
+   Compiling dirs v6.0.0
+   Compiling crypto-common v0.2.1
+   Compiling block-buffer v0.12.0
+   Compiling rayon v1.12.0
+   Compiling signal-hook-mio v0.2.5
+   Compiling serde_spanned v1.1.0
+   Compiling toml_datetime v1.1.0+spec-1.1.0
+   Compiling regex-automata v0.4.14
+   Compiling tempfile v3.27.0
+   Compiling flate2 v0.2.20
+   Compiling toml v1.1.0+spec-1.1.0
+   Compiling moxcms v0.7.11
+   Compiling digest v0.11.2
+   Compiling vnc v0.4.0
+   Compiling sha2 v0.11.0
+   Compiling darling_core v0.20.11
+   Compiling darling_core v0.23.0
+   Compiling serde_derive_internals v0.29.1
+   Compiling regex v1.12.3
+   Compiling thiserror-impl v2.0.18
+   Compiling strum_macros v0.27.2
+   Compiling derive_more-impl v2.1.1
+   Compiling tokio-macros v2.6.1
+   Compiling serde_derive v1.0.228
+   Compiling futures-macro v0.3.32
+   Compiling ref-cast-impl v1.0.25
+   Compiling tracing-attributes v0.1.31
+   Compiling clap_derive v4.6.0
+   Compiling async-trait v0.1.89
+   Compiling schemars_derive v1.2.1
+   Compiling darling_macro v0.20.11
+   Compiling tokio v1.50.0
+   Compiling derive_more v2.1.1
+   Compiling crossterm v0.29.0
+   Compiling darling_macro v0.23.0
+   Compiling futures-util v0.3.32
+   Compiling darling v0.20.11
+   Compiling tracing v0.1.44
+   Compiling kasuari v0.4.12
+   Compiling strum v0.27.2
+   Compiling darling v0.23.0
+   Compiling clap v4.6.0
+   Compiling rmcp-macros v0.17.0
+   Compiling clap_complete v4.6.0
+   Compiling ratatui-core v0.1.0
+   Compiling image v0.25.9
+   Compiling ratatui-widgets v0.3.0
+   Compiling ratatui-crossterm v0.1.0
+   Compiling chrono v0.4.44
+   Compiling futures-executor v0.3.32
+   Compiling tokio-util v0.7.18
+   Compiling memory-admission v0.1.7
+   Compiling ratatui-macros v0.7.0
+   Compiling schemars v1.2.1
+   Compiling futures v0.3.32
+   Compiling ratatui v0.30.0
+   Compiling image-compare v0.4.2
+   Compiling steampipe v0.1.0 (/data/nvme0/can/Projects/steampipe)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 7.18s
+	Command being timed: "cargo build --workspace"
+	User time (seconds): 86.21
+	System time (seconds): 22.19
+	Percent of CPU this job got: 1505%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:07.20
+	Average shared text size (kbytes): 0
+	Average unshared data size (kbytes): 0
+	Average stack size (kbytes): 0
+	Average total size (kbytes): 0
+	Maximum resident set size (kbytes): 1133256
+	Average resident set size (kbytes): 0
+	Major (requiring I/O) page faults: 445
+	Minor (reclaiming a frame) page faults: 7870647
+	Voluntary context switches: 2299334
+	Involuntary context switches: 209961
+	Swaps: 0
+	File system inputs: 649648
+	File system outputs: 1819752
+	Socket messages sent: 0
+	Socket messages received: 0
+	Signals delivered: 0
+	Page size (bytes): 4096
+	Exit status: 0
