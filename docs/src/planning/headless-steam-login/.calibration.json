@@ -1,0 +1,178 @@
+{
+  "schema_version": 1,
+  "plan": {
+    "id": "2e7e3716-e891-4bd4-9a1d-5b47b9ebef6e",
+    "name": "Headless Steam Login \u2014 Plan Set",
+    "flavor": "codex",
+    "worktype": null,
+    "created_at": 1779883041,
+    "phase_count": 3,
+    "wave_count": 3,
+    "max_chain_depth": 3,
+    "repo_spread": 4,
+    "routing_dist": {
+      "high": 1,
+      "low": 1,
+      "medium": 1
+    },
+    "shape_hash": "a128f62177ac12aed9026f30d68e480a2246ddbedbf6eb4f0eb5159f5b6d8e67"
+  },
+  "triggers": [
+    {
+      "name": "shared-file-contention",
+      "input_value": 1.0,
+      "threshold": 2.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "external-repo-phases",
+      "input_value": 3.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": "External repo coordination"
+    },
+    {
+      "name": "convergence-point",
+      "input_value": 1.0,
+      "threshold": 3.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "ownership-boundary-spread",
+      "input_value": 4.0,
+      "threshold": 2.0,
+      "fired": true,
+      "section_added": "PR sequencing & cross-owner coordination"
+    },
+    {
+      "name": "risk-concentration",
+      "input_value": 0.0,
+      "threshold": 2.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "risk-late-in-plan",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "infrastructure-spof",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "revendor-phase",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "long-serial-chain",
+      "input_value": 3.0,
+      "threshold": 4.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "mid-plan-rerouting",
+      "input_value": 3.0,
+      "threshold": 10.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "trivial-phase-swamp",
+      "input_value": 2.0,
+      "threshold": 4.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "no-integrated-verification",
+      "input_value": 1.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": null
+    },
+    {
+      "name": "routing-tier-inversion",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "mechanical-streak",
+      "input_value": 1.0,
+      "threshold": 3.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "hidden-prerequisite",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    }
+  ],
+  "phases": [
+    {
+      "ordinal": 1,
+      "slug": "virtiofsd-lifecycle",
+      "routing_tier": "high",
+      "files": [
+        "nix/module.nix` \u2014 assertion / warning for the kvm-group requirement",
+        "src/core/backend.rs` \u2014 `microvm_start`, `microvm_stop`,",
+        "src/core/state.rs` \u2014 new helper for the virtiofsd PID file path; possible"
+      ]
+    },
+    {
+      "ordinal": 2,
+      "slug": "parallel-login-and-reuse",
+      "routing_tier": "medium",
+      "files": [
+        "src/game/steam.rs` \u2014 `login`, `login_single_vm`, the new `LoginAttempt",
+        "src/lib.rs` \u2014 no functional change expected; only touch if the"
+      ]
+    },
+    {
+      "ordinal": 3,
+      "slug": "docs-refresh",
+      "routing_tier": "low",
+      "files": [
+        "docs/src/SUMMARY.md",
+        "docs/src/configuration/steam-credentials.md",
+        "docs/src/planning/stabilization-and-hardening-research.md"
+      ]
+    }
+  ],
+  "meta_heuristics_fired": [
+    "threshold-proximity"
+  ],
+  "tags": {
+    "flavor": "codex",
+    "risk": "mixed",
+    "scope": "cross-org"
+  },
+  "verify": {
+    "verified_at": 1779889775,
+    "elapsed_seconds": null,
+    "outcome": "partial",
+    "phase_outcomes": {
+      "1": "passed",
+      "2": "passed",
+      "3": "passed"
+    },
+    "emergency_changes": null,
+    "surprises": "Idempotent re-verify: state identical to previous verify. All three phases still pass at code level; whole-set criteria that need an atlas-host run remain not-run because no atlas access happened between verifies. Working tree still uncommitted across seven files."
+  }
+}

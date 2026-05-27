@@ -28,3 +28,11 @@
 
 - [Cluster Network](./networking/cluster-network.md)
 - [Network Simulation](./networking/network-simulation.md)
+
+# Planning
+
+- [Headless Steam login](./planning/headless-steam-login/README.md)
+  - [Phase 01 — Virtiofsd lifecycle](./planning/headless-steam-login/01-virtiofsd-lifecycle.md)
+  - [Phase 02 — Parallel login + reuse](./planning/headless-steam-login/02-parallel-login-and-reuse.md)
+  - [Phase 03 — Docs refresh](./planning/headless-steam-login/03-docs-refresh.md)
+- [Headless Steam login — research](./planning/headless-steam-login-research.md)

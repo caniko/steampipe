@@ -81,6 +81,37 @@ Guard requires confirmation. After that, the persistent share preserves the
 client's machine-trust and refresh-token state across boots, so subsequent
 automated logins and health checks do not start from a new machine identity.
 
+Automated `steam login` runs every selected VM in parallel under the
+host-memory admission gate, and skips the VM bounce when a target is
+already up and reachable over SSH. `--force` re-logs every selected VM in
+place — it does **not** force a fresh boot. Interactive login (no
+credentials TOML) stays serial: VNC and prompt streams are one-at-a-time
+by construction.
+
+## Login VM lifecycle
+
+Login-class runners declare a writable virtiofs share for
+`/var/lib/steampipe/logins/vm-N` so Steam's client state lives on the host
+and survives `down`/`up`. `cluster-ctl` spawns the per-VM virtiofsd helper
+(`bin/virtiofsd-run` inside the runner farm) before booting the QEMU VM,
+waits for each declared `*-virtiofs-*.sock` to appear under the VM's state
+dir, and only then exec's `bin/microvm-run`. `cluster-ctl down` kills both
+children in order (virtiofsd first, then the VM) and removes the
+`<vm>.virtiofsd.pid` slot alongside the existing `<vm>.pid`.
+
+The operator user (`services.steampipe-cluster.tapOwner`) must be in the
+`kvm` group so virtiofsd's `--socket-group=kvm` chgrp call succeeds. The
+NixOS module emits a `nixos-rebuild` warning if it isn't. If the warning
+fires, add the user to `kvm`:
+
+```nix
+users.users."${tapOwner}".extraGroups = [ "kvm" ];
+```
+
+See
+[planning/headless-steam-login-research.md](../planning/headless-steam-login-research.md)
+for the root-cause analysis that motivated this lifecycle.
+
 ## Checking Steam health
 
 ```bash
