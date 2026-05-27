@@ -463,11 +463,29 @@ in {
 
     nixpkgs.overlays = lib.optional (steampipe != null) steampipe.overlays.default;
 
-    warnings =
+    warnings = let
+      tapOwnerUser =
+        lib.attrByPath ["users" "users" cfg.tapOwner] null config;
+      tapOwnerInKvm =
+        tapOwnerUser != null
+        && builtins.elem "kvm" (tapOwnerUser.extraGroups or []);
+      loginRunnersNeedKvm = cfg.loginRunners.enable && cfg.tapOwner != null;
+    in
       lib.optional (cfg.natInterface != null)
       "services.steampipe-cluster.natInterface is deprecated; NetworkManager shared mode manages NAT via the active default route."
       ++ lib.optional (cfg.tapOwner == null)
       "services.steampipe-cluster: tapOwner is not set; loginStateDir will be owned by root and the in-VM Steam user cannot write to it. Set tapOwner to a host user whose numeric UID matches the in-VM vm_user (default 1000)."
+      ++ lib.optional (loginRunnersNeedKvm && tapOwnerUser != null && !tapOwnerInKvm)
+      ''
+        services.steampipe-cluster.loginRunners.enable is true and tapOwner is "${cfg.tapOwner}",
+        but that user is not in the "kvm" group. `cluster-ctl steam login` starts the
+        login VM's virtiofsd helper with --socket-group=kvm; without kvm membership the
+        chgrp call fails and QEMU never finds the steam-state socket.
+
+        Add:
+            users.users."${cfg.tapOwner}".extraGroups = [ "kvm" ];
+        and re-run nixos-rebuild.
+      ''
       ++ lib.optional (cfg.loginRunners.enable && cfg.loginRunners.hypervisor == "crosvm")
       "services.steampipe-cluster.loginRunners.hypervisor = \"crosvm\" is deprecated and scheduled for removal in steampipe 0.4. crosvm + virgl + Vulkan crashes the guest VCPU on Steam GUI startup; switch to \"qemu\" (host-module classes run sway-headless + llvmpipe; no virgl needed)."
       ++ lib.optional (cfg.runners.enable && cfg.runners.hypervisor == "crosvm")

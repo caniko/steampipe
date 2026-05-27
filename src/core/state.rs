@@ -25,6 +25,25 @@ pub fn remove_pid(state_dir: &Path, vm_name: &str) {
     let _ = std::fs::remove_file(pid_file);
 }
 
+/// Read the virtiofsd helper PID for `vm_name`. None if no PID file or invalid.
+pub fn read_virtiofsd_pid(state_dir: &Path, vm_name: &str) -> Option<u32> {
+    let pid_file = state_dir.join(format!("{vm_name}.virtiofsd.pid"));
+    std::fs::read_to_string(pid_file).ok()?.trim().parse().ok()
+}
+
+/// Write the virtiofsd helper PID for `vm_name`.
+pub fn write_virtiofsd_pid(state_dir: &Path, vm_name: &str, pid: u32) -> anyhow::Result<()> {
+    let pid_file = state_dir.join(format!("{vm_name}.virtiofsd.pid"));
+    std::fs::write(pid_file, pid.to_string())?;
+    Ok(())
+}
+
+/// Remove the virtiofsd helper PID file.
+pub fn remove_virtiofsd_pid(state_dir: &Path, vm_name: &str) {
+    let pid_file = state_dir.join(format!("{vm_name}.virtiofsd.pid"));
+    let _ = std::fs::remove_file(pid_file);
+}
+
 /// Check if a process is alive by reading /proc/<pid>/status.
 pub fn is_pid_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
@@ -63,6 +82,25 @@ mod tests {
 
         remove_pid(&dir, "test-vm");
         assert_eq!(read_pid(&dir, "test-vm"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn virtiofsd_pid_roundtrip() {
+        let dir = std::env::temp_dir().join("steampipe-test-state-virtiofsd");
+        let _ = std::fs::create_dir_all(&dir);
+
+        write_virtiofsd_pid(&dir, "test-vm", 9999).unwrap();
+        assert_eq!(read_virtiofsd_pid(&dir, "test-vm"), Some(9999));
+        // Distinct slot from the microvm PID.
+        write_pid(&dir, "test-vm", 1111).unwrap();
+        assert_eq!(read_pid(&dir, "test-vm"), Some(1111));
+        assert_eq!(read_virtiofsd_pid(&dir, "test-vm"), Some(9999));
+
+        remove_virtiofsd_pid(&dir, "test-vm");
+        assert_eq!(read_virtiofsd_pid(&dir, "test-vm"), None);
+        assert_eq!(read_pid(&dir, "test-vm"), Some(1111));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
