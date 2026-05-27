@@ -546,6 +546,84 @@ fn parse_steam_identity(output: &str) -> (Option<String>, bool) {
     }
 }
 
+enum LoginLogMode {
+    Stdout,
+    Buffered,
+    Silent,
+}
+
+struct LoginLog {
+    mode: LoginLogMode,
+    lines: Vec<String>,
+}
+
+impl LoginLog {
+    fn stdout() -> Self {
+        Self {
+            mode: LoginLogMode::Stdout,
+            lines: Vec::new(),
+        }
+    }
+
+    fn buffered() -> Self {
+        Self {
+            mode: LoginLogMode::Buffered,
+            lines: Vec::new(),
+        }
+    }
+
+    fn silent() -> Self {
+        Self {
+            mode: LoginLogMode::Silent,
+            lines: Vec::new(),
+        }
+    }
+
+    fn blank(&mut self) {
+        self.line("");
+    }
+
+    fn line(&mut self, line: impl Into<String>) {
+        let line = line.into();
+        match self.mode {
+            LoginLogMode::Stdout => println!("{line}"),
+            LoginLogMode::Buffered => self.lines.push(line),
+            LoginLogMode::Silent => {}
+        }
+    }
+
+    fn into_output(self) -> String {
+        self.lines.join("\n")
+    }
+}
+
+enum LoginAttempt {
+    Skipped(String),
+    LoggedIn,
+    Failed(anyhow::Error),
+}
+
+struct LoginReport {
+    vm_index: u8,
+    vm_name: String,
+    output: String,
+    attempt: LoginAttempt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LoginBootAction {
+    ReuseRunning,
+    Restart,
+}
+
+fn login_boot_action(automated: bool, reachable: bool) -> LoginBootAction {
+    if automated && reachable {
+        LoginBootAction::ReuseRunning
+    } else {
+        LoginBootAction::Restart
+    }
+}
+
 /// Run the `steam login` subcommand: interactive per-instance Steam login wizard.
 /// Requires `BridgeReady` — boots instances to perform login.
 pub async fn login(
@@ -574,6 +652,41 @@ pub async fn login(
             None
         }
     };
+
+    if creds.is_some() {
+        let config = config.clone();
+        let login_runners_dir = login_runners_dir.to_path_buf();
+        let creds = creds.cloned();
+        let login_state_dir = login_state_dir.map(Path::to_path_buf);
+        let results = par_each_vm(&targets, move |vm| {
+            let config = config.clone();
+            let login_runners_dir = login_runners_dir.clone();
+            let creds = creds.clone();
+            let login_state_dir = login_state_dir.clone();
+            async move {
+                let mut log = LoginLog::buffered();
+                let attempt = login_vm_attempt(
+                    &config,
+                    &vm,
+                    &login_runners_dir,
+                    creds.as_ref(),
+                    login_state_dir.as_deref(),
+                    force,
+                    &mut log,
+                )
+                .await;
+                LoginReport {
+                    vm_index: vm.index,
+                    vm_name: vm.name.to_string(),
+                    output: log.into_output(),
+                    attempt,
+                }
+            }
+        })
+        .await?;
+
+        return finish_login_reports(results, targets.len());
+    }
 
     let mut failed = 0usize;
     let mut logged_in = 0usize;
@@ -607,7 +720,8 @@ pub async fn login(
         }
 
         let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
-        if let Err(e) = login_single_vm(config, vm, login_runners_dir, vm_creds).await {
+        let mut log = LoginLog::stdout();
+        if let Err(e) = login_single_vm(config, vm, login_runners_dir, vm_creds, &mut log).await {
             eprintln!("Error with {}: {e}", vm.name);
             failed += 1;
         } else {
@@ -617,6 +731,86 @@ pub async fn login(
     println!("==> Logged in: {logged_in}, Skipped: {skipped}, Failed: {failed}");
     if failed > 0 {
         anyhow::bail!("{failed}/{} Steam login target(s) failed", targets.len());
+    }
+    Ok(())
+}
+
+async fn login_vm_attempt(
+    config: &ClusterConfig<BridgeReady>,
+    vm: &VmDef,
+    login_runners_dir: &Path,
+    creds: Option<&CredentialsMap>,
+    login_state_dir: Option<&Path>,
+    force: bool,
+    log: &mut LoginLog,
+) -> LoginAttempt {
+    if !force {
+        if let Some(login_state_dir) = login_state_dir {
+            let vm_name = vm.name.to_string();
+            let status = accounts::classify_session_status(
+                login_state_dir,
+                &vm_name,
+                accounts::DEFAULT_WARN_WITHIN_DAYS,
+            );
+            if status == SessionStatus::Ok {
+                let info = accounts::read_account_info(
+                    login_state_dir,
+                    vm_name,
+                    None,
+                    accounts::DEFAULT_WARN_WITHIN_DAYS,
+                );
+                let persona = info.persona.as_deref().unwrap_or("unknown");
+                return LoginAttempt::Skipped(format!(
+                    "  {}: already logged in ({persona}), skipping (use --force to re-login)",
+                    vm.name
+                ));
+            }
+            log.line(format!(
+                "  {}: {}, logging in",
+                vm.name,
+                status.login_reason()
+            ));
+        }
+    }
+
+    let Some(vm_creds) = creds.and_then(|c| c.get::<str>(&vm.name)) else {
+        return LoginAttempt::Failed(anyhow::anyhow!(
+            "credentials for {} are required for parallel automated Steam login",
+            vm.name
+        ));
+    };
+    match login_single_vm_automated(config, vm, login_runners_dir, vm_creds, log).await {
+        Ok(()) => LoginAttempt::LoggedIn,
+        Err(e) => LoginAttempt::Failed(e),
+    }
+}
+
+fn finish_login_reports(mut results: Vec<LoginReport>, target_count: usize) -> anyhow::Result<()> {
+    results.sort_by_key(|result| result.vm_index);
+
+    let mut failed = 0usize;
+    let mut logged_in = 0usize;
+    let mut skipped = 0usize;
+    for result in results {
+        if !result.output.is_empty() {
+            println!("{}", result.output);
+        }
+        match result.attempt {
+            LoginAttempt::Skipped(reason) => {
+                println!("{reason}");
+                skipped += 1;
+            }
+            LoginAttempt::LoggedIn => logged_in += 1,
+            LoginAttempt::Failed(e) => {
+                eprintln!("Error with {}: {e}", result.vm_name);
+                failed += 1;
+            }
+        }
+    }
+
+    println!("==> Logged in: {logged_in}, Skipped: {skipped}, Failed: {failed}");
+    if failed > 0 {
+        anyhow::bail!("{failed}/{target_count} Steam login target(s) failed");
     }
     Ok(())
 }
@@ -660,6 +854,7 @@ pub async fn guard<S>(
                 "==> SteamCMD already completed for {}; resuming validation...",
                 vm.name
             );
+            let mut log = LoginLog::stdout();
             finish_steam_login(
                 backend,
                 vm,
@@ -667,6 +862,7 @@ pub async fn guard<S>(
                 &config.vm_user,
                 &config.state_dir,
                 &password_secrets,
+                &mut log,
             )
             .await?;
             shutdown_steam_login_vm(backend, config, vm).await;
@@ -727,6 +923,7 @@ pub async fn guard<S>(
             );
         }
     }
+    let mut log = LoginLog::stdout();
     finish_steam_login(
         backend,
         vm,
@@ -734,6 +931,7 @@ pub async fn guard<S>(
         &config.vm_user,
         &config.state_dir,
         &secrets,
+        &mut log,
     )
     .await?;
 
@@ -764,33 +962,38 @@ fn read_guard_code_from_stdin() -> anyhow::Result<String> {
     Ok(code.trim().to_owned())
 }
 
-async fn login_single_vm(
+async fn login_single_vm_automated(
     config: &ClusterConfig<BridgeReady>,
     vm: &VmDef,
     login_runners_dir: &Path,
-    creds: Option<&VmCredentials>,
+    creds: &VmCredentials,
+    log: &mut LoginLog,
 ) -> anyhow::Result<()> {
-    let automated = creds.is_some();
     let backend = &config.backend;
 
-    println!();
-    println!("══════════════════════════════════════════════════");
-    println!("  Steam login for {} ({})", vm.name, vm.ip);
-    if automated {
-        println!("  Mode: automated (credentials from TOML)");
-    } else {
-        println!("  Mode: interactive (VNC)");
-        println!("  Press Ctrl+C at any time to cancel and shut down the VM");
-    }
-    println!("══════════════════════════════════════════════════");
+    log.blank();
+    log.line("══════════════════════════════════════════════════");
+    log.line(format!("  Steam login for {} ({})", vm.name, vm.ip));
+    log.line("  Mode: automated (credentials from TOML)");
+    log.line("══════════════════════════════════════════════════");
 
-    backend.stop_instance(config, vm);
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let reachable = backend.is_reachable(&vm.ip).await;
+    let started_vm = match login_boot_action(true, reachable) {
+        LoginBootAction::ReuseRunning => {
+            log.line(format!("  {}: already up, skipping reboot", vm.name));
+            false
+        }
+        LoginBootAction::Restart => {
+            backend.stop_instance(config, vm);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
-    println!("  Booting VM...");
-    crate::core::admission::admit().await;
-    let pid = backend.start_instance(config, vm, login_runners_dir)?;
-    lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
+            log.line("  Booting VM...");
+            crate::core::admission::admit().await;
+            let pid = backend.start_instance(config, vm, login_runners_dir)?;
+            lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
+            true
+        }
+    };
 
     let config_for_cleanup = config.clone();
     let vm_for_cleanup = vm.clone();
@@ -801,31 +1004,37 @@ async fn login_single_vm(
         lease::remove_claim(vm_for_cleanup.index, &config_for_cleanup.lock_dir);
     };
 
-    print!("  Waiting for SSH... ");
-    if !backend.wait_ready(&vm.ip, LOGIN_SSH_TIMEOUT_SECS).await {
-        println!("timeout after {LOGIN_SSH_TIMEOUT_SECS}s");
-        print_vm_log_tail(&config.state_dir, vm);
-        cleanup();
-        anyhow::bail!("SSH timeout for {}", vm.name);
+    if started_vm {
+        if !backend.wait_ready(&vm.ip, LOGIN_SSH_TIMEOUT_SECS).await {
+            log.line(format!(
+                "  Waiting for SSH... timeout after {LOGIN_SSH_TIMEOUT_SECS}s"
+            ));
+            print_vm_log_tail(&config.state_dir, vm, log);
+            cleanup();
+            anyhow::bail!("SSH timeout for {}", vm.name);
+        }
+        log.line("  Waiting for SSH... ready");
     }
-    println!("ready");
 
-    let outcome = if let Some(creds) = creds {
-        // Automated login via SteamCMD state bootstrap + GUI validation.
-        automated_login(backend, vm, creds, &config.vm_user, &config.state_dir).await?
-    } else {
-        // Interactive VNC-based login (original flow)
-        interactive_login(backend, vm, &config.vm_user).await?
-    };
+    let outcome =
+        automated_login(backend, vm, creds, &config.vm_user, &config.state_dir, log).await?;
 
     if outcome == LoginOutcome::LeftRunning {
-        println!("  {} left running for Steam login completion.", vm.name);
-        println!("  After completing Steam login, validate with `cluster-ctl steam accounts`.");
-        println!("  Stop the login VM with `cluster-ctl down` when you are done.");
+        log.line(format!(
+            "  {} left running for Steam login completion.",
+            vm.name
+        ));
+        log.line("  After completing Steam login, validate with `cluster-ctl steam accounts`.");
+        log.line("  Stop the login VM with `cluster-ctl down` when you are done.");
         return Ok(());
     }
 
-    println!("  Shutting down Steam and VM...");
+    if !started_vm {
+        log.line(format!("  {} done.", vm.name));
+        return Ok(());
+    }
+
+    log.line("  Shutting down Steam and VM...");
     let _ = graceful_stop_steam(backend, &vm.ip, &config.vm_user).await;
     backend
         .run_cmd(
@@ -836,7 +1045,106 @@ async fn login_single_vm(
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     backend.stop_instance(config, vm);
     lease::remove_claim(vm.index, &config.lock_dir);
-    println!("  {} done.", vm.name);
+    log.line(format!("  {} done.", vm.name));
+
+    Ok(())
+}
+
+async fn login_single_vm(
+    config: &ClusterConfig<BridgeReady>,
+    vm: &VmDef,
+    login_runners_dir: &Path,
+    creds: Option<&VmCredentials>,
+    log: &mut LoginLog,
+) -> anyhow::Result<()> {
+    let automated = creds.is_some();
+    let backend = &config.backend;
+
+    log.blank();
+    log.line("══════════════════════════════════════════════════");
+    log.line(format!("  Steam login for {} ({})", vm.name, vm.ip));
+    if automated {
+        log.line("  Mode: automated (credentials from TOML)");
+    } else {
+        log.line("  Mode: interactive (VNC)");
+        log.line("  Press Ctrl+C at any time to cancel and shut down the VM");
+    }
+    log.line("══════════════════════════════════════════════════");
+
+    let reachable = automated && backend.is_reachable(&vm.ip).await;
+    let started_vm = match login_boot_action(automated, reachable) {
+        LoginBootAction::ReuseRunning => {
+            log.line(format!("  {}: already up, skipping reboot", vm.name));
+            false
+        }
+        LoginBootAction::Restart => {
+            backend.stop_instance(config, vm);
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+            log.line("  Booting VM...");
+            crate::core::admission::admit().await;
+            let pid = backend.start_instance(config, vm, login_runners_dir)?;
+            lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
+            true
+        }
+    };
+
+    let config_for_cleanup = config.clone();
+    let vm_for_cleanup = vm.clone();
+    let cleanup = move || {
+        config_for_cleanup
+            .backend
+            .stop_instance(&config_for_cleanup, &vm_for_cleanup);
+        lease::remove_claim(vm_for_cleanup.index, &config_for_cleanup.lock_dir);
+    };
+
+    if started_vm {
+        if !backend.wait_ready(&vm.ip, LOGIN_SSH_TIMEOUT_SECS).await {
+            log.line(format!(
+                "  Waiting for SSH... timeout after {LOGIN_SSH_TIMEOUT_SECS}s"
+            ));
+            print_vm_log_tail(&config.state_dir, vm, log);
+            cleanup();
+            anyhow::bail!("SSH timeout for {}", vm.name);
+        }
+        log.line("  Waiting for SSH... ready");
+    }
+
+    let outcome = if let Some(creds) = creds {
+        // Automated login via SteamCMD state bootstrap + GUI validation.
+        automated_login(backend, vm, creds, &config.vm_user, &config.state_dir, log).await?
+    } else {
+        // Interactive VNC-based login (original flow)
+        interactive_login(backend, vm, &config.vm_user).await?
+    };
+
+    if outcome == LoginOutcome::LeftRunning {
+        log.line(format!(
+            "  {} left running for Steam login completion.",
+            vm.name
+        ));
+        log.line("  After completing Steam login, validate with `cluster-ctl steam accounts`.");
+        log.line("  Stop the login VM with `cluster-ctl down` when you are done.");
+        return Ok(());
+    }
+
+    if !started_vm {
+        log.line(format!("  {} done.", vm.name));
+        return Ok(());
+    }
+
+    log.line("  Shutting down Steam and VM...");
+    let _ = graceful_stop_steam(backend, &vm.ip, &config.vm_user).await;
+    backend
+        .run_cmd(
+            &vm.ip,
+            "pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
+        )
+        .await;
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    backend.stop_instance(config, vm);
+    lease::remove_claim(vm.index, &config.lock_dir);
+    log.line(format!("  {} done.", vm.name));
 
     Ok(())
 }
@@ -849,34 +1157,34 @@ pub fn vm_log_tail(state_dir: &Path, vm: &VmDef) -> Option<String> {
     Some(vm_log_tail_lines(&log).join("\n"))
 }
 
-fn print_vm_log_tail(state_dir: &Path, vm: &VmDef) {
+fn print_vm_log_tail(state_dir: &Path, vm: &VmDef, log: &mut LoginLog) {
     let path = microvm_log_path(state_dir, vm);
-    let log = match read_vm_log_lossy(&path) {
-        Ok(log) => log,
+    let tail_log = match read_vm_log_lossy(&path) {
+        Ok(tail_log) => tail_log,
         Err(err) => {
             if err.kind() == ErrorKind::NotFound {
-                println!(
+                log.line(format!(
                     "  VM log unavailable: {} (log file does not exist; backend may not have started the VM)",
                     path.display()
-                );
+                ));
             } else {
-                println!("  VM log unavailable: {} ({err})", path.display());
+                log.line(format!("  VM log unavailable: {} ({err})", path.display()));
             }
             return;
         }
     };
-    let tail = vm_log_tail_lines(&log).join("\n");
+    let tail = vm_log_tail_lines(&tail_log).join("\n");
     if tail.is_empty() {
-        println!(
+        log.line(format!(
             "  VM log unavailable: {} (log file is empty)",
             path.display()
-        );
+        ));
     } else {
-        println!("  --- {} tail ---", path.display());
+        log.line(format!("  --- {} tail ---", path.display()));
         for line in tail.lines() {
-            println!("  {line}");
+            log.line(format!("  {line}"));
         }
-        println!("  --- end VM log tail ---");
+        log.line("  --- end VM log tail ---");
     }
 }
 
@@ -926,7 +1234,8 @@ pub async fn auto_login<S>(
             let Some(vm_creds) = creds.get::<str>(&vm.name) else {
                 return (vm.name, None);
             };
-            match automated_login(&backend, &vm, vm_creds, &vm_user, &state_dir).await {
+            let mut log = LoginLog::silent();
+            match automated_login(&backend, &vm, vm_creds, &vm_user, &state_dir, &mut log).await {
                 Ok(LoginOutcome::Completed) => (vm.name, Some(true)),
                 Ok(LoginOutcome::LeftRunning) => {
                     eprintln!(
@@ -983,9 +1292,10 @@ async fn automated_login(
     creds: &VmCredentials,
     vm_user: &str,
     state_dir: &Path,
+    log: &mut LoginLog,
 ) -> anyhow::Result<LoginOutcome> {
-    println!("  Logging in as {}...", creds.steam_user);
-    println!("  Starting SteamCMD bootstrap session...");
+    log.line(format!("  Logging in as {}...", creds.steam_user));
+    log.line("  Starting SteamCMD bootstrap session...");
 
     let steamcmd = steamcmd_bootstrap_command(vm_user, &creds.steam_user, &creds.steam_pass);
     let started = backend.run_cmd(&vm.ip, &steamcmd).await;
@@ -1010,19 +1320,28 @@ async fn automated_login(
     let wait =
         wait_for_steamcmd_bootstrap(backend, vm, vm_user, state_dir, &[&creds.steam_pass]).await?;
     if wait == SteamCmdWait::GuardRequired {
-        println!("  Steam Guard required for {}.", creds.steam_user);
-        println!(
+        log.line(format!("  Steam Guard required for {}.", creds.steam_user));
+        log.line(format!(
             "  Complete from another shell with: cluster-ctl steam guard {} --code <CODE>",
             vm.name
-        );
-        println!(
+        ));
+        log.line(format!(
             "  Or use the project wrapper: nix run .#cluster-steam-guard -- {} --credentials <credentials.toml> --code <CODE>",
             vm.name
-        );
+        ));
         return Ok(LoginOutcome::LeftRunning);
     }
 
-    finish_steam_login(backend, vm, creds, vm_user, state_dir, &[&creds.steam_pass]).await?;
+    finish_steam_login(
+        backend,
+        vm,
+        creds,
+        vm_user,
+        state_dir,
+        &[&creds.steam_pass],
+        log,
+    )
+    .await?;
     Ok(LoginOutcome::Completed)
 }
 
@@ -1237,8 +1556,9 @@ async fn finish_steam_login(
     vm_user: &str,
     state_dir: &Path,
     secrets: &[&str],
+    log: &mut LoginLog,
 ) -> anyhow::Result<()> {
-    println!("  Syncing SteamCMD login state into Steam GUI profile...");
+    log.line("  Syncing SteamCMD login state into Steam GUI profile...");
     let sync = backend
         .run_cmd(&vm.ip, &steamcmd_state_sync_script(vm_user))
         .await;
@@ -1260,7 +1580,7 @@ async fn finish_steam_login(
         );
     }
 
-    println!("  Starting Steam GUI for session validation...");
+    log.line("  Starting Steam GUI for session validation...");
     let validate = backend
         .run_cmd(
             &vm.ip,
@@ -1285,10 +1605,10 @@ async fn finish_steam_login(
             stderr
         );
     }
-    println!("  Login successful");
+    log.line("  Login successful");
 
     if let Some(key) = &creds.game_key {
-        println!("  Activating game key...");
+        log.line("  Activating game key...");
         let escaped_key = shell_escape(key);
         let activate_cmd = format!(
             r#"steam steam://registerkey/{escaped_key} &
@@ -1296,10 +1616,10 @@ sleep 10
 echo KEY_SUBMITTED"#,
         );
         let key_result = backend.run_cmd(&vm.ip, &activate_cmd).await;
-        println!(
+        log.line(format!(
             "  Game key activation submitted ({})",
             key_result.stdout.trim()
-        );
+        ));
     }
 
     Ok(())
@@ -1903,6 +2223,25 @@ mod tests {
         assert!(!steam_login_succeeded("STEAM_LOGIN_TIMEOUT"));
         assert!(!steam_login_succeeded("NOT_STEAM_LOGIN_OK"));
     }
+
+    #[test]
+    fn steam_login_automated_reachable_vm_skips_bounce() {
+        assert_eq!(login_boot_action(true, true), LoginBootAction::ReuseRunning);
+    }
+
+    #[test]
+    fn steam_login_automated_unreachable_vm_bounces() {
+        assert_eq!(login_boot_action(true, false), LoginBootAction::Restart);
+    }
+
+    #[test]
+    fn steam_login_interactive_reachable_vm_still_bounces() {
+        assert_eq!(login_boot_action(false, true), LoginBootAction::Restart);
+    }
+
+    #[test]
+    #[ignore = "documents real-backend login ordering; run against atlas with cluster-ctl steam login all"]
+    fn steam_login_parallel_output_is_ordered_by_vm_index_smoke() {}
 
     #[test]
     fn steamcmd_sync_succeeded_requires_exact_marker_line() {
