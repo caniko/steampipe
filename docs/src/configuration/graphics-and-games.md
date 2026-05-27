@@ -31,8 +31,9 @@ screencopy.
 
 This is intentional after the 2026-05-26 hypervisor restructure. The QEMU
 virgl/Venus stack proved unstable on AMD Mesa under real Steam GUI load; the
-probe is recorded in
-[Phase 01's results](../planning/hypervisor-restructure/01-validate-qemu-virgl-on-atlas-results.md).
+probe rejected `-display none` with GL devices before guest boot, and the
+`egl-headless` Venus fallback segfaulted QEMU when the next render workload
+started.
 Removing the graphics device from host-module classes removes that crash
 surface.
 
@@ -67,9 +68,7 @@ with kernel >= 6.13 and glibc >= 2.40.
 
 crosvm + virgl + Vulkan is empirically brittle under sustained load. The
 original vm-2 incident on 2026-05-26 failed with `vcpu hit unknown error: Bad
-address` 79 ms after Steam reached for `GLSL feature level 430`; the evidence
-is summarized in the
-[hypervisor research dossier](../planning/hypervisor-restructure-research.md).
+address` 79 ms after Steam reached for `GLSL feature level 430`.
 
 For card-game-class workloads, such as lightweight 2D scenes, UI fixtures, and
 small visual tests, the crosvm path is usable. For heavy 3D or sustained Vulkan
@@ -112,8 +111,5 @@ There are three current options, none ideal:
 
 ## See also
 
-- [Hypervisor + compositor design](../planning/hypervisor-restructure-design.md)
-- [Hypervisor + compositor research](../planning/hypervisor-restructure-research.md)
 - [VM resources](./vm-resources.md)
 - [Visual testing](./visual-testing.md)
-- [Phase 01 QEMU virgl probe results](../planning/hypervisor-restructure/01-validate-qemu-virgl-on-atlas-results.md)

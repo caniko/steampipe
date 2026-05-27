@@ -37,17 +37,16 @@ gitignored by default. The two files you care about:
 
 - `summary.md` — human-readable verdict + per-step status.
 - `verdict.json` — machine-readable, includes `leased_vm` plus a pointer to
-  the relevant `docs/src/planning/vnc-visual-testing/NN-*.md` for whichever
-  bucket tripped.
+  the relevant stable docs section for whichever bucket tripped.
 
 ## Verdicts
 
 | Verdict | Exit | Meaning |
 |---|---|---|
 | `GREEN` | 0 | Everything works. |
-| `VNC_CLIENT_BUG` | 11 | grim matches golden, VNC does not → vnc-visual-testing Phase A. |
-| `COMPOSITOR_NOT_READY` | 12 | Sway not painted or workload window absent → Phase B. |
-| `GPU_BROKEN` | 13 | DRI / virtio_gpu / Vulkan / vkcube failed → Phase C. |
+| `VNC_CLIENT_BUG` | 11 | grim matches golden, VNC does not; inspect the VNC capture path. |
+| `COMPOSITOR_NOT_READY` | 12 | Sway not painted or workload window absent. |
+| `GPU_BROKEN` | 13 | DRI / virtio_gpu / Vulkan / vkcube failed. |
 | `COMPOSITOR_REGRESSION` | 14 | Both captures diverge from golden — workload or compositor changed. |
 | `MIXED` | 15 | Multiple categories tripped; see step results. |
 | `WAYVNC_LOG_WARN` | 16 | Everything else OK, but wayvnc.log shows a known error signature. |
@@ -65,7 +64,7 @@ actually reachable. To verify on a healthy fixture:
 | `GPU_BROKEN` | (Inside VM) `sudo modprobe -r virtio_gpu` — note this may freeze sway. |
 | `NO_GOLDEN` | Remove `tests/fixture/golden/foot-banner-1280x720.png` and re-run. |
 | `COMPOSITOR_REGRESSION` | Replace the golden PNG with an unrelated image. |
-| `VNC_CLIENT_BUG` | Hardest to provoke artificially; this is the bucket the visual-testing plan exists to *eliminate*. |
+| `VNC_CLIENT_BUG` | Hardest to provoke artificially; compare the `03-grim.*` and `04-vnc.*` artifacts to isolate capture-side drift. |
 
 ## Steps
 

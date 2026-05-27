@@ -93,5 +93,4 @@ continues without throttling. The gate is defense in depth, not a hard ceiling.
 ## See Also
 
 - [VM lifecycle](./vm-lifecycle.md)
-- [Hypervisor + compositor design](../planning/hypervisor-restructure-design.md)
-- [Hypervisor + compositor research](../planning/hypervisor-restructure-research.md)
+- [Graphics and games inside VMs](./graphics-and-games.md)

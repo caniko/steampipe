@@ -22,12 +22,12 @@ VERDICTS = {
 }
 
 PHASE_MAPPING = {
-    "VNC_CLIENT_BUG":        "docs/src/planning/vnc-visual-testing/01-vnc-client-correctness.md",
-    "COMPOSITOR_NOT_READY":  "docs/src/planning/vnc-visual-testing/02-compositor-readiness.md",
-    "GPU_BROKEN":            "docs/src/planning/vnc-visual-testing/03-gpu-vulkan-preflight.md",
-    "COMPOSITOR_REGRESSION": "docs/src/planning/in-tree-test-bed/03-golden-image-library.md",
-    "WAYVNC_LOG_WARN":       "docs/src/planning/vnc-visual-testing/02-compositor-readiness.md",
-    "NO_GOLDEN":             "docs/src/planning/in-tree-test-bed/03-golden-image-library.md",
+    "VNC_CLIENT_BUG":        "docs/src/testing/fixture-diagnostics.md#verdicts",
+    "COMPOSITOR_NOT_READY":  "docs/src/testing/fixture-diagnostics.md#verdicts",
+    "GPU_BROKEN":            "docs/src/testing/fixture-diagnostics.md#verdicts",
+    "COMPOSITOR_REGRESSION": "docs/src/testing/fixture-diagnostics.md#verdicts",
+    "WAYVNC_LOG_WARN":       "docs/src/testing/fixture-diagnostics.md#verdicts",
+    "NO_GOLDEN":             "docs/src/testing/fixture-diagnostics.md#verdicts",
 }
 
 # Status codes per step

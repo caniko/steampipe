@@ -58,10 +58,6 @@ not supported.
 - Hyprland's resident memory footprint is notably larger than sway's, fighting
   the per-VM memory budget the cluster targets.
 
-See [hypervisor-restructure-design.md](../planning/hypervisor-restructure-design.md)
-("Compositor — Final Stance") and the research dossier adjacent for the full
-evaluation.
-
 Fixture golden regeneration (`scripts/regenerate.sh` →
 `cluster-ctl fixture golden regenerate`) brings up the **default** fixture
 flavor, which is crosvm + sway; regenerating against any other flavor is

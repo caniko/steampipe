@@ -35,9 +35,8 @@ udp_port = 27100
 # Cluster identity (for multi-cluster setups)
 [cluster]
 name = "default"
-hypervisor = "crosvm"              # default; cloud-hypervisor / qemu /
-                                   # firecracker / stratovirt are experimental
-graphics = true                    # virtio-gpu (mesa/DRI in guest)
+graphics = true                    # qemu default; false selects cloud-hypervisor
+hypervisor = "crosvm"              # optional deprecated graphical escape hatch
 
 # Per-VM resource overrides
 [[vm]]

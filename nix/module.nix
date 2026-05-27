@@ -387,7 +387,7 @@ in {
         message = ''
           services.steampipe-cluster.loginRunners.hypervisor must be one
           of "qemu" (default, supported), "crosvm" (deprecated; see
-          docs/src/planning/hypervisor-restructure-design.md), or
+          docs/src/configuration/graphics-and-games.md), or
           "cloud-hypervisor".
         '';
       }
