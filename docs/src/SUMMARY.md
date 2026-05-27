@@ -21,6 +21,7 @@
 
 - [E2E Tests](./testing/e2e-tests.md)
 - [Test History](./testing/history.md)
+- [Measuring build memory](./testing/build-memory.md)
 
 # Networking
 
@@ -57,8 +58,3 @@
 - [10 — drop CHV-graphics override + overlay marker](./planning/hypervisor-restructure/10-drop-crosvm-overlays.md)
 - [11 — document graphics-and-games](./planning/hypervisor-restructure/11-document-graphics-and-games.md)
 
-# Plan: build-optimization-via-rs-harbor
-
-- [Overview](./planning/build-optimization-via-rs-harbor/README.md)
-- [01 — rs-harbor dev-profile flag](./planning/build-optimization-via-rs-harbor/01-rs-harbor-dev-profile.md)
-- [02 — steampipe integrate + tune](./planning/build-optimization-via-rs-harbor/02-steampipe-integrate-and-tune.md)
