@@ -25,21 +25,41 @@ pub fn remove_pid(state_dir: &Path, vm_name: &str) {
     let _ = std::fs::remove_file(pid_file);
 }
 
-/// Read the virtiofsd helper PID for `vm_name`. None if no PID file or invalid.
-pub fn read_virtiofsd_pid(state_dir: &Path, vm_name: &str) -> Option<u32> {
+/// Read the virtiofsd helper PIDs for `vm_name`.
+///
+/// The file may contain one PID per line: the supervisord-bypass code in
+/// `microvm_start` spawns each `[program:*]` from the per-VM supervisord
+/// conf separately and appends every child PID here, so `microvm_stop`
+/// can reap them all. Returns an empty Vec if the file is absent or
+/// contains no parseable PIDs.
+pub fn read_virtiofsd_pids(state_dir: &Path, vm_name: &str) -> Vec<u32> {
     let pid_file = state_dir.join(format!("{vm_name}.virtiofsd.pid"));
-    std::fs::read_to_string(pid_file).ok()?.trim().parse().ok()
+    let Ok(contents) = std::fs::read_to_string(pid_file) else {
+        return Vec::new();
+    };
+    contents
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
 }
 
-/// Write the virtiofsd helper PID for `vm_name`.
-pub fn write_virtiofsd_pid(state_dir: &Path, vm_name: &str, pid: u32) -> anyhow::Result<()> {
+/// Write the virtiofsd helper PIDs for `vm_name`, one per line.
+pub fn write_virtiofsd_pids(
+    state_dir: &Path,
+    vm_name: &str,
+    pids: &[u32],
+) -> anyhow::Result<()> {
     let pid_file = state_dir.join(format!("{vm_name}.virtiofsd.pid"));
-    std::fs::write(pid_file, pid.to_string())?;
+    let body: String = pids
+        .iter()
+        .map(|pid| format!("{pid}\n"))
+        .collect();
+    std::fs::write(pid_file, body)?;
     Ok(())
 }
 
 /// Remove the virtiofsd helper PID file.
-pub fn remove_virtiofsd_pid(state_dir: &Path, vm_name: &str) {
+pub fn remove_virtiofsd_pids(state_dir: &Path, vm_name: &str) {
     let pid_file = state_dir.join(format!("{vm_name}.virtiofsd.pid"));
     let _ = std::fs::remove_file(pid_file);
 }
@@ -87,21 +107,32 @@ mod tests {
     }
 
     #[test]
-    fn virtiofsd_pid_roundtrip() {
+    fn virtiofsd_pids_roundtrip() {
         let dir = std::env::temp_dir().join("steampipe-test-state-virtiofsd");
         let _ = std::fs::create_dir_all(&dir);
 
-        write_virtiofsd_pid(&dir, "test-vm", 9999).unwrap();
-        assert_eq!(read_virtiofsd_pid(&dir, "test-vm"), Some(9999));
+        write_virtiofsd_pids(&dir, "test-vm", &[9999, 9998]).unwrap();
+        assert_eq!(read_virtiofsd_pids(&dir, "test-vm"), vec![9999, 9998]);
         // Distinct slot from the microvm PID.
         write_pid(&dir, "test-vm", 1111).unwrap();
         assert_eq!(read_pid(&dir, "test-vm"), Some(1111));
-        assert_eq!(read_virtiofsd_pid(&dir, "test-vm"), Some(9999));
+        assert_eq!(read_virtiofsd_pids(&dir, "test-vm"), vec![9999, 9998]);
 
-        remove_virtiofsd_pid(&dir, "test-vm");
-        assert_eq!(read_virtiofsd_pid(&dir, "test-vm"), None);
+        remove_virtiofsd_pids(&dir, "test-vm");
+        assert!(read_virtiofsd_pids(&dir, "test-vm").is_empty());
         assert_eq!(read_pid(&dir, "test-vm"), Some(1111));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn virtiofsd_pids_handles_single_line_legacy_format() {
+        // Pre-bypass code wrote one PID per VM. The new reader must accept
+        // that shape too so cluster-ctl can clean up after an upgrade.
+        let dir = std::env::temp_dir().join("steampipe-test-state-virtiofsd-legacy");
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(dir.join("legacy-vm.virtiofsd.pid"), "4242").unwrap();
+        assert_eq!(read_virtiofsd_pids(&dir, "legacy-vm"), vec![4242]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

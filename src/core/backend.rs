@@ -259,43 +259,78 @@ fn microvm_start(
     // microvm.nix login runners declare a writable steam-state share via
     // virtiofs. The host-side virtiofsd never runs unless we start it: QEMU
     // opens `-chardev socket,…` eagerly and aborts if the socket is missing.
-    // Spawn `bin/virtiofsd-run` (when present) in the same cwd/env as the VM
-    // runner, wait for every declared socket to appear, and only then exec
-    // the VM. Runners with no virtiofs share (regular non-login runners)
-    // skip this path entirely.
+    //
+    // The generated `bin/virtiofsd-run` is a `supervisord` wrapper whose
+    // config has `[supervisord] user=root` baked in — supervisord refuses
+    // to start as a non-root user, so executing the wrapper as the operator
+    // fails before any virtiofsd is launched. Parse the wrapper to recover
+    // its supervisord conf and spawn each `[program:*]` directly, skipping
+    // supervisord entirely. cluster-ctl already owns the lifecycle (PIDs,
+    // group kill, cleanup), so the supervisor layer is dead weight here.
+    // Runners with no virtiofs share (regular non-login runners) skip this
+    // path entirely.
     let virtiofsd_runner = virtiofsd_runner_path(runners_dir, vm);
-    let virtiofsd_pid = if virtiofsd_runner.exists() {
+    let virtiofsd_pids = if virtiofsd_runner.exists() {
         let expected_sockets = virtiofs_socket_names(&runner).unwrap_or_default();
-        let virtiofsd_log =
-            std::fs::File::create(virtiofsd_log_path(&config.state_dir, vm))?;
-        let mut virtiofsd_cmd = std::process::Command::new(&virtiofsd_runner);
-        virtiofsd_cmd
-            .current_dir(&vm_dir)
-            .env("XDG_RUNTIME_DIR", &runtime_dir)
-            .stdin(Stdio::null())
-            .stdout(virtiofsd_log.try_clone()?)
-            .stderr(virtiofsd_log);
-        #[cfg(unix)]
-        virtiofsd_cmd.process_group(0);
-        let virtiofsd_child = virtiofsd_cmd.spawn().map_err(|err| {
-            anyhow::anyhow!("failed to spawn {}: {err}", virtiofsd_runner.display())
+        let programs = virtiofsd_program_commands(&virtiofsd_runner).map_err(|err| {
+            err.context(format!(
+                "failed to extract virtiofsd programs from {}",
+                virtiofsd_runner.display()
+            ))
         })?;
-        let virtiofsd_pid = virtiofsd_child.id();
-        state::write_virtiofsd_pid(&config.state_dir, &vm.name, virtiofsd_pid)?;
+        if programs.is_empty() {
+            anyhow::bail!(
+                "virtiofsd-run wrapper {} declared no [program:*] entries; \
+                 cannot start virtiofsd",
+                virtiofsd_runner.display()
+            );
+        }
+
+        let virtiofsd_log_path = virtiofsd_log_path(&config.state_dir, vm);
+        let virtiofsd_log = std::fs::File::create(&virtiofsd_log_path)?;
+        let mut pids: Vec<u32> = Vec::with_capacity(programs.len());
+        for program in &programs {
+            let mut cmd = std::process::Command::new(program);
+            cmd.current_dir(&vm_dir)
+                .env("XDG_RUNTIME_DIR", &runtime_dir)
+                .stdin(Stdio::null())
+                .stdout(virtiofsd_log.try_clone()?)
+                .stderr(virtiofsd_log.try_clone()?);
+            #[cfg(unix)]
+            cmd.process_group(0);
+            match cmd.spawn() {
+                Ok(child) => pids.push(child.id()),
+                Err(err) => {
+                    for pid in &pids {
+                        kill_pid_graceful(*pid);
+                    }
+                    state::remove_virtiofsd_pids(&config.state_dir, &vm.name);
+                    return Err(anyhow::anyhow!(
+                        "failed to spawn virtiofsd program {}: {err}",
+                        program.display()
+                    ));
+                }
+            }
+        }
+        state::write_virtiofsd_pids(&config.state_dir, &vm.name, &pids)?;
 
         if let Err(err) = wait_for_virtiofs_sockets(&vm_dir, &expected_sockets) {
-            kill_pid_graceful(virtiofsd_pid);
-            state::remove_virtiofsd_pid(&config.state_dir, &vm.name);
+            for pid in &pids {
+                kill_pid_graceful(*pid);
+            }
+            state::remove_virtiofsd_pids(&config.state_dir, &vm.name);
+            let log_tail = tail_log(&virtiofsd_log_path, 4);
             return Err(err.context(format!(
-                "virtiofsd-run for {} never produced its sockets — \
-                 if the log shows EPERM/chgrp errors, add the operator user \
-                 to the kvm group (see docs/src/configuration/steam-credentials.md)",
+                "virtiofsd for {} never produced its sockets. \
+                 virtiofsd.log tail:\n{log_tail}\n\
+                 If the log shows EPERM/chgrp errors, add the operator user \
+                 to the kvm group (see docs/src/configuration/steam-credentials.md).",
                 vm.name
             )));
         }
-        Some(virtiofsd_pid)
+        pids
     } else {
-        None
+        Vec::new()
     };
 
     let mut command = std::process::Command::new(&runner);
@@ -314,9 +349,11 @@ fn microvm_start(
     let child = match command.spawn() {
         Ok(child) => child,
         Err(err) => {
-            if let Some(pid) = virtiofsd_pid {
-                kill_pid_graceful(pid);
-                state::remove_virtiofsd_pid(&config.state_dir, &vm.name);
+            for pid in &virtiofsd_pids {
+                kill_pid_graceful(*pid);
+            }
+            if !virtiofsd_pids.is_empty() {
+                state::remove_virtiofsd_pids(&config.state_dir, &vm.name);
             }
             return Err(err.into());
         }
@@ -328,16 +365,17 @@ fn microvm_start(
 }
 
 fn microvm_stop<S>(config: &ClusterConfig<S>, vm: &VmDef) {
-    // Kill the recorded virtiofsd PID *first* so QEMU's chardev disconnect
+    // Kill the recorded virtiofsd PIDs *first* so QEMU's chardev disconnect
     // happens cleanly. The microvm-run argv contains the per-VM tag we can
     // pkill, but the virtiofsd argv has no comparable per-VM fingerprint
-    // beyond the share name, so we must rely on the recorded PID.
-    if let Some(virtiofsd_pid) = state::read_virtiofsd_pid(&config.state_dir, &vm.name)
-        && state::is_pid_alive(virtiofsd_pid)
-    {
-        kill_pid_graceful(virtiofsd_pid);
+    // beyond the share name, so we must rely on the recorded PIDs. There
+    // may be more than one program per VM (one per virtiofs share).
+    for pid in state::read_virtiofsd_pids(&config.state_dir, &vm.name) {
+        if state::is_pid_alive(pid) {
+            kill_pid_graceful(pid);
+        }
     }
-    state::remove_virtiofsd_pid(&config.state_dir, &vm.name);
+    state::remove_virtiofsd_pids(&config.state_dir, &vm.name);
 
     if let Some(pid) = state::read_pid(&config.state_dir, &vm.name)
         && state::is_pid_alive(pid)
@@ -383,6 +421,94 @@ fn virtiofsd_runner_path(runners_dir: &Path, vm: &VmDef) -> PathBuf {
 
 fn virtiofsd_log_path(state_dir: &Path, vm: &VmDef) -> PathBuf {
     microvm_state_dir(state_dir, vm).join("virtiofsd.log")
+}
+
+/// Resolve the `[program:*]` command paths the per-VM `bin/virtiofsd-run`
+/// wrapper would launch under supervisord.
+///
+/// The wrapper is a one-liner `exec supervisord --configuration <conf>`;
+/// the conf declares one or more `[program:*]` sections, each with a
+/// `command=<binary>` pointing at the actual virtiofsd-wrapping script
+/// generated by microvm.nix. We bypass supervisord because its config
+/// pins `user=root` and refuses to run as the operator user.
+fn virtiofsd_program_commands(virtiofsd_run: &Path) -> anyhow::Result<Vec<PathBuf>> {
+    let wrapper = std::fs::read_to_string(virtiofsd_run)?;
+    let conf_path = parse_supervisord_conf_path(&wrapper).ok_or_else(|| {
+        anyhow::anyhow!(
+            "could not find --configuration <path> in {}",
+            virtiofsd_run.display()
+        )
+    })?;
+    let conf = std::fs::read_to_string(&conf_path)?;
+    Ok(parse_supervisord_program_commands(&conf))
+}
+
+/// Extract the `--configuration <path>` argument from a `virtiofsd-run`
+/// shell wrapper. The wrapper microvm.nix generates uses
+/// `--configuration <path>` (one-word flag, space-separated value); some
+/// supervisord wrappers use `--configuration=<path>` form, support both.
+fn parse_supervisord_conf_path(wrapper: &str) -> Option<PathBuf> {
+    let mut tokens = wrapper.split_whitespace().peekable();
+    while let Some(tok) = tokens.next() {
+        if let Some(rest) = tok.strip_prefix("--configuration=") {
+            return Some(PathBuf::from(rest));
+        }
+        if tok == "--configuration" || tok == "-c" {
+            if let Some(value) = tokens.next() {
+                return Some(PathBuf::from(value));
+            }
+        }
+    }
+    None
+}
+
+/// Extract every `command=<path>` value found in a `[program:*]` block of
+/// a supervisord INI config. `[eventlistener:*]` blocks are intentionally
+/// skipped — they only exist to call `systemd-notify --ready`, which is
+/// meaningless outside a systemd unit.
+fn parse_supervisord_program_commands(conf: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut in_program = false;
+    for raw in conf.lines() {
+        let line = raw.trim();
+        if let Some(section) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            in_program = section.starts_with("program:");
+            continue;
+        }
+        if !in_program {
+            continue;
+        }
+        if let Some(value) = line.strip_prefix("command=") {
+            let first = value
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .trim();
+            if !first.is_empty() {
+                out.push(PathBuf::from(first));
+            }
+        }
+    }
+    out
+}
+
+/// Read up to the last `n` non-empty lines of a log file for inclusion
+/// in error messages. Best-effort: missing/unreadable files return a
+/// placeholder rather than failing the caller.
+fn tail_log(path: &Path, n: usize) -> String {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return format!("(no log at {})", path.display());
+    };
+    let lines: Vec<&str> = contents.lines().filter(|l| !l.trim().is_empty()).collect();
+    if lines.is_empty() {
+        return format!("(log {} is empty)", path.display());
+    }
+    let start = lines.len().saturating_sub(n);
+    lines[start..]
+        .iter()
+        .map(|line| format!("  {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Parse the per-VM virtiofs socket filenames declared in `microvm-run`.
@@ -785,6 +911,93 @@ mod tests {
     }
 
     #[test]
+    fn parse_supervisord_conf_path_extracts_space_separated_value() {
+        let wrapper = "#!/nix/store/.../bin/bash\n\
+            exec /nix/store/.../supervisord \
+            --configuration /nix/store/abcd-vm-1-virtiofsd-supervisord.conf\n";
+        let parsed = super::parse_supervisord_conf_path(wrapper);
+        assert_eq!(
+            parsed,
+            Some(std::path::PathBuf::from(
+                "/nix/store/abcd-vm-1-virtiofsd-supervisord.conf"
+            ))
+        );
+    }
+
+    #[test]
+    fn parse_supervisord_conf_path_extracts_equals_value() {
+        let wrapper = "exec supervisord --configuration=/foo/bar.conf";
+        assert_eq!(
+            super::parse_supervisord_conf_path(wrapper),
+            Some(std::path::PathBuf::from("/foo/bar.conf"))
+        );
+    }
+
+    #[test]
+    fn parse_supervisord_program_commands_extracts_program_commands_only() {
+        // The eventlistener block must be skipped: it calls systemd-notify
+        // and is meaningless outside a systemd unit.
+        let conf = r#"
+[eventlistener:notify]
+command=/nix/store/aaa-supervisord-event-handler
+events=PROCESS_STATE
+
+[program:virtiofsd-steampipe-ssh-authorized]
+command=/nix/store/bbb-virtiofsd-steampipe-ssh-authorized
+stderr_syslog=true
+stdout_syslog=true
+
+[program:virtiofsd-steam-state-vm-1]
+command=/nix/store/ccc-virtiofsd-steam-state-vm-1
+
+[supervisord]
+nodaemon=true
+user=root
+"#;
+        let cmds = super::parse_supervisord_program_commands(conf);
+        assert_eq!(
+            cmds,
+            vec![
+                std::path::PathBuf::from("/nix/store/bbb-virtiofsd-steampipe-ssh-authorized"),
+                std::path::PathBuf::from("/nix/store/ccc-virtiofsd-steam-state-vm-1"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_supervisord_program_commands_returns_empty_when_no_programs() {
+        let conf = "[supervisord]\nnodaemon=true\nuser=root\n";
+        assert!(super::parse_supervisord_program_commands(conf).is_empty());
+    }
+
+    #[test]
+    fn tail_log_returns_last_n_nonempty_lines() {
+        let dir = std::env::temp_dir().join(format!(
+            "steampipe-tail-log-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("v.log");
+        std::fs::write(&log, "first\n\nsecond\nthird\nfourth\n").unwrap();
+        let tail = super::tail_log(&log, 2);
+        assert!(tail.contains("third"));
+        assert!(tail.contains("fourth"));
+        assert!(!tail.contains("second"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tail_log_returns_placeholder_for_missing_file() {
+        let missing = std::env::temp_dir().join(format!(
+            "steampipe-tail-log-missing-{}",
+            std::process::id()
+        ));
+        let tail = super::tail_log(&missing, 4);
+        assert!(tail.contains("no log at"));
+    }
+
+    #[test]
     fn parse_virtiofs_socket_names_extracts_qemu_chardev_paths() {
         // Trimmed QEMU command line from a real login runner.
         let runner = r#"
@@ -978,7 +1191,7 @@ mod tests {
             .spawn()
             .expect("spawn fake virtiofsd-run");
         let virtiofsd_pid = virtiofsd_child.id();
-        state::write_virtiofsd_pid(&state_dir, &vm.name, virtiofsd_pid).unwrap();
+        state::write_virtiofsd_pids(&state_dir, &vm.name, &[virtiofsd_pid]).unwrap();
 
         super::wait_for_virtiofs_sockets(&vm_dir, &sockets)
             .expect("socket should appear within 10s");
@@ -1005,8 +1218,8 @@ mod tests {
         super::kill_pid_graceful(virtiofsd_pid);
         let status = virtiofsd_child.wait().expect("reap virtiofsd stub");
         assert!(!status.success(), "killed virtiofsd stub should not exit 0");
-        state::remove_virtiofsd_pid(&state_dir, &vm.name);
-        assert_eq!(state::read_virtiofsd_pid(&state_dir, &vm.name), None);
+        state::remove_virtiofsd_pids(&state_dir, &vm.name);
+        assert!(state::read_virtiofsd_pids(&state_dir, &vm.name).is_empty());
 
         let _ = std::fs::remove_dir_all(&scratch);
     }
