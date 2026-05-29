@@ -76,9 +76,8 @@ consumer (`src/mcp.rs`, the `warm` timer).
    off by default — but the separate-crate option is strongly preferred for clean
    closure isolation. Document the choice in the crate README.
 2. **Add iced 0.14** with the tiny-skia renderer feature (disable the default
-   wgpu renderer to avoid a hard GPU dependency). Pin to `0.14.x` (MSRV 1.88; the
-   repo is on edition 2024 / rust 1.87 — confirm/bump `rust-version` for the
-   helper crate only if needed).
+   wgpu renderer to avoid a hard GPU dependency). Pin to `0.14.x`; the repo is
+   on edition 2024 / rust 1.88.
 3. **Define the argv/stdout protocol** (pinentry-style, caller pushes context):
    - **Input (argv/env):** `--vm <name> --user <steam_user> --reason <text>
      [--invalid-retry] [--timeout-secs N]`. Do **not** accept the code on input.
@@ -164,9 +163,8 @@ consumer (`src/mcp.rs`, the `warm` timer).
 - **Panic backtrace leaking to the parent.** A raw panic prints a backtrace to
   stderr that Phase 04 might surface. *Recovery:* the early env pre-check + the
   `catch_unwind` mapping to exit 12 keep stderr clean.
-- **edition/MSRV mismatch.** iced 0.14 MSRV is 1.88; the repo declares
-  `rust-version = "1.87"`. Set the helper crate's `rust-version` appropriately;
-  do not bump cluster-ctl's MSRV for this.
+- **edition/MSRV mismatch.** iced 0.14 MSRV is 1.88; keep the helper crate's
+  `rust-version` aligned with the root crate's `rust-version = "1.88"`.
 
 ## Reference
 

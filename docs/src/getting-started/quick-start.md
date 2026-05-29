@@ -74,22 +74,24 @@ cluster-ctl steam login vm-3      # single VM
 cluster-ctl steam login vm-3 -+   # vm-3..vm-N
 ```
 
-No flags needed: the host config provides the runner directory, VM count, SSH
-key, and credentials path.
+No flags needed: the host config provides the VM count, SSH key, credentials
+path, login state directory, and fallback login-runner directory. With
+credentials configured, login mints SteamClient refresh tokens on the host and
+writes them into `loginStateDir`; no login VM or VNC session is booted.
 
 ### Fallback: project flake (non-NixOS hosts)
 
-When `services.steampipe-cluster.loginRunners.enable` is not set, or the host
-isn't running NixOS, supply the runners directory explicitly:
+When the host is not using the NixOS module, supply the credentials file and
+login-state directory explicitly. Supply `--login-runners-dir` only for the
+manual VNC fallback.
 
 ```bash
-# Interactive mode — VNC into each VM to complete login + Steam Guard
+cluster-ctl --vm-count 7 --credentials secrets/steam-creds.toml \
+  steam login --login-state-dir /var/lib/steampipe/logins
+
+# Manual fallback: boot login VMs and complete Steam login over VNC.
 cluster-ctl --vm-count 7 steam login \
   --login-runners-dir ./result-login
-
-# Or automated mode with a credentials file
-cluster-ctl --vm-count 7 --credentials secrets/steam-creds.toml \
-  steam login --login-runners-dir ./result-login
 ```
 
 ## 5. Deploy and test

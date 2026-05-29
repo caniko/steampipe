@@ -9,11 +9,9 @@ the log shows EPERM/chgrp errors, add the operator user to the kvm group
 ==> Logged in: 0, Skipped: 0, Failed: 8
 ```
 
-The hint in the error points at the wrong cause: the EPERM/kvm path
-described in
-[docs/src/planning/headless-steam-login/01-virtiofsd-lifecycle.md](./headless-steam-login/01-virtiofsd-lifecycle.md)
-is not what is actually failing here. The user wants the real root cause
-identified and fixed.
+The hint in the error points at the wrong cause: the EPERM/kvm path documented
+in the stable login-state guidance is not what is actually failing here. The
+user wants the real root cause identified and fixed.
 
 ## Root Cause(s)
 
@@ -97,9 +95,8 @@ Key artifacts:
 | [src/core/backend.rs:266-296](../../../src/core/backend.rs#L266-L296) | The orchestrator spawns the wrapper directly as the operator user with no privilege handling. |
 | `id` (operator `can`) | Not in the `kvm` group — the secondary blocker that will surface after the primary fix. |
 
-The plan that introduced this code path
-([docs/src/planning/headless-steam-login/01-virtiofsd-lifecycle.md](./headless-steam-login/01-virtiofsd-lifecycle.md))
-correctly identified the kvm-group problem in its "Pitfalls" section
+The earlier lifecycle work correctly identified the kvm-group problem, now
+documented in [Steam Credentials](../configuration/steam-credentials.md#login-vm-lifecycle),
 but did **not** anticipate that the upstream `bin/virtiofsd-run`
 wrapper is a `supervisord` invocation hard-coded to run as root.
 That is why the diagnostic hint in `microvm_start` points the
@@ -191,8 +188,8 @@ Concrete change in
 
 After (1)–(6), the secondary `--socket-group=kvm` blocker still
 applies on this host. The follow-up fix has two viable shapes that
-the headless-steam-login plan already enumerated; pick one before
-landing the code change:
+the stable login-state guidance now documents; pick one before landing the code
+change:
 
 - **(A) Add `can` to the `kvm` group** via the canix host config
   (`users.users.can.extraGroups = [ "kvm" ];`), rebuild, re-login
@@ -201,8 +198,7 @@ landing the code change:
   [nix/module.nix:466-487](../../../nix/module.nix#L466-L487)
   already emits when `loginRunners.enable = true` and the operator
   is not in kvm.
-- **(B) Implement the fallback that strips `--socket-group=kvm`**
-  ([docs/src/planning/headless-steam-login/01-virtiofsd-lifecycle.md:127-133](./headless-steam-login/01-virtiofsd-lifecycle.md#L127-L133)).
+- **(B) Implement the fallback that strips `--socket-group=kvm`**.
   Since step (3) above invokes the per-program binary directly,
   the cleanest place to drop the flag is in cluster-ctl's spawn
   call: read the program script, materialise the `virtiofsd …`

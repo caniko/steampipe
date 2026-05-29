@@ -128,7 +128,7 @@ research dossier:
       typed-outcome and fail-fast paths have unit/integration coverage.
 - [ ] `docs/src/configuration/steam-credentials.md`, README steam sections, and
       website copy describe the new default flow and the headless contract; the
-      `headless-steam-login` planning tree is retired/re-scoped.
+      shipped lifecycle behavior remains documented in stable docs.
 
 ## Global constraints (apply to every phase)
 
@@ -153,7 +153,8 @@ research dossier:
 
 - Research dossier (evidence + incompatibility matrix + options):
   [steam-login-iced-overhaul-research.md](../steam-login-iced-overhaul-research.md).
-- Prior (shipped) plan set this builds on:
-  [headless-steam-login/README.md](../headless-steam-login/README.md).
+- Stable docs for the shipped lifecycle behavior this builds on:
+  [Steam Credentials](../../configuration/steam-credentials.md) and
+  [Global host config](../../configuration/host-config.md).
 - Run each phase in a fresh session pointed at its file. Prompt `verify` when
   done to audit acceptance criteria.

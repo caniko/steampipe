@@ -46,10 +46,9 @@ surface still presents the VNC two-phase model as the default.
    `cluster-guard-prompt` dependency on graphical operator hosts.
 5. **Wire `docs/src/SUMMARY.md`** if any new doc pages are added; ensure the new
    flow is discoverable.
-6. **Retire/re-scope the `headless-steam-login` planning tree** per the dossier's
-   "Existing Plan Status": preserve durable shipped content (virtiofsd lifecycle,
-   parallel login, fill-the-gaps) in contributor docs if not already, and mark the
-   old plan superseded. (Coordinate with the phase-level acceptance.)
+6. **Preserve shipped lifecycle behavior in stable docs** per the dossier's
+   "Existing Plan Status": keep virtiofsd lifecycle, parallel login, and
+   fill-the-gaps guidance in contributor/user docs.
 7. `mdbook build docs` to confirm it renders.
 
 ## Acceptance criteria
@@ -61,8 +60,7 @@ surface still presents the VNC two-phase model as the default.
 - [ ] README + website no longer present VNC as the default login; command
       reference matches the new CLI.
 - [ ] `mdbook build docs` succeeds; new/changed pages are in `SUMMARY.md`.
-- [ ] The `headless-steam-login` plan tree is marked superseded/retired with
-      durable content preserved.
+- [ ] The shipped lifecycle behavior remains documented in stable docs.
 
 ## Files likely touched
 

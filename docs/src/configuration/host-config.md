@@ -55,10 +55,11 @@ Field reference:
   `--runners-dir` outside a project root. Populated by the NixOS module when
   `services.steampipe-cluster.runners.enable = true`.
 - `loginRunnersDir` (`path string | null`): optional host-level directory
-  containing per-VM `microvm-run` wrappers for the interactive Steam login
-  wizard. When present, `cluster-ctl steam login` does not require
-  `--login-runners-dir` outside a project root. Populated by the NixOS module
-  when `services.steampipe-cluster.loginRunners.enable = true`.
+  containing per-VM `microvm-run` wrappers for the manual VNC Steam login
+  fallback. Credential-backed `cluster-ctl steam login` mints host-side
+  SteamClient tokens and does not use these runners, but the field still lets
+  manual login run outside a project root. Populated by the NixOS module when
+  `services.steampipe-cluster.loginRunners.enable = true`.
 - `loginStateDir` (`path string`): directory containing per-VM Steam login
   state. For schema `2`, `loginStateDir/vm-N` is mounted writable inside the
   VM at `/home/${vm_user}/.local/share/Steam`.
@@ -219,7 +220,7 @@ behaviour.
 
     # Runtime runners support steam check/warm/up outside a project root.
     runners.enable = true;
-    # Login runners support steam login outside a project root.
+    # Login runners support the manual VNC login fallback outside a project root.
     loginRunners.enable = true;
   };
 }
@@ -237,7 +238,8 @@ adds roughly 7 GiB of VM closure paths to the host system closure.
 
 For headless runtime VMs, `services.steampipe-cluster.runners.hypervisor`
 defaults to `"cloud-hypervisor"`. Login VMs default to `"qemu"` and run the
-Steam login UI through sway-headless and Mesa llvmpipe, without virtio-gpu.
+manual Steam login UI through sway-headless and Mesa llvmpipe, without
+virtio-gpu.
 `"crosvm"` remains available as a deprecated escape hatch for older
 configurations.
 
@@ -246,8 +248,8 @@ publishes `/etc/steampipe/login-runners` as a link-farm containing one
 `vm-N/bin/microvm-run` wrapper per configured VM. It also emits
 `loginRunnersDir = "/etc/steampipe/login-runners"` and
 `sshKey = "/var/lib/steampipe/ssh/cluster_key"` in
-`/etc/steampipe/module.json`, so `cluster-ctl steam login` can run from
-outside a project root.
+`/etc/steampipe/module.json`, so the manual login fallback can run from outside
+a project root.
 
 The module installs `cluster-ctl` into the system profile by default through
 `services.steampipe-cluster.package`. Override that option to use a fork, a
@@ -275,7 +277,8 @@ key is mode `0644`. `tapOwner` owns the files; login runners require
 `tapOwner` so the same unprivileged user that runs `cluster-ctl` can read the
 private key without `sudo`.
 
-Login VMs default to 4096 MiB each because the Steam GUI path is memory-hungry.
+Login VMs default to 4096 MiB each because the manual Steam GUI path is
+memory-hungry.
 Reduce this only if the login wizard works reliably on your host:
 
 ```nix

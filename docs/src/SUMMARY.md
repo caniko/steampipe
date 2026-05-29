@@ -31,11 +31,6 @@
 
 # Planning
 
-- [Headless Steam login](./planning/headless-steam-login/README.md)
-  - [Phase 01 — Virtiofsd lifecycle](./planning/headless-steam-login/01-virtiofsd-lifecycle.md)
-  - [Phase 02 — Parallel login + reuse](./planning/headless-steam-login/02-parallel-login-and-reuse.md)
-  - [Phase 03 — Docs refresh](./planning/headless-steam-login/03-docs-refresh.md)
-- [Headless Steam login — research](./planning/headless-steam-login-research.md)
 - [Steam login overhaul (iced + auto-steamcmd) — research](./planning/steam-login-iced-overhaul-research.md)
 - [Steam login overhaul — plan](./planning/steam-login-iced-overhaul/README.md)
   - [Phase 01 — Login control-plane refactor](./planning/steam-login-iced-overhaul/01-login-control-plane.md)
@@ -48,9 +43,9 @@
   - [Phase 08 — Docs & tests](./planning/steam-login-iced-overhaul/08-docs-and-tests/README.md)
     - [Sub 01 — Docs rewrite](./planning/steam-login-iced-overhaul/08-docs-and-tests/sub-01-docs-rewrite.md)
     - [Sub 02 — Tests & CLI help](./planning/steam-login-iced-overhaul/08-docs-and-tests/sub-02-tests-and-cli-help.md)
-- [Guard dialog exit-101 — investigation](./planning/guard-dialog-101-investigation/README.md)
-  - [Phase 01 — Ground-truth capture](./planning/guard-dialog-101-investigation/01-ground-truth-capture.md)
-  - [Phase 02 — GPU runtime stack](./planning/guard-dialog-101-investigation/02-gpu-runtime-stack.md)
-  - [Phase 03 — Env propagation](./planning/guard-dialog-101-investigation/03-env-propagation.md)
-  - [Phase 04 — iced fallback & build](./planning/guard-dialog-101-investigation/04-iced-fallback-build.md)
-  - [Phase 05 — Synthesis & fix](./planning/guard-dialog-101-investigation/05-synthesis-and-fix.md)
+- [Headless Steam token-mint login — plan](./planning/headless-steam-token-mint/README.md)
+  - [Phase 01 — Mint feasibility spike](./planning/headless-steam-token-mint/01-mint-feasibility-spike.md)
+  - [Phase 02 — Mint engine + GuardProvider](./planning/headless-steam-token-mint/02-mint-engine.md)
+  - [Phase 03 — Artifact writer (VDF)](./planning/headless-steam-token-mint/03-artifact-writer.md)
+  - [Phase 04 — Wire mint into steam login](./planning/headless-steam-token-mint/04-wire-login-engine.md)
+  - [Phase 05 — Retire internals & verify](./planning/headless-steam-token-mint/05-retire-and-verify.md)

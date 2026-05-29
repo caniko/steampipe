@@ -204,17 +204,18 @@ Commands and tools run during research:
 ```bash
 rg -n "steamcmd|steam guard|wayvnc|vnc|iced|auto_login|read_guard_code" src
 git diff --stat; git diff src/core/state.rs        # working tree = rustfmt-only noise
-git show c061ae4 --stat; git log --oneline -20      # headless-steam-login plan + shipped commits
+git show c061ae4 --stat; git log --oneline -20      # prior login lifecycle commits
 # 14-agent Workflow: 8 subsystem readers + 3 external (iced 0.14, pinentry, steamcmd Guard) + 3 synthesis
 ```
 
 ## Existing Plan Status
 
-The existing `headless-steam-login` plan set
-([docs/src/planning/headless-steam-login-research.md](./headless-steam-login-research.md)
-and phases 01–03) is about the **virtiofsd lifecycle and parallel login** — it
-never mentions a GUI, iced, or a host Guard dialog. The iced/pinentry angle is
-genuinely new ground. Audit of that plan against current state:
+The prior headless-login lifecycle work is now represented in stable docs under
+[Steam Credentials](../configuration/steam-credentials.md) and
+[Global host config](../configuration/host-config.md). It covered the
+**virtiofsd lifecycle and parallel login**; it never covered a GUI, iced, or a
+host Guard dialog. The iced/pinentry angle is genuinely new ground. Audit of
+that work against current state:
 
 | Plan item | Status | Evidence |
 |-----------|--------|----------|
@@ -409,9 +410,9 @@ Sequencing hints for the follow-on plan, not commitments.
 8. **Decide the fate of the parallel path, `warm` timer, and harness `ensure_steam`**
    relative to auto-login + Guard (Open Decisions).
 9. **Rewrite docs/UX and update the `check()` guidance string**
-   ([steam.rs:444](../../../src/game/steam.rs#L444)); retire/re-scope the
-   `headless-steam-login` planning tree; demote VNC and `steam guard` to
-   documented fallbacks; add the headless/MCP contract.
+   ([steam.rs:444](../../../src/game/steam.rs#L444)); keep the shipped
+   lifecycle behavior in stable docs; demote VNC and `steam guard` to documented
+   fallbacks; add the headless/MCP contract.
 
 ### Candidate architectures (from synthesis)
 

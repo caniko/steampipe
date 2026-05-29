@@ -188,22 +188,24 @@ cluster-ctl steam login vm-3      # single VM
 cluster-ctl steam login vm-3 -+   # vm-3..vm-N
 ```
 
-No flags needed: the host config provides the runner directory, VM count, SSH
-key, and credentials path.
+No flags needed: the host config provides the VM count, SSH key, credentials
+path, login state directory, and fallback login-runner directory. With
+credentials configured, login mints SteamClient refresh tokens on the host and
+writes them into `loginStateDir`; no login VM or VNC session is booted.
 
 #### Fallback: project flake (non-NixOS hosts)
 
-When `services.steampipe-cluster.loginRunners.enable` is not set, or the host
-isn't running NixOS, supply the runners directory explicitly:
+When the host is not using the NixOS module, supply the credentials file and
+login-state directory explicitly. Supply `--login-runners-dir` only for the
+manual VNC fallback.
 
 ```bash
-# Interactive mode — VNC into each VM to complete login + Steam Guard
+cluster-ctl --vm-count 7 --credentials secrets/steam-creds.toml \
+  steam login --login-state-dir /var/lib/steampipe/logins
+
+# Manual fallback: boot login VMs and complete Steam login over VNC.
 cluster-ctl --vm-count 7 steam login \
   --login-runners-dir ./result-login
-
-# Or automated mode with a credentials file
-cluster-ctl --vm-count 7 --credentials secrets/steam-creds.toml \
-  steam login --login-runners-dir ./result-login
 ```
 
 The credentials file format:
@@ -420,31 +422,15 @@ cluster-ctl steam login vm-3      # single VM
 cluster-ctl steam login vm-3 -+   # vm-3..vm-N
 ```
 
-No flags needed: the host config provides the runner directory, VM count, SSH
-key, and credentials path.
+No flags needed: the host config provides the VM count, SSH key, credentials
+path, login state directory, and fallback login-runner directory. With
+credentials configured, login mints SteamClient refresh tokens on the host and
+writes them into `loginStateDir`; no login VM or VNC session is booted.
 
 ### Fallback: project flake (non-NixOS hosts)
 
-When `services.steampipe-cluster.loginRunners.enable` is not set, or the host
-isn't running NixOS, supply the runners directory explicitly.
-
-#### Interactive login (VNC)
-
-```bash
-cluster-ctl --vm-count 7 steam login \
-  --login-runners-dir ./result-login
-```
-
-For each VM:
-1. Boots the VM using a 4GB-RAM login image (larger for the GUI)
-2. Starts `sway` (Wayland compositor) + `wayvnc` on port 5900
-3. Launches Steam's GUI
-4. You VNC in (`vncviewer 10.0.100.N:5900`) and complete login + Steam Guard
-
-Interactive controls during login:
-- `p` — paste text into the VM via `wtype`
-- `Enter` — mark as done, shut down VM
-- `Ctrl+C` — cancel
+When the host is not using the NixOS module, supply the credentials file and
+login-state directory explicitly.
 
 You can target specific VMs or continue from a starting point:
 
@@ -455,23 +441,30 @@ cluster-ctl --vm-count 7 steam login vm-3 \
 
 # Login vm-3 through vm-7
 cluster-ctl --vm-count 7 steam login vm-3 -+ \
-  --login-runners-dir ./result-login
+  --login-state-dir /var/lib/steampipe/logins
 ```
 
-#### Automated login (credentials file)
+#### Headless token login (credentials file)
 
 ```bash
 cluster-ctl --vm-count 7 \
   --credentials secrets/steam-creds.toml \
-  steam login --login-runners-dir ./result-login
+  steam login --login-state-dir /var/lib/steampipe/logins
 ```
 
-Runs `steam -login <user> <pass>` on each VM and waits for the connection log
-to confirm success. Also activates game keys if provided.
+Mints SteamClient refresh tokens on the host and writes the resulting session
+artifacts into `loginStateDir`. If Steam requires a Guard code, use the host
+dialog, `--code`, or `STEAMPIPE_GUARD_CODE`.
 
-> **Note:** Automated login may not work with accounts that have Steam Guard
-> email/mobile confirmation required for new machines. Use the interactive
-> method for the first login, then automated for refreshing sessions.
+#### Manual fallback (VNC)
+
+```bash
+cluster-ctl --vm-count 7 steam login \
+  --login-runners-dir ./result-login
+```
+
+The fallback boots a 4GB login VM, starts `sway` + `wayvnc`, and leaves the VM
+running so you can complete Steam login over VNC.
 
 ### Checking Steam health
 

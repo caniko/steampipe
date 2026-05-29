@@ -1,47 +1,46 @@
 {
   "schema_version": 1,
   "plan": {
-    "id": "2e7e3716-e891-4bd4-9a1d-5b47b9ebef6e",
-    "name": "Headless Steam Login \u2014 Plan Set",
+    "id": "36b16691-c864-4d14-aacc-eb9e2ec234fc",
+    "name": "Plan: Headless Steam token-mint login",
     "flavor": "codex",
     "worktype": null,
-    "created_at": 1779883041,
-    "phase_count": 3,
-    "wave_count": 3,
-    "max_chain_depth": 3,
-    "repo_spread": 4,
+    "created_at": 1780073168,
+    "phase_count": 5,
+    "wave_count": 4,
+    "max_chain_depth": 4,
+    "repo_spread": 6,
     "routing_dist": {
-      "high": 1,
-      "low": 1,
+      "high": 4,
       "medium": 1
     },
-    "shape_hash": "a128f62177ac12aed9026f30d68e480a2246ddbedbf6eb4f0eb5159f5b6d8e67"
+    "shape_hash": "923a86e4068f2026a0e902eb94f6666f6f80008c01833bb1c7d3a7b4ea73af8a"
   },
   "triggers": [
     {
       "name": "shared-file-contention",
-      "input_value": 1.0,
+      "input_value": 2.0,
       "threshold": 2.0,
-      "fired": false,
-      "section_added": null
+      "fired": true,
+      "section_added": "Shared-file lockstep"
     },
     {
       "name": "external-repo-phases",
-      "input_value": 3.0,
+      "input_value": 5.0,
       "threshold": 1.0,
       "fired": true,
       "section_added": "External repo coordination"
     },
     {
       "name": "convergence-point",
-      "input_value": 1.0,
+      "input_value": 3.0,
       "threshold": 3.0,
-      "fired": false,
-      "section_added": null
+      "fired": true,
+      "section_added": "Merge-readiness checklist"
     },
     {
       "name": "ownership-boundary-spread",
-      "input_value": 4.0,
+      "input_value": 6.0,
       "threshold": 2.0,
       "fired": true,
       "section_added": "PR sequencing & cross-owner coordination"
@@ -76,30 +75,30 @@
     },
     {
       "name": "long-serial-chain",
-      "input_value": 3.0,
+      "input_value": 4.0,
       "threshold": 4.0,
-      "fired": false,
-      "section_added": null
+      "fired": true,
+      "section_added": "Serial-chain recovery"
     },
     {
       "name": "mid-plan-rerouting",
-      "input_value": 3.0,
+      "input_value": 5.0,
       "threshold": 10.0,
       "fired": false,
       "section_added": null
     },
     {
       "name": "trivial-phase-swamp",
-      "input_value": 2.0,
+      "input_value": 0.25,
       "threshold": 4.0,
       "fired": false,
       "section_added": null
     },
     {
       "name": "no-integrated-verification",
-      "input_value": 1.0,
+      "input_value": 0.0,
       "threshold": 1.0,
-      "fired": true,
+      "fired": false,
       "section_added": null
     },
     {
@@ -111,7 +110,7 @@
     },
     {
       "name": "mechanical-streak",
-      "input_value": 1.0,
+      "input_value": 0.0,
       "threshold": 3.0,
       "fired": false,
       "section_added": null
@@ -127,31 +126,52 @@
   "phases": [
     {
       "ordinal": 1,
-      "slug": "virtiofsd-lifecycle",
+      "slug": "mint-feasibility-spike",
       "routing_tier": "high",
       "files": [
-        "nix/module.nix` \u2014 assertion / warning for the kvm-group requirement",
-        "src/core/backend.rs` \u2014 `microvm_start`, `microvm_stop`,",
-        "src/core/state.rs` \u2014 new helper for the virtiofsd PID file path; possible"
+        "None durably. Throwaway: `crates/spike-steam-mint/` or an `examples/` PoC",
+        "This phase file's `## Findings`."
       ]
     },
     {
       "ordinal": 2,
-      "slug": "parallel-login-and-reuse",
-      "routing_tier": "medium",
+      "slug": "mint-engine",
+      "routing_tier": "high",
       "files": [
-        "src/game/steam.rs` \u2014 `login`, `login_single_vm`, the new `LoginAttempt",
-        "src/lib.rs` \u2014 no functional change expected; only touch if the"
+        "Cargo.toml` — the chosen mint crate (or none, if a packaged helper is spawned).",
+        "src/game/mod.rs` — module declaration.",
+        "src/game/steam.rs` — reuse `GuardProvider`/`GuardPromptContext`/`GuardCodeNeeded",
+        "src/game/steam_auth.rs` *(new)* — the engine."
       ]
     },
     {
       "ordinal": 3,
-      "slug": "docs-refresh",
-      "routing_tier": "low",
+      "slug": "artifact-writer",
+      "routing_tier": "high",
       "files": [
-        "docs/src/SUMMARY.md",
-        "docs/src/configuration/steam-credentials.md",
-        "docs/src/planning/stabilization-and-hardening-research.md"
+        "src/game/accounts.rs` — tests only (round-trip), no behavior change.",
+        "src/game/mod.rs` — module declaration.",
+        "src/game/steam_session.rs` *(new)* — the writer."
+      ]
+    },
+    {
+      "ordinal": 4,
+      "slug": "wire-login-engine",
+      "routing_tier": "high",
+      "files": [
+        "src/game/steam.rs` — `automated_login`, `login_single_vm_automated`,",
+        "src/lib.rs` — login dispatch unchanged in shape but confirm `login_state_dir"
+      ]
+    },
+    {
+      "ordinal": 5,
+      "slug": "retire-and-verify",
+      "routing_tier": "medium",
+      "files": [
+        "docs/src/configuration/steam-credentials.md`, `README.md`, `docs/src/SUMMARY.md`,",
+        "src/game/steam.rs` — delete dead login internals; keep shared helpers.",
+        "src/ui/cli.rs` — `SteamAction` help (+ remove `Guard` if retired); parse tests.",
+        "tests/cli_steam_standalone.rs` — adjust exact-stdout assertions."
       ]
     }
   ],
@@ -163,16 +183,5 @@
     "risk": "mixed",
     "scope": "cross-org"
   },
-  "verify": {
-    "verified_at": 1779889775,
-    "elapsed_seconds": null,
-    "outcome": "partial",
-    "phase_outcomes": {
-      "1": "passed",
-      "2": "passed",
-      "3": "passed"
-    },
-    "emergency_changes": null,
-    "surprises": "Idempotent re-verify: state identical to previous verify. All three phases still pass at code level; whole-set criteria that need an atlas-host run remain not-run because no atlas access happened between verifies. Working tree still uncommitted across seven files."
-  }
+  "verify": null
 }

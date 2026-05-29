@@ -33,3 +33,20 @@ prompt copy so a caller can indicate that a previous code was rejected.
 
 The entered code is zeroized after it is printed. The helper does not log the
 code, write it to files, or write it to stderr.
+
+## Runtime Packaging
+
+The packaged helper is wrapped with the GUI runtime libraries that iced/winit
+loads dynamically on NixOS: Wayland, libxkbcommon, libGL/libglvnd, Vulkan
+loader, fontconfig/freetype, and X11 libraries. The wrapper also appends
+`/run/opengl-driver/lib` for host driver libraries.
+
+The dev shell exports the same library path. If the helper sees a usable
+Wayland/X11 display socket but those libraries are not discoverable, it exits
+`12` with an actionable message instead of panicking during winit event-loop
+creation. A missing display also exits `12`. A prompt timeout exits `11`.
+
+Both iced renderers remain enabled (`wgpu` and `tiny-skia`). The observed
+exit-101 failure was a missing Wayland client-library environment, not a GPU or
+renderer failure, so the helper keeps iced's normal `wgpu` to `tiny-skia`
+fallback behavior.

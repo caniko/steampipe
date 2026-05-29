@@ -24,8 +24,8 @@ sub-layers. The user dispatches them in parallel and merges.
 All user-facing surfaces describe the new default flow (auto-steamcmd + host iced
 dialog, single invocation, headless fail-fast) and the documented fallbacks
 (`steam guard --code`, VNC if retained); the test suite covers the new typed
-outcomes and the fail-fast contract and is green; and the now-superseded
-`headless-steam-login` planning tree is retired/re-scoped.
+outcomes and the fail-fast contract and is green; and the shipped login
+lifecycle behavior remains covered by stable docs.
 
 ## Why this matters now
 
@@ -51,7 +51,7 @@ files so the merge is a clean union with no conflicts. After both land:
    conflicting — only sub-01 edits SUMMARY.
 2. Run `mdbook build docs` and `cargo test` together to confirm the merged state
    is green.
-3. Retire the prior plan tree (see phase-level acceptance).
+3. Confirm the prior lifecycle behavior remains covered by stable docs.
 
 ## Phase-level acceptance criteria
 
@@ -65,13 +65,12 @@ files so the merge is a clean union with no conflicts. After both land:
 - [ ] `src/ui/cli.rs` help strings for `SteamAction::Login`/`Guard` reflect the
       new flow (no "with VNC" on Login; Guard documented as fallback).
 - [ ] `mdbook build docs` succeeds; `docs/src/SUMMARY.md` surfaces the new docs.
-- [ ] The `headless-steam-login` planning tree is retired/re-scoped (its shipped
-      content preserved in contributor docs where durable); this overhaul's plan
-      set is referenced from the dossier.
+- [ ] The shipped lifecycle behavior is preserved in stable docs; this
+      overhaul's plan set is referenced from the dossier.
 - [ ] Whole-set acceptance criteria in the plan README are re-checked and pass.
 
 ## Reference
 
 - Dossier: incompatibility #14 (docs/UX); critic gap (`cli_steam_standalone.rs`
-  coverage); "Existing Plan Status" (retire `headless-steam-login`).
+  coverage); "Existing Plan Status" (stable lifecycle docs).
 - Depends on Phases 01–07. Run sub-layers in parallel, then merge.

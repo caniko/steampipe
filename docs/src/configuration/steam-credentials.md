@@ -20,7 +20,7 @@ steam_pass = "password2"
 The file can also be age-encrypted (`.age` extension) - `cluster-ctl` will
 decrypt with `rage`/`age` via ssh-agent automatically.
 
-## Interactive login (VNC)
+## Headless token login
 
 ```bash
 cluster-ctl steam login
@@ -32,18 +32,19 @@ pass `--force` to re-login every selected VM regardless.
 
 For each VM selected for login:
 
-1. Boots the VM using a 4GB-RAM login image.
-2. Mounts that VM's persistent Steam state share from
-   `loginStateDir/vm-N` at `/home/${vm_user}/.local/share/Steam`.
-3. Starts `sway` (Wayland compositor) + `wayvnc` on port 5900.
-4. Launches Steam's GUI.
-5. You VNC in (`vncviewer 10.0.100.N:5900`) and complete login + Steam Guard.
+1. Reads the VM's Steam username and password from the configured credentials
+   TOML or age-encrypted credentials file.
+2. Mints a SteamClient-platform refresh token on the host through Valve's
+   authentication flow.
+3. Prompts for Steam Guard through the host dialog, `--code`, or
+   `STEAMPIPE_GUARD_CODE` when Steam requires a one-time code.
+4. Writes `loginStateDir/vm-N/config/loginusers.vdf` and
+   `loginStateDir/vm-N/config/<steamID>/local.vdf`.
 
-Interactive controls during login:
-
-- `p` - paste text into the VM via `wtype`
-- `Enter` - mark as done, gracefully stop Steam, then shut down the VM
-- `Ctrl+C` - cancel
+No VM boot, SSH session, `steamcmd`, in-VM Steam GUI, VNC, or X server is
+involved in the credential-backed login path. The written refresh token must be
+a SteamClient-audience JWT (`aud` includes `client`), which is what the VM's
+Steam client needs for later auto-login.
 
 Target specific VMs:
 
@@ -55,12 +56,10 @@ cluster-ctl steam login vm-3
 cluster-ctl steam login vm-3 -+
 ```
 
-Steam writes its normal Linux client state directly into the writable virtiofs
-share. That includes `config/loginusers.vdf`, refresh tokens under
-`config/<steamID>/local.vdf` or `config/config.vdf`, logs, userdata, and
-`ssfn*` machine-trust files. Because the share is the VM's real
-`~/.local/share/Steam`, those writes survive `cluster-ctl down` / `up` cycles
-instead of being copied out or regenerated at boot.
+The host writes the minimal Steam session state directly into the writable
+login-state share. Because the share is the VM's real
+`~/.local/share/Steam`, later Steam client writes survive `cluster-ctl down` /
+`up` cycles instead of being copied out or regenerated at boot.
 
 ## Automated login
 
@@ -68,25 +67,18 @@ instead of being copied out or regenerated at boot.
 cluster-ctl --credentials secrets/steam-creds.toml steam login
 ```
 
-Runs `steam -login <user> <pass>` on each VM selected for login and waits for
-confirmation. Also activates game keys if provided.
+Mints SteamClient refresh tokens on the host for each VM selected for login and
+writes the resulting session artifacts into `loginStateDir`.
 
 By default, automated `steam login` also fills the gaps only: sessions already
 reported as `OK` are skipped, while `STALE`, `EXPIRED`, and `NO_TOKEN` sessions
 are refreshed through the login flow. Pass `--force` to re-login every selected
 VM.
 
-Use interactive login for a VM's first trust-establishing login when Steam
-Guard requires confirmation. After that, the persistent share preserves the
-client's machine-trust and refresh-token state across boots, so subsequent
-automated logins and health checks do not start from a new machine identity.
-
 Automated `steam login` runs every selected VM in parallel under the
-host-memory admission gate, and skips the VM bounce when a target is
-already up and reachable over SSH. `--force` re-logs every selected VM in
-place — it does **not** force a fresh boot. Interactive login (no
-credentials TOML) stays serial: VNC and prompt streams are one-at-a-time
-by construction.
+host-memory admission gate for consistency with other VM fan-out operations.
+It does not boot or bounce the VM. `--force` re-mints every selected VM's
+session even if the current token is still `OK`.
 
 ## Login VM lifecycle
 
@@ -108,9 +100,45 @@ fires, add the user to `kvm`:
 users.users."${tapOwner}".extraGroups = [ "kvm" ];
 ```
 
-See
-[planning/headless-steam-login-research.md](../planning/headless-steam-login-research.md)
-for the root-cause analysis that motivated this lifecycle.
+This lifecycle is still used by fallback/manual login runners and by runtime
+Steam operations that boot VMs; the headless token-mint login path itself does
+not need to boot a login VM.
+
+## Manual VNC fallback
+
+If a host cannot use the credentials-backed mint flow, pass a login runner
+directory and run the legacy interactive login path for one VM at a time:
+
+```bash
+cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
+```
+
+The fallback boots the 4 GiB login VM, mounts
+`loginStateDir/vm-N` at `/home/${vm_user}/.local/share/Steam`, starts
+`sway` + `wayvnc`, and leaves the VM running for manual Steam GUI login over
+VNC. Use `vncviewer 10.0.100.N:5900`, complete login + Steam Guard in the
+window, then validate with `cluster-ctl steam accounts`.
+
+## Steam Guard dialog helper
+
+When Steam requires a Guard code and no `--code` or `STEAMPIPE_GUARD_CODE` is
+provided, `cluster-ctl` launches the separate `cluster-guard-prompt` helper on
+the host. The helper is a small iced GUI that prints the entered code to stdout
+for the parent process; it does not write the code to logs or files.
+
+The helper is packaged separately from `cluster-ctl` so iced, winit, Wayland,
+X11, and renderer dependencies do not enter the default CLI closure. The
+packaged helper wrapper and the dev shell both provide the GUI runtime
+libraries that iced/winit loads dynamically on NixOS, including Wayland,
+libxkbcommon, libGL/libglvnd, Vulkan loader, fontconfig/freetype, and X11
+libraries.
+
+If a display socket exists but those libraries are missing, the helper exits
+`12` with an actionable error instead of panicking during winit event-loop
+creation. A missing display also exits `12`; timeout exits `11`; cancel exits
+`10`. Both iced renderers remain enabled (`wgpu` and `tiny-skia`). The resolved
+host-dialog failure mode was missing Wayland client-library discovery, not a GPU
+or renderer failure.
 
 ## Checking Steam health
 
@@ -244,12 +272,13 @@ without `steam -shutdown`) is intentional and must not be unified with
 `graceful_stop_steam`: it fires when Steam is detected as wedged and waiting
 for a graceful exit would only delay the recovery.
 
-## Non-NixOS fallback
+## Non-NixOS manual fallback
 
 On NixOS hosts, prefer enabling
 `services.steampipe-cluster.loginRunners.enable = true` so the module publishes
-`loginRunnersDir` in the discovered host config. Hosts that cannot use the
-NixOS module can still pass the login runner directory explicitly:
+`loginRunnersDir` in the discovered host config for manual VNC fallback.
+Hosts that cannot use the NixOS module can still pass the login runner
+directory explicitly:
 
 ```bash
 cluster-ctl --vm-count 7 steam login --login-runners-dir ./result-login
