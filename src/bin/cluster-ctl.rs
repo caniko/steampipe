@@ -6,7 +6,14 @@ fn main() {
         Ok(()) => 0,
         Err(err) => {
             eprintln!("{err:#}");
-            1
+            if err
+                .downcast_ref::<steampipe::game::steam::GuardCodeNeeded>()
+                .is_some()
+            {
+                steampipe::game::steam::GUARD_CODE_NEEDED_EXIT_CODE
+            } else {
+                1
+            }
         }
     });
 }

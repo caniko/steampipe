@@ -1,5 +1,9 @@
-use std::io::{self, BufRead, ErrorKind};
+use std::env;
+use std::ffi::OsStr;
+use std::io::{self, BufRead, ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::SystemTime;
 
 use crate::core::backend::{Backend, microvm_log_path};
@@ -8,8 +12,15 @@ use crate::core::credentials::{CredentialsMap, VmCredentials};
 use crate::core::nixos_module::{Discovery, NixosModuleConfig, RowStatus};
 use crate::game::accounts::{self, SessionStatus};
 use crate::vm::lease;
+use tokio::process::Command;
+use tokio::sync::Mutex as AsyncMutex;
+use zeroize::Zeroize;
 
 const LOGIN_SSH_TIMEOUT_SECS: u32 = 180;
+const GUARD_PROMPT_BIN_ENV: &str = "STEAMPIPE_GUARD_PROMPT_BIN";
+const GUARD_PROMPT_BIN_NAME: &str = "cluster-guard-prompt";
+const GUARD_PROMPT_TIMEOUT_SECS: u64 = 120;
+pub const GUARD_CODE_NEEDED_EXIT_CODE: i32 = 3;
 
 /// Shell snippet that ensures weston (headless) is running and exports display vars.
 /// Append your own commands after this to run under the compositor.
@@ -441,7 +452,7 @@ pub async fn check(
         println!("  FAILED: {}", failed.join(" "));
         println!();
         println!(
-            "  To fix 'not-logged-in': run `nix run .#cluster-steam-login` (or `cluster-ctl steam login`)"
+            "  To fix 'not-logged-in': run `cluster-ctl steam login <vm>` on an operator host with a display (raises a Steam Guard dialog), or pass `--code` / set STEAMPIPE_GUARD_CODE on a headless host."
         );
         anyhow::bail!("Some VMs failed checks");
     } else {
@@ -517,7 +528,7 @@ pub async fn warm(
     Ok(())
 }
 
-fn steam_identity_probe_script(vm_user: &str) -> String {
+pub(crate) fn steam_identity_probe_script(vm_user: &str) -> String {
     format!(
         r#"HOME=/home/{vm_user}
 LOGIN_FILE="$HOME/.local/share/Steam/config/loginusers.vdf"
@@ -533,7 +544,7 @@ echo "NO_LOGIN""#
     )
 }
 
-fn parse_steam_identity(output: &str) -> (Option<String>, bool) {
+pub(crate) fn parse_steam_identity(output: &str) -> (Option<String>, bool) {
     if let Some(rest) = output.strip_prefix("LOGIN:") {
         let persona = rest
             .split(':')
@@ -600,6 +611,7 @@ impl LoginLog {
 enum LoginAttempt {
     Skipped(String),
     LoggedIn,
+    GuardCodeNeeded(GuardCodeNeeded),
     Failed(anyhow::Error),
 }
 
@@ -624,9 +636,382 @@ fn login_boot_action(automated: bool, reachable: bool) -> LoginBootAction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GuardCodeNeeded {
+    pub vm_name: String,
+    pub steam_user: String,
+    pub reason: String,
+}
+
+impl GuardCodeNeeded {
+    fn new(vm: &VmDef, steam_user: &str, reason: &str) -> Self {
+        Self {
+            vm_name: vm.name.to_string(),
+            steam_user: steam_user.to_string(),
+            reason: reason.to_string(),
+        }
+    }
+
+    pub(crate) fn for_vm_name(vm_name: impl Into<String>, reason: impl Into<String>) -> Self {
+        Self {
+            vm_name: vm_name.into(),
+            steam_user: "unknown".to_string(),
+            reason: reason.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for GuardCodeNeeded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "STEAM_GUARD_CODE_NEEDED: {} needs a Steam Guard code for {} ({}). Run `cluster-ctl steam login {}` on an operator host with a display, or run `cluster-ctl steam login {} --code <CODE>` / set STEAMPIPE_GUARD_CODE on a headless host.",
+            self.vm_name, self.steam_user, self.reason, self.vm_name, self.vm_name
+        )
+    }
+}
+
+impl std::error::Error for GuardCodeNeeded {}
+
+pub(crate) struct GuardPromptContext<'a> {
+    pub vm_name: &'a str,
+    pub steam_user: &'a str,
+    pub reason: &'a str,
+    pub invalid_retry: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum GuardCodeOutcome {
+    Code(String),
+    #[allow(dead_code)]
+    Cancelled,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LoginContext {
+    pub display: bool,
+    pub stdin_tty: bool,
+    pub non_interactive: bool,
+}
+
+impl LoginContext {
+    pub(crate) fn detect(force_non_interactive: bool) -> Self {
+        Self {
+            display: host_display_available(),
+            stdin_tty: io::stdin().is_terminal(),
+            // Phase 06 will also set this when cluster-ctl is serving MCP.
+            non_interactive: force_non_interactive,
+        }
+    }
+
+    pub(crate) fn force_non_interactive() -> Self {
+        Self {
+            display: host_display_available(),
+            stdin_tty: io::stdin().is_terminal(),
+            non_interactive: true,
+        }
+    }
+
+    #[cfg(test)]
+    fn synthetic(display: bool, stdin_tty: bool, non_interactive: bool) -> Self {
+        Self {
+            display,
+            stdin_tty,
+            non_interactive,
+        }
+    }
+}
+
+fn host_display_available() -> bool {
+    display_env_present(
+        env::var_os("WAYLAND_DISPLAY").as_deref(),
+        env::var_os("DISPLAY").as_deref(),
+    )
+}
+
+fn display_env_present(wayland_display: Option<&OsStr>, display: Option<&OsStr>) -> bool {
+    wayland_display.is_some_and(|value| !value.is_empty())
+        || display.is_some_and(|value| !value.is_empty())
+}
+
+/// Locate an already-built helper binary: an explicit override, the
+/// `$STEAMPIPE_GUARD_PROMPT_BIN` env, a sibling of the current exe, or `$PATH`.
+/// Used for the installed/production layout and tests; the development path
+/// prefers `cargo run` (see [`guard_prompt_command`]).
+fn resolve_guard_prompt_binary(override_path: Option<&Path>) -> Option<PathBuf> {
+    if let Some(path) = override_path {
+        return Some(path.to_path_buf());
+    }
+
+    if let Some(path) = env::var_os(GUARD_PROMPT_BIN_ENV).filter(|value| !value.is_empty()) {
+        return Some(PathBuf::from(path));
+    }
+
+    if let Ok(current_exe) = env::current_exe()
+        && let Some(exe_dir) = current_exe.parent()
+    {
+        let candidate = exe_dir.join(GUARD_PROMPT_BIN_NAME);
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    env::var_os("PATH").and_then(|path| {
+        env::split_paths(&path)
+            .map(|dir| dir.join(GUARD_PROMPT_BIN_NAME))
+            .find(|candidate| candidate.is_file())
+    })
+}
+
+/// Build the base command that launches the Steam Guard prompt helper, ready for
+/// the prompt arguments to be appended.
+///
+/// Resolution order:
+/// 1. An explicit override or `$STEAMPIPE_GUARD_PROMPT_BIN` (tests + the installed
+///    Nix wrapper that bakes the GUI library path).
+/// 2. **Development:** when `cluster-ctl` itself is running from a cargo
+///    `target/<profile>/` tree, run the helper via `cargo run -p
+///    cluster-guard-prompt`. This is preferred over a sibling binary on purpose —
+///    `cargo run -- steam login …` rebuilds only `cluster-ctl`, so a sibling
+///    `cluster-guard-prompt` would be **stale**; going through cargo rebuilds it
+///    (instant when already current) so helper edits always take effect.
+/// 3. **Installed:** a sibling of the current exe or a `$PATH` binary.
+///
+/// Returns `None` only when no binary and no cargo workspace can be located.
+fn guard_prompt_command(override_path: Option<&Path>) -> Option<Command> {
+    if let Some(path) = override_path {
+        return Some(Command::new(path));
+    }
+    if let Some(path) = env::var_os(GUARD_PROMPT_BIN_ENV).filter(|value| !value.is_empty()) {
+        return Some(Command::new(path));
+    }
+
+    if let Some(workspace_root) = cargo_workspace_root_from_current_exe() {
+        let cargo = env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut command = Command::new(cargo);
+        command
+            .current_dir(workspace_root)
+            .arg("run")
+            .arg("--quiet")
+            .arg("--package")
+            .arg(GUARD_PROMPT_BIN_NAME)
+            .arg("--");
+        return Some(command);
+    }
+
+    resolve_guard_prompt_binary(None).map(Command::new)
+}
+
+/// Locate the cargo workspace root when running from a `target/<profile>/` tree,
+/// so the development fallback can `cargo run -p cluster-guard-prompt` against it.
+fn cargo_workspace_root_from_current_exe() -> Option<PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let mut dir = exe.parent()?;
+    loop {
+        if dir.file_name() == Some(OsStr::new("target")) {
+            let root = dir.parent()?;
+            return root.join("Cargo.toml").is_file().then(|| root.to_path_buf());
+        }
+        dir = dir.parent()?;
+    }
+}
+
+async fn request_guard_code_from_helper(
+    cx: &GuardPromptContext<'_>,
+    override_path: Option<&Path>,
+) -> anyhow::Result<GuardCodeOutcome> {
+    let Some(mut command) = guard_prompt_command(override_path) else {
+        return Ok(GuardCodeOutcome::Unavailable);
+    };
+
+    command
+        .arg("--vm")
+        .arg(cx.vm_name)
+        .arg("--user")
+        .arg(cx.steam_user)
+        .arg("--reason")
+        .arg(cx.reason)
+        .arg("--timeout-secs")
+        .arg(GUARD_PROMPT_TIMEOUT_SECS.to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    if cx.invalid_retry {
+        command.arg("--invalid-retry");
+    }
+
+    let output = match command.output().await {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}");
+            return Ok(GuardCodeOutcome::Unavailable);
+        }
+    };
+
+    match output.status.code() {
+        Some(0) => guard_code_from_helper_stdout(output.stdout),
+        Some(10 | 11) => Ok(GuardCodeOutcome::Cancelled),
+        Some(12) => Ok(GuardCodeOutcome::Unavailable),
+        Some(other) => {
+            eprintln!(
+                "  Steam Guard dialog exited unexpectedly (code {other}); falling back to terminal input if available."
+            );
+            Ok(GuardCodeOutcome::Unavailable)
+        }
+        None => Ok(GuardCodeOutcome::Unavailable),
+    }
+}
+
+fn guard_code_from_helper_stdout(mut stdout: Vec<u8>) -> anyhow::Result<GuardCodeOutcome> {
+    if stdout.ends_with(b"\n") {
+        stdout.pop();
+    }
+    if stdout.is_empty() {
+        return Ok(GuardCodeOutcome::Cancelled);
+    }
+    if stdout.iter().any(|byte| byte.is_ascii_whitespace()) {
+        return Ok(GuardCodeOutcome::Unavailable);
+    }
+
+    Ok(String::from_utf8(stdout)
+        .map(GuardCodeOutcome::Code)
+        .unwrap_or(GuardCodeOutcome::Unavailable))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum GuardProvider {
+    PreSupplied(Arc<StdMutex<Option<String>>>),
+    Stdin {
+        prompt_lock: Arc<AsyncMutex<()>>,
+    },
+    HelperGui {
+        prompt_lock: Arc<AsyncMutex<()>>,
+        helper_bin: Option<PathBuf>,
+        /// Fall back to a terminal prompt when the GUI dialog can't be shown
+        /// (no usable display / helper missing). Captured from the TTY check at
+        /// selection time so a failed popup degrades to stdin instead of a
+        /// dead-end fail-fast.
+        stdin_fallback: bool,
+    },
+    FailFast,
+}
+
+impl GuardProvider {
+    pub(crate) fn pre_supplied(code: String) -> Self {
+        Self::PreSupplied(Arc::new(StdMutex::new(Some(code))))
+    }
+
+    pub(crate) fn fail_fast() -> Self {
+        Self::FailFast
+    }
+
+    pub(crate) fn stdin() -> Self {
+        Self::Stdin {
+            prompt_lock: Arc::new(AsyncMutex::new(())),
+        }
+    }
+
+    pub(crate) fn helper_gui(stdin_fallback: bool) -> Self {
+        Self::HelperGui {
+            prompt_lock: Arc::new(AsyncMutex::new(())),
+            helper_bin: None,
+            stdin_fallback,
+        }
+    }
+
+    #[cfg(test)]
+    fn helper_gui_with_binary(helper_bin: PathBuf) -> Self {
+        Self::HelperGui {
+            prompt_lock: Arc::new(AsyncMutex::new(())),
+            helper_bin: Some(helper_bin),
+            stdin_fallback: false,
+        }
+    }
+
+    pub(crate) fn select(code: Option<String>, context: LoginContext, no_gui: bool) -> Self {
+        if let Some(code) = code.filter(|code| !code.trim().is_empty()) {
+            return Self::pre_supplied(code.trim().to_owned());
+        }
+        if context.non_interactive {
+            return Self::fail_fast();
+        }
+        if context.display && !no_gui {
+            return Self::helper_gui(context.stdin_tty);
+        }
+        if context.stdin_tty {
+            return Self::stdin();
+        }
+        Self::fail_fast()
+    }
+
+    #[cfg(test)]
+    fn kind(&self) -> GuardProviderKind {
+        match self {
+            Self::PreSupplied(_) => GuardProviderKind::PreSupplied,
+            Self::Stdin { .. } => GuardProviderKind::Stdin,
+            Self::HelperGui { .. } => GuardProviderKind::HelperGui,
+            Self::FailFast => GuardProviderKind::FailFast,
+        }
+    }
+
+    pub(crate) async fn request(
+        &self,
+        cx: &GuardPromptContext<'_>,
+    ) -> anyhow::Result<GuardCodeOutcome> {
+        match self {
+            Self::PreSupplied(code) => {
+                let mut code = code
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Steam Guard provider lock poisoned"))?;
+                Ok(code
+                    .take()
+                    .map(GuardCodeOutcome::Code)
+                    .unwrap_or(GuardCodeOutcome::Unavailable))
+            }
+            Self::Stdin { prompt_lock } => {
+                let _guard = prompt_lock.lock().await;
+                read_guard_code_from_stdin(cx)
+            }
+            Self::HelperGui {
+                prompt_lock,
+                helper_bin,
+                stdin_fallback,
+            } => {
+                let _guard = prompt_lock.lock().await;
+                let outcome = request_guard_code_from_helper(cx, helper_bin.as_deref()).await?;
+                // The GUI dialog couldn't be shown (no usable display / helper
+                // missing). Degrade to a terminal prompt rather than dead-ending,
+                // so the operator can still complete the login. A user-initiated
+                // cancel (Cancelled) is respected and does NOT fall through.
+                if matches!(outcome, GuardCodeOutcome::Unavailable)
+                    && *stdin_fallback
+                    && io::stdin().is_terminal()
+                {
+                    eprintln!(
+                        "  Steam Guard dialog unavailable; falling back to terminal input."
+                    );
+                    return read_guard_code_from_stdin(cx);
+                }
+                Ok(outcome)
+            }
+            Self::FailFast => Ok(GuardCodeOutcome::Unavailable),
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GuardProviderKind {
+    PreSupplied,
+    Stdin,
+    HelperGui,
+    FailFast,
+}
+
 /// Run the `steam login` subcommand: interactive per-instance Steam login wizard.
 /// Requires `BridgeReady` — boots instances to perform login.
-pub async fn login(
+pub(crate) async fn login(
     config: &ClusterConfig<BridgeReady>,
     target: Option<&str>,
     continue_from: bool,
@@ -634,7 +1019,8 @@ pub async fn login(
     creds: Option<&CredentialsMap>,
     force: bool,
     login_state_dir: Option<&Path>,
-) -> anyhow::Result<()> {
+    guard_provider: &GuardProvider,
+) -> anyhow::Result<LoginOutcome> {
     let targets = config.resolve_targets(target, continue_from)?;
     let login_state_dir = match login_state_dir {
         Some(path) if std::fs::read_dir(path).is_ok() => Some(path),
@@ -658,11 +1044,13 @@ pub async fn login(
         let login_runners_dir = login_runners_dir.to_path_buf();
         let creds = creds.cloned();
         let login_state_dir = login_state_dir.map(Path::to_path_buf);
+        let guard_provider = guard_provider.clone();
         let results = par_each_vm(&targets, move |vm| {
             let config = config.clone();
             let login_runners_dir = login_runners_dir.clone();
             let creds = creds.clone();
             let login_state_dir = login_state_dir.clone();
+            let guard_provider = guard_provider.clone();
             async move {
                 let mut log = LoginLog::buffered();
                 let attempt = login_vm_attempt(
@@ -672,6 +1060,7 @@ pub async fn login(
                     creds.as_ref(),
                     login_state_dir.as_deref(),
                     force,
+                    &guard_provider,
                     &mut log,
                 )
                 .await;
@@ -721,18 +1110,34 @@ pub async fn login(
 
         let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
         let mut log = LoginLog::stdout();
-        if let Err(e) = login_single_vm(config, vm, login_runners_dir, vm_creds, &mut log).await {
-            eprintln!("Error with {}: {e}", vm.name);
-            failed += 1;
-        } else {
-            logged_in += 1;
+        let login_reason = login_reason_for_vm(login_state_dir, vm, force);
+        match login_single_vm(
+            config,
+            vm,
+            login_runners_dir,
+            vm_creds,
+            &login_reason,
+            guard_provider,
+            &mut log,
+        )
+        .await
+        {
+            Ok(LoginOutcome::Completed | LoginOutcome::ManualCompletionNeeded) => logged_in += 1,
+            Ok(LoginOutcome::GuardCodeNeeded(needed)) => {
+                eprintln!("{needed}");
+                return Ok(LoginOutcome::GuardCodeNeeded(needed));
+            }
+            Err(e) => {
+                eprintln!("Error with {}: {e}", vm.name);
+                failed += 1;
+            }
         }
     }
     println!("==> Logged in: {logged_in}, Skipped: {skipped}, Failed: {failed}");
     if failed > 0 {
         anyhow::bail!("{failed}/{} Steam login target(s) failed", targets.len());
     }
-    Ok(())
+    Ok(LoginOutcome::Completed)
 }
 
 async fn login_vm_attempt(
@@ -742,8 +1147,10 @@ async fn login_vm_attempt(
     creds: Option<&CredentialsMap>,
     login_state_dir: Option<&Path>,
     force: bool,
+    guard_provider: &GuardProvider,
     log: &mut LoginLog,
 ) -> LoginAttempt {
+    let mut login_reason = login_reason_for_vm(login_state_dir, vm, force);
     if !force {
         if let Some(login_state_dir) = login_state_dir {
             let vm_name = vm.name.to_string();
@@ -765,6 +1172,7 @@ async fn login_vm_attempt(
                     vm.name
                 ));
             }
+            login_reason = status.login_reason().to_string();
             log.line(format!(
                 "  {}: {}, logging in",
                 vm.name,
@@ -779,18 +1187,52 @@ async fn login_vm_attempt(
             vm.name
         ));
     };
-    match login_single_vm_automated(config, vm, login_runners_dir, vm_creds, log).await {
-        Ok(()) => LoginAttempt::LoggedIn,
+    match login_single_vm_automated(
+        config,
+        vm,
+        login_runners_dir,
+        vm_creds,
+        &login_reason,
+        guard_provider,
+        log,
+    )
+    .await
+    {
+        Ok(LoginOutcome::Completed | LoginOutcome::ManualCompletionNeeded) => {
+            LoginAttempt::LoggedIn
+        }
+        Ok(LoginOutcome::GuardCodeNeeded(needed)) => LoginAttempt::GuardCodeNeeded(needed),
         Err(e) => LoginAttempt::Failed(e),
     }
 }
 
-fn finish_login_reports(mut results: Vec<LoginReport>, target_count: usize) -> anyhow::Result<()> {
+fn login_reason_for_vm(login_state_dir: Option<&Path>, vm: &VmDef, force: bool) -> String {
+    if force {
+        return "forced re-login".to_string();
+    }
+    login_state_dir
+        .map(|login_state_dir| {
+            accounts::classify_session_status(
+                login_state_dir,
+                vm.name.as_ref(),
+                accounts::DEFAULT_WARN_WITHIN_DAYS,
+            )
+            .login_reason()
+            .to_string()
+        })
+        .unwrap_or_else(|| "first login".to_string())
+}
+
+fn finish_login_reports(
+    mut results: Vec<LoginReport>,
+    target_count: usize,
+) -> anyhow::Result<LoginOutcome> {
     results.sort_by_key(|result| result.vm_index);
 
     let mut failed = 0usize;
     let mut logged_in = 0usize;
     let mut skipped = 0usize;
+    let mut guard_needed = None;
     for result in results {
         if !result.output.is_empty() {
             println!("{}", result.output);
@@ -801,6 +1243,11 @@ fn finish_login_reports(mut results: Vec<LoginReport>, target_count: usize) -> a
                 skipped += 1;
             }
             LoginAttempt::LoggedIn => logged_in += 1,
+            LoginAttempt::GuardCodeNeeded(needed) => {
+                eprintln!("{needed}");
+                guard_needed.get_or_insert(needed);
+                failed += 1;
+            }
             LoginAttempt::Failed(e) => {
                 eprintln!("Error with {}: {e}", result.vm_name);
                 failed += 1;
@@ -810,9 +1257,12 @@ fn finish_login_reports(mut results: Vec<LoginReport>, target_count: usize) -> a
 
     println!("==> Logged in: {logged_in}, Skipped: {skipped}, Failed: {failed}");
     if failed > 0 {
+        if let Some(needed) = guard_needed {
+            return Ok(LoginOutcome::GuardCodeNeeded(needed));
+        }
         anyhow::bail!("{failed}/{target_count} Steam login target(s) failed");
     }
-    Ok(())
+    Ok(LoginOutcome::Completed)
 }
 
 /// Submit a Steam Guard code to a running SteamCMD login session, then finish
@@ -873,7 +1323,7 @@ pub async fn guard<S>(
 
     let code = match code {
         Some(code) => code.trim().to_owned(),
-        None => read_guard_code_from_stdin()?,
+        None => read_guard_code_line_from_stdin()?.unwrap_or_default(),
     };
     if code.is_empty() {
         anyhow::bail!("Steam Guard code cannot be empty");
@@ -955,11 +1405,34 @@ async fn shutdown_steam_login_vm<S>(backend: &Backend, config: &ClusterConfig<S>
     println!("  {} done.", vm.name);
 }
 
-fn read_guard_code_from_stdin() -> anyhow::Result<String> {
-    println!("Steam Guard code:");
-    let mut code = String::new();
-    std::io::stdin().read_line(&mut code)?;
-    Ok(code.trim().to_owned())
+fn read_guard_code_from_stdin(cx: &GuardPromptContext<'_>) -> anyhow::Result<GuardCodeOutcome> {
+    if cx.invalid_retry {
+        println!(
+            "Steam Guard code for {} on {} was invalid. Enter a new code:",
+            cx.steam_user, cx.vm_name
+        );
+    } else {
+        println!(
+            "Steam Guard code for {} on {} ({}):",
+            cx.steam_user, cx.vm_name, cx.reason
+        );
+    }
+    let stdin = std::io::stdin();
+    let mut stdin = stdin.lock();
+    read_guard_code_from_reader(&mut stdin)
+}
+
+fn read_guard_code_from_reader<R: BufRead>(reader: &mut R) -> anyhow::Result<GuardCodeOutcome> {
+    Ok(read_stdin_line(reader)?
+        .map(|code| code.trim().to_owned())
+        .map(GuardCodeOutcome::Code)
+        .unwrap_or(GuardCodeOutcome::Unavailable))
+}
+
+fn read_guard_code_line_from_stdin() -> anyhow::Result<Option<String>> {
+    let stdin = std::io::stdin();
+    let mut stdin = stdin.lock();
+    Ok(read_stdin_line(&mut stdin)?.map(|code| code.trim().to_owned()))
 }
 
 async fn login_single_vm_automated(
@@ -967,8 +1440,10 @@ async fn login_single_vm_automated(
     vm: &VmDef,
     login_runners_dir: &Path,
     creds: &VmCredentials,
+    login_reason: &str,
+    guard_provider: &GuardProvider,
     log: &mut LoginLog,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<LoginOutcome> {
     let backend = &config.backend;
 
     log.blank();
@@ -1016,22 +1491,25 @@ async fn login_single_vm_automated(
         log.line("  Waiting for SSH... ready");
     }
 
-    let outcome =
-        automated_login(backend, vm, creds, &config.vm_user, &config.state_dir, log).await?;
+    let outcome = automated_login(
+        backend,
+        vm,
+        creds,
+        &config.vm_user,
+        &config.state_dir,
+        login_reason,
+        guard_provider,
+        log,
+    )
+    .await?;
 
-    if outcome == LoginOutcome::LeftRunning {
-        log.line(format!(
-            "  {} left running for Steam login completion.",
-            vm.name
-        ));
-        log.line("  After completing Steam login, validate with `cluster-ctl steam accounts`.");
-        log.line("  Stop the login VM with `cluster-ctl down` when you are done.");
-        return Ok(());
+    if matches!(outcome, LoginOutcome::GuardCodeNeeded(_)) {
+        return Ok(outcome);
     }
 
     if !started_vm {
         log.line(format!("  {} done.", vm.name));
-        return Ok(());
+        return Ok(outcome);
     }
 
     log.line("  Shutting down Steam and VM...");
@@ -1047,7 +1525,7 @@ async fn login_single_vm_automated(
     lease::remove_claim(vm.index, &config.lock_dir);
     log.line(format!("  {} done.", vm.name));
 
-    Ok(())
+    Ok(outcome)
 }
 
 async fn login_single_vm(
@@ -1055,8 +1533,10 @@ async fn login_single_vm(
     vm: &VmDef,
     login_runners_dir: &Path,
     creds: Option<&VmCredentials>,
+    login_reason: &str,
+    guard_provider: &GuardProvider,
     log: &mut LoginLog,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<LoginOutcome> {
     let automated = creds.is_some();
     let backend = &config.backend;
 
@@ -1112,25 +1592,39 @@ async fn login_single_vm(
 
     let outcome = if let Some(creds) = creds {
         // Automated login via SteamCMD state bootstrap + GUI validation.
-        automated_login(backend, vm, creds, &config.vm_user, &config.state_dir, log).await?
+        automated_login(
+            backend,
+            vm,
+            creds,
+            &config.vm_user,
+            &config.state_dir,
+            login_reason,
+            guard_provider,
+            log,
+        )
+        .await?
     } else {
         // Interactive VNC-based login (original flow)
         interactive_login(backend, vm, &config.vm_user).await?
     };
 
-    if outcome == LoginOutcome::LeftRunning {
+    if matches!(outcome, LoginOutcome::ManualCompletionNeeded) {
         log.line(format!(
-            "  {} left running for Steam login completion.",
+            "  {} is awaiting manual Steam login completion.",
             vm.name
         ));
         log.line("  After completing Steam login, validate with `cluster-ctl steam accounts`.");
         log.line("  Stop the login VM with `cluster-ctl down` when you are done.");
-        return Ok(());
+        return Ok(outcome);
+    }
+
+    if matches!(outcome, LoginOutcome::GuardCodeNeeded(_)) {
+        return Ok(outcome);
     }
 
     if !started_vm {
         log.line(format!("  {} done.", vm.name));
-        return Ok(());
+        return Ok(outcome);
     }
 
     log.line("  Shutting down Steam and VM...");
@@ -1146,7 +1640,7 @@ async fn login_single_vm(
     lease::remove_claim(vm.index, &config.lock_dir);
     log.line(format!("  {} done.", vm.name));
 
-    Ok(())
+    Ok(outcome)
 }
 
 pub fn vm_log_tail(state_dir: &Path, vm: &VmDef) -> Option<String> {
@@ -1224,26 +1718,37 @@ pub async fn auto_login<S>(
     let backend = config.backend.clone();
     let vm_user = config.vm_user.clone();
     let state_dir = config.state_dir.clone();
+    let guard_provider = GuardProvider::select(None, LoginContext::force_non_interactive(), true);
 
     let results = par_each_vm(vms, |vm| {
         let backend = backend.clone();
         let vm_user = vm_user.clone();
         let state_dir = state_dir.clone();
         let creds = creds.clone();
+        let guard_provider = guard_provider.clone();
         async move {
             let Some(vm_creds) = creds.get::<str>(&vm.name) else {
                 return (vm.name, None);
             };
             let mut log = LoginLog::silent();
-            match automated_login(&backend, &vm, vm_creds, &vm_user, &state_dir, &mut log).await {
+            match automated_login(
+                &backend,
+                &vm,
+                vm_creds,
+                &vm_user,
+                &state_dir,
+                "auto-login",
+                &guard_provider,
+                &mut log,
+            )
+            .await
+            {
                 Ok(LoginOutcome::Completed) => (vm.name, Some(true)),
-                Ok(LoginOutcome::LeftRunning) => {
-                    eprintln!(
-                        "  {}: Steam Guard required; finish with `steam guard`",
-                        vm.name
-                    );
+                Ok(LoginOutcome::GuardCodeNeeded(needed)) => {
+                    eprintln!("  {needed}");
                     (vm.name, Some(false))
                 }
+                Ok(LoginOutcome::ManualCompletionNeeded) => (vm.name, Some(false)),
                 Err(e) => {
                     eprintln!("  {}: login failed: {e}", vm.name);
                     (vm.name, Some(false))
@@ -1278,10 +1783,11 @@ pub async fn auto_login<S>(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LoginOutcome {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LoginOutcome {
     Completed,
-    LeftRunning,
+    GuardCodeNeeded(GuardCodeNeeded),
+    ManualCompletionNeeded,
 }
 
 /// Automated login: bootstraps account state with SteamCMD, starts Steam GUI,
@@ -1292,6 +1798,8 @@ async fn automated_login(
     creds: &VmCredentials,
     vm_user: &str,
     state_dir: &Path,
+    login_reason: &str,
+    guard_provider: &GuardProvider,
     log: &mut LoginLog,
 ) -> anyhow::Result<LoginOutcome> {
     log.line(format!("  Logging in as {}...", creds.steam_user));
@@ -1320,16 +1828,27 @@ async fn automated_login(
     let wait =
         wait_for_steamcmd_bootstrap(backend, vm, vm_user, state_dir, &[&creds.steam_pass]).await?;
     if wait == SteamCmdWait::GuardRequired {
-        log.line(format!("  Steam Guard required for {}.", creds.steam_user));
-        log.line(format!(
-            "  Complete from another shell with: cluster-ctl steam guard {} --code <CODE>",
-            vm.name
-        ));
-        log.line(format!(
-            "  Or use the project wrapper: nix run .#cluster-steam-guard -- {} --credentials <credentials.toml> --code <CODE>",
-            vm.name
-        ));
-        return Ok(LoginOutcome::LeftRunning);
+        match complete_guard_login_with_provider(
+            backend,
+            vm,
+            creds,
+            vm_user,
+            state_dir,
+            login_reason,
+            guard_provider,
+            log,
+        )
+        .await?
+        {
+            SteamCmdWait::Complete => {}
+            SteamCmdWait::GuardRequired => {
+                return Ok(LoginOutcome::GuardCodeNeeded(GuardCodeNeeded::new(
+                    vm,
+                    &creds.steam_user,
+                    login_reason,
+                )));
+            }
+        }
     }
 
     finish_steam_login(
@@ -1345,10 +1864,100 @@ async fn automated_login(
     Ok(LoginOutcome::Completed)
 }
 
+async fn complete_guard_login_with_provider(
+    backend: &Backend,
+    vm: &VmDef,
+    creds: &VmCredentials,
+    vm_user: &str,
+    state_dir: &Path,
+    login_reason: &str,
+    guard_provider: &GuardProvider,
+    log: &mut LoginLog,
+) -> anyhow::Result<SteamCmdWait> {
+    let mut invalid_retry = false;
+    loop {
+        let cx = GuardPromptContext {
+            vm_name: &vm.name,
+            steam_user: &creds.steam_user,
+            reason: login_reason,
+            invalid_retry,
+        };
+        log.line(format!("  Steam Guard required for {}.", creds.steam_user));
+        let mut code = match guard_provider.request(&cx).await? {
+            GuardCodeOutcome::Code(code) => code,
+            GuardCodeOutcome::Cancelled | GuardCodeOutcome::Unavailable => {
+                let _ = kill_steamcmd_login_session(backend, vm, vm_user).await;
+                return Ok(SteamCmdWait::GuardRequired);
+            }
+        };
+        if code.trim().is_empty() {
+            code.zeroize();
+            let _ = kill_steamcmd_login_session(backend, vm, vm_user).await;
+            return Ok(SteamCmdWait::GuardRequired);
+        }
+
+        // Feed the code into the LIVE SteamCMD session that is already parked at
+        // the `Steam Guard code:` prompt. The initial no-code bootstrap is what
+        // triggered Steam to *issue* the code (email Steam Guard sends the code in
+        // response to the login attempt; it cannot be known beforehand), so we must
+        // submit into that same attempt rather than start a fresh positional login.
+        // A pre-supplied `--code`/env value (only meaningful for the on-demand
+        // mobile authenticator) flows through this same path.
+        log.line("  Submitting Steam Guard code to the live SteamCMD session...");
+        let mut submit_script = steamcmd_guard_submit_script(vm_user, &code);
+        let secrets = [&creds.steam_pass as &str, code.as_str()];
+        let submit = backend.run_cmd(&vm.ip, &submit_script).await;
+        submit_script.zeroize();
+        if !submit.success || !steamcmd_guard_submitted(&submit.stdout) {
+            let stdout = redact_sensitive(&submit.stdout, &secrets);
+            let stderr = redact_sensitive(&submit.stderr, &secrets);
+            if stdout.trim().is_empty() && stderr.trim().is_empty() {
+                let tail =
+                    vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+                code.zeroize();
+                anyhow::bail!(
+                    "{}: Steam Guard submit produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+                    vm.name
+                );
+            }
+            code.zeroize();
+            anyhow::bail!(
+                "{}: Steam Guard submit failed. stdout: {} stderr: {}",
+                vm.name,
+                stdout,
+                stderr
+            );
+        }
+
+        let wait =
+            wait_for_steamcmd_guard_completion(backend, vm, vm_user, state_dir, &secrets).await?;
+        code.zeroize();
+        match wait {
+            SteamCmdWait::Complete => return Ok(SteamCmdWait::Complete),
+            SteamCmdWait::GuardRequired => invalid_retry = true,
+        }
+    }
+}
+
+async fn kill_steamcmd_login_session(backend: &Backend, vm: &VmDef, vm_user: &str) -> bool {
+    backend
+        .run_cmd(&vm.ip, &steamcmd_kill_session_script(vm_user))
+        .await
+        .success
+}
+
+/// Build the no-code SteamCMD bootstrap. Intentionally has **no** positional
+/// Guard-code form: `steamcmd +login user pass` is what triggers Steam to issue
+/// the code (email Steam Guard mails it in response to this attempt), and the
+/// code is then submitted into this same live session by
+/// [`steamcmd_guard_submit_script`]. A positional `+login user pass code` would
+/// only ever satisfy the on-demand mobile authenticator and cannot work for a
+/// first-login email challenge, so it is deliberately not offered.
 fn steamcmd_bootstrap_command(vm_user: &str, steam_user: &str, steam_pass: &str) -> String {
     let home = format!("/home/{vm_user}");
     let user = shell_escape(steam_user);
     let pass = shell_escape(steam_pass);
+    let login_args = format!("'{user}' '{pass}'");
     format!(
         r#"export HOME='{home}'
 SESSION="steampipe-steamcmd-login"
@@ -1366,7 +1975,7 @@ rm -f "$STATUS"
 cat > "$RUNNER" <<'STEAMPIPE_STEAMCMD_LOGIN'
 #!/bin/sh
 export HOME='{home}'
-steamcmd +login '{user}' '{pass}' +quit
+steamcmd +login {login_args} +quit
 code=$?
 echo "$code" > '{home}/.local/share/Steam/logs/steampipe_steamcmd_status'
 echo "STEAMCMD_EXIT:$code"
@@ -1383,6 +1992,15 @@ echo STEAMCMD_STARTED"#
 enum SteamCmdWait {
     Complete,
     GuardRequired,
+}
+
+fn steamcmd_kill_session_script(vm_user: &str) -> String {
+    format!(
+        r#"HOME=/home/{vm_user}
+SESSION="steampipe-steamcmd-login"
+tmux kill-session -t "$SESSION" 2>/dev/null || true
+echo STEAMCMD_SESSION_KILLED"#
+    )
 }
 
 async fn wait_for_steamcmd_bootstrap(
@@ -1651,6 +2269,11 @@ for base in "$HOME/.steam/steamcmd" "$HOME/Steam" "$HOME/.local/share/Steam"; do
     copy_file "$base/config/loginusers.vdf" "$GUI_CONFIG"
     copy_file "$base/config/config.vdf" "$GUI_CONFIG"
     copy_file "$base/config/registry.vdf" "$GUI_CONFIG"
+    for id_dir in "$base"/config/[0-9]*/; do
+        [ -d "$id_dir" ] || continue
+        id="$(basename "$id_dir")"
+        copy_file "$id_dir/local.vdf" "$GUI_CONFIG/$id"
+    done
     copy_file "$base/registry.vdf" "$GUI_CONFIG"
     for ssfn in "$base"/ssfn*; do
         [ -f "$ssfn" ] || continue
@@ -1832,7 +2455,7 @@ async fn interactive_login(
                 vm.ip
             );
             println!("  Stop the login VM with `cluster-ctl down` when finished.");
-            return Ok(LoginOutcome::LeftRunning);
+            return Ok(LoginOutcome::ManualCompletionNeeded);
         };
         let input = input.trim();
 
@@ -1843,7 +2466,7 @@ async fn interactive_login(
             let Some(text) = read_stdin_line(&mut stdin)? else {
                 println!("  stdin is nonblocking; paste was not sent.");
                 println!("  Continue in VNC, then run `cluster-ctl steam accounts` to validate.");
-                return Ok(LoginOutcome::LeftRunning);
+                return Ok(LoginOutcome::ManualCompletionNeeded);
             };
             let text = text.trim_end_matches('\n');
             if !text.is_empty() {
@@ -2161,6 +2784,7 @@ fn format_date(timestamp: SystemTime) -> String {
 mod tests {
     use super::*;
     use crate::core::config::{IpAddr, VmName};
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn shell_escape_no_quotes() {
@@ -2237,6 +2861,37 @@ mod tests {
     #[test]
     fn steam_login_interactive_reachable_vm_still_bounces() {
         assert_eq!(login_boot_action(false, true), LoginBootAction::Restart);
+    }
+
+    #[test]
+    fn guard_provider_selects_code_stdin_or_failfast() {
+        assert_eq!(
+            GuardProvider::select(
+                Some(" 12345 ".to_string()),
+                LoginContext::synthetic(false, false, false),
+                true,
+            )
+            .kind(),
+            GuardProviderKind::PreSupplied
+        );
+        assert_eq!(
+            GuardProvider::select(None, LoginContext::synthetic(false, true, false), true).kind(),
+            GuardProviderKind::Stdin
+        );
+        assert_eq!(
+            GuardProvider::select(None, LoginContext::synthetic(true, true, true), false).kind(),
+            GuardProviderKind::FailFast
+        );
+    }
+
+    #[test]
+    fn guard_code_needed_message_is_machine_distinguishable_and_actionable() {
+        let message =
+            GuardCodeNeeded::for_vm_name("vm-2", "cached Steam session is missing").to_string();
+        assert!(message.contains("STEAM_GUARD_CODE_NEEDED"));
+        assert!(message.contains("cluster-ctl steam login vm-2"));
+        assert!(message.contains("--code <CODE>"));
+        assert!(message.contains("STEAMPIPE_GUARD_CODE"));
     }
 
     #[test]
@@ -2319,6 +2974,16 @@ mod tests {
     }
 
     #[test]
+    fn steamcmd_bootstrap_command_has_no_positional_guard_code() {
+        // The bootstrap must remain a no-code login attempt: that attempt is what
+        // makes Steam issue the Guard code. The code is submitted separately into
+        // the live session via steamcmd_guard_submit_script (tmux send-keys).
+        let script = steamcmd_bootstrap_command("chessbender", "account", "password");
+        assert!(script.contains("steamcmd +login 'account' 'password' +quit"));
+        assert!(!script.contains("steamcmd +login 'account' 'password' '"));
+    }
+
+    #[test]
     fn steamcmd_guard_submit_uses_tmux_send_keys() {
         let script = steamcmd_guard_submit_script("chessbender", "AB'CDE");
         assert!(script.contains("tmux send-keys"));
@@ -2361,6 +3026,8 @@ mod tests {
         assert!(script.contains("$HOME/.local/share/Steam"));
         assert!(script.contains("config/loginusers.vdf"));
         assert!(script.contains("config/config.vdf"));
+        assert!(script.contains("config/[0-9]*/"));
+        assert!(script.contains("copy_file \"$id_dir/local.vdf\" \"$GUI_CONFIG/$id\""));
         assert!(script.contains("registry.vdf"));
         assert!(script.contains("ssfn*"));
         assert!(script.contains("STEAMCMD_SYNC_OK"));
@@ -2444,6 +3111,212 @@ mod tests {
     fn read_stdin_line_treats_eof_as_unavailable() {
         let mut input = io::Cursor::new("");
         assert_eq!(read_stdin_line(&mut input).unwrap(), None);
+    }
+
+    #[test]
+    fn display_probe_accepts_wayland_or_x11_only_when_non_empty() {
+        assert!(!display_env_present(None, None));
+        assert!(!display_env_present(
+            Some(OsStr::new("")),
+            Some(OsStr::new(""))
+        ));
+        assert!(display_env_present(Some(OsStr::new("wayland-1")), None));
+        assert!(display_env_present(None, Some(OsStr::new(":0"))));
+    }
+
+    fn write_helper_script(path: &Path, body: &str) {
+        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+
+    fn guard_prompt_context<'a>() -> GuardPromptContext<'a> {
+        GuardPromptContext {
+            vm_name: "vm-1",
+            steam_user: "account",
+            reason: "test login",
+            invalid_retry: false,
+        }
+    }
+
+    #[test]
+    fn helper_gui_provider_maps_exit_codes_from_env_override() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("helper");
+
+        write_helper_script(&helper, "echo ABCDE");
+        assert_helper_env_child("code", &helper);
+
+        write_helper_script(&helper, "exit 10");
+        assert_helper_env_child("cancelled", &helper);
+
+        write_helper_script(&helper, "exit 12");
+        assert_helper_env_child("unavailable", &helper);
+
+        assert_helper_env_child("unavailable", &temp.path().join("missing-helper"));
+    }
+
+    fn assert_helper_env_child(expected: &str, helper: &Path) {
+        let output = std::process::Command::new(env::current_exe().unwrap())
+            .arg("helper_gui_env_override_child")
+            .arg("--ignored")
+            .env(GUARD_PROMPT_BIN_ENV, helper)
+            .env("STEAMPIPE_EXPECTED_GUARD_OUTCOME", expected)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child test failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "spawned by helper_gui_provider_maps_exit_codes_from_env_override with controlled env"]
+    async fn helper_gui_env_override_child() {
+        let expected = env::var("STEAMPIPE_EXPECTED_GUARD_OUTCOME").unwrap();
+        let outcome = GuardProvider::helper_gui(false)
+            .request(&guard_prompt_context())
+            .await
+            .unwrap();
+        match expected.as_str() {
+            "code" => assert_eq!(outcome, GuardCodeOutcome::Code("ABCDE".to_owned())),
+            "cancelled" => assert_eq!(outcome, GuardCodeOutcome::Cancelled),
+            "unavailable" => assert_eq!(outcome, GuardCodeOutcome::Unavailable),
+            other => panic!("unknown expected outcome: {other}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn helper_gui_provider_serializes_concurrent_requests() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("helper");
+        let active = temp.path().join("active");
+        let overlap = temp.path().join("overlap");
+        write_helper_script(
+            &helper,
+            &format!(
+                r#"if [ -e '{active}' ]; then
+    echo overlap > '{overlap}'
+    exit 12
+fi
+touch '{active}'
+sleep 0.2
+rm -f '{active}'
+echo ABCDE"#,
+                active = active.display(),
+                overlap = overlap.display()
+            ),
+        );
+
+        let provider = GuardProvider::helper_gui_with_binary(helper);
+        let cx1 = GuardPromptContext {
+            vm_name: "vm-1",
+            steam_user: "account",
+            reason: "first",
+            invalid_retry: false,
+        };
+        let cx2 = GuardPromptContext {
+            vm_name: "vm-2",
+            steam_user: "account",
+            reason: "second",
+            invalid_retry: false,
+        };
+
+        let (first, second) = tokio::join!(provider.request(&cx1), provider.request(&cx2));
+        assert_eq!(first.unwrap(), GuardCodeOutcome::Code("ABCDE".to_owned()));
+        assert_eq!(second.unwrap(), GuardCodeOutcome::Code("ABCDE".to_owned()));
+        assert!(!overlap.exists(), "helper processes overlapped");
+    }
+
+    #[test]
+    fn guard_provider_selection_policy_is_deterministic() {
+        let cases = [
+            (
+                "code wins over non-interactive",
+                Some(" ABCDE ".to_owned()),
+                LoginContext::synthetic(false, false, true),
+                false,
+                GuardProviderKind::PreSupplied,
+            ),
+            (
+                "non-interactive fails fast",
+                None,
+                LoginContext::synthetic(true, true, true),
+                false,
+                GuardProviderKind::FailFast,
+            ),
+            (
+                "mcp-forced non-interactive fails fast even with display and tty",
+                None,
+                LoginContext::force_non_interactive(),
+                false,
+                GuardProviderKind::FailFast,
+            ),
+            (
+                "display gui branch selects helper",
+                None,
+                LoginContext::synthetic(true, true, false),
+                false,
+                GuardProviderKind::HelperGui,
+            ),
+            (
+                "display gui branch selects helper without tty",
+                None,
+                LoginContext::synthetic(true, false, false),
+                false,
+                GuardProviderKind::HelperGui,
+            ),
+            (
+                "no display tty selects stdin",
+                None,
+                LoginContext::synthetic(false, true, false),
+                false,
+                GuardProviderKind::Stdin,
+            ),
+            (
+                "no display no tty fails fast",
+                None,
+                LoginContext::synthetic(false, false, false),
+                false,
+                GuardProviderKind::FailFast,
+            ),
+            (
+                "no-gui display tty selects stdin",
+                None,
+                LoginContext::synthetic(true, true, false),
+                true,
+                GuardProviderKind::Stdin,
+            ),
+        ];
+
+        for (name, code, context, no_gui, expected) in cases {
+            assert_eq!(
+                GuardProvider::select(code, context, no_gui).kind(),
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn stdin_guard_provider_reports_unavailable_on_eof() {
+        let mut input = io::Cursor::new("");
+        assert_eq!(
+            read_guard_code_from_reader(&mut input).unwrap(),
+            GuardCodeOutcome::Unavailable
+        );
+    }
+
+    #[test]
+    fn stdin_guard_provider_trims_codes() {
+        let mut input = io::Cursor::new(" ABCDE \n");
+        assert_eq!(
+            read_guard_code_from_reader(&mut input).unwrap(),
+            GuardCodeOutcome::Code("ABCDE".to_owned())
+        );
     }
 
     // ── Compositor setup scripts ────────────────────────────────────────

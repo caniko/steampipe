@@ -12,6 +12,8 @@ use crate::core::config::{ClusterConfig, Unchecked, detect_project_root};
 use crate::core::state;
 use crate::ui::cli::NetworkMode;
 
+pub const MCP_NON_INTERACTIVE_ENV: &str = "STEAMPIPE_MCP_NON_INTERACTIVE";
+
 fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -310,7 +312,9 @@ impl SteampipeMcp {
         }
 
         cmd.stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+            .stderr(std::process::Stdio::piped())
+            .stdin(std::process::Stdio::null())
+            .env(MCP_NON_INTERACTIVE_ENV, "1");
 
         let child = cmd.spawn().map_err(|e| {
             ErrorData::internal_error(format!("Failed to spawn nix run: {e}"), None)

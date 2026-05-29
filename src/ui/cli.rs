@@ -142,6 +142,14 @@ pub struct Cli {
     /// Override lock directory for VM reservation (default: $XDG_RUNTIME_DIR/steampipe/)
     #[arg(long, global = true)]
     pub lock_dir: Option<PathBuf>,
+
+    /// Never prompt for input or open host UI windows; fail fast when interaction is required.
+    #[arg(long, global = true)]
+    pub non_interactive: bool,
+
+    /// Allow terminal prompts but never open the Steam Guard GUI helper.
+    #[arg(long, global = true)]
+    pub no_gui: bool,
 }
 
 #[derive(Subcommand)]
@@ -631,6 +639,9 @@ pub enum SteamAction {
         /// Re-login every selected VM even if it already has a valid Steam session.
         #[arg(long)]
         force: bool,
+        /// Pre-supplied Steam Guard code for single-shot automated login.
+        #[arg(long)]
+        code: Option<String>,
     },
 
     /// Submit Steam Guard code to a running SteamCMD login VM
@@ -925,12 +936,14 @@ mod tests {
                         continue_from,
                         login_runners_dir,
                         force,
+                        code,
                     },
             } => {
                 assert_eq!(target.as_deref(), Some("vm-1"));
                 assert!(!continue_from);
                 assert!(login_runners_dir.is_none());
                 assert!(!force);
+                assert!(code.is_none());
             }
             _ => panic!("expected Steam login command"),
         }
@@ -954,6 +967,42 @@ mod tests {
             Commands::Steam {
                 action: SteamAction::Login { force, .. },
             } => assert!(force),
+            _ => panic!("expected Steam login command"),
+        }
+    }
+
+    #[test]
+    fn global_interactivity_flags_parse() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "--non-interactive",
+            "--no-gui",
+            "steam",
+            "login",
+        ]);
+        assert!(cli.non_interactive);
+        assert!(cli.no_gui);
+    }
+
+    #[test]
+    fn steam_login_accepts_guard_code() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "steam",
+            "login",
+            "vm-1",
+            "--code",
+            "ABCDE",
+        ]);
+        match cli.command {
+            Commands::Steam {
+                action: SteamAction::Login { target, code, .. },
+            } => {
+                assert_eq!(target.as_deref(), Some("vm-1"));
+                assert_eq!(code.as_deref(), Some("ABCDE"));
+            }
             _ => panic!("expected Steam login command"),
         }
     }

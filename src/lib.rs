@@ -8,7 +8,7 @@ pub mod net;
 pub mod ui;
 pub mod vm;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use core::config::{self, BackendKind, ClusterConfig, VisualConfig, detect_project_root};
 use core::credentials;
@@ -540,6 +540,61 @@ macro_rules! resolve {
     };
 }
 
+fn steam_login_context(non_interactive: bool, mcp_non_interactive: bool) -> steam::LoginContext {
+    if non_interactive || mcp_non_interactive {
+        steam::LoginContext::force_non_interactive()
+    } else {
+        steam::LoginContext::detect(false)
+    }
+}
+
+async fn run_steam_login_command(
+    config: &ClusterConfig,
+    module: Option<&NixosModuleConfig>,
+    module_only: bool,
+    project_root: Option<&Path>,
+    target: Option<&str>,
+    continue_from: bool,
+    login_runners_dir: Option<PathBuf>,
+    force: bool,
+    code: Option<String>,
+    non_interactive: bool,
+    no_gui: bool,
+    creds: Option<&credentials::CredentialsMap>,
+) -> anyhow::Result<steam::LoginOutcome> {
+    let login_runners_dir = resolve_path_field(
+        login_runners_dir,
+        module,
+        |m| m.login_runners_dir.as_ref(),
+        config.backend_kind,
+        project_root,
+        "login runners dir",
+        "--login-runners-dir",
+        "services.steampipe-cluster.loginRunners.enable",
+    )?;
+    ensure_module_only_ssh_key_available(config, module_only)?;
+    bridge::ensure_bridge(config, project_root)?;
+    let validated = config.clone().validate_or_skip_bridge()?;
+    let login_state_dir = module.map(|m| m.login_state_dir.as_path());
+    let code = code.or_else(|| std::env::var("STEAMPIPE_GUARD_CODE").ok());
+    let login_context = steam_login_context(
+        non_interactive,
+        std::env::var_os(mcp::MCP_NON_INTERACTIVE_ENV).is_some(),
+    );
+    let guard_provider = steam::GuardProvider::select(code, login_context, no_gui);
+    steam::login(
+        &validated,
+        target,
+        continue_from,
+        &login_runners_dir,
+        creds,
+        force,
+        login_state_dir,
+        &guard_provider,
+    )
+    .await
+}
+
 pub fn run(cli: Cli) -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -689,13 +744,13 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 FixtureGoldenAction::Verify {
                     golden_dir,
                     manifest,
-                } => fixture::golden::verify(&project_root, golden_dir.clone(), manifest.clone())?,
+                } => fixture::golden::verify(project_root, golden_dir.clone(), manifest.clone())?,
                 FixtureGoldenAction::Regenerate {
                     fixture,
                     output,
                     allow_dirty,
                 } => fixture::golden::regenerate(
-                    &project_root,
+                    project_root,
                     fixture.clone(),
                     output.clone(),
                     *allow_dirty,
@@ -935,31 +990,28 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                 continue_from,
                 login_runners_dir,
                 force,
+                code,
             } => {
-                let login_runners_dir = resolve_path_field(
-                    login_runners_dir,
+                match run_steam_login_command(
+                    &config,
                     module.as_ref(),
-                    |m| m.login_runners_dir.as_ref(),
-                    config.backend_kind,
+                    module_only,
                     project_root.as_deref(),
-                    "login runners dir",
-                    "--login-runners-dir",
-                    "services.steampipe-cluster.loginRunners.enable",
-                )?;
-                ensure_module_only_ssh_key_available(&config, module_only)?;
-                bridge::ensure_bridge(&config, project_root.as_deref())?;
-                let validated = config.validate_or_skip_bridge()?;
-                let login_state_dir = module.as_ref().map(|m| m.login_state_dir.as_path());
-                steam::login(
-                    &validated,
                     target.as_deref(),
                     continue_from,
-                    &login_runners_dir,
-                    creds.as_ref(),
+                    login_runners_dir,
                     force,
-                    login_state_dir,
+                    code,
+                    cli.non_interactive,
+                    cli.no_gui,
+                    creds.as_ref(),
                 )
-                .await?;
+                .await?
+                {
+                    steam::LoginOutcome::Completed
+                    | steam::LoginOutcome::ManualCompletionNeeded => {}
+                    steam::LoginOutcome::GuardCodeNeeded(needed) => return Err(needed.into()),
+                }
             }
             SteamAction::Guard { target, code } => {
                 ensure_module_only_ssh_key_available(&config, module_only)?;
@@ -1605,6 +1657,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(resolved, PathBuf::from("/fixture/login-runners"));
+    }
+
+    #[test]
+    fn mcp_context_forces_steam_login_non_interactive() {
+        let context = steam_login_context(false, true);
+        assert!(context.non_interactive);
     }
 
     #[test]
