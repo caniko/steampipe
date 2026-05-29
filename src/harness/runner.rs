@@ -915,17 +915,42 @@ pub async fn run<S>(
         print_and_push(&mut output, "=== STARTING STEAM ON VMs ===", verbose);
         let compositor = crate::steam::steam_compositor_setup(test_config.display, &config.vm_user);
         for vm in target_vms {
+            let identity = backend
+                .run_cmd(
+                    &vm.ip,
+                    &crate::steam::steam_identity_probe_script(&config.vm_user),
+                )
+                .await;
+            let (_persona, has_cached_login) =
+                crate::steam::parse_steam_identity(identity.stdout.trim());
+            if !has_cached_login {
+                let needed = crate::steam::GuardCodeNeeded::for_vm_name(
+                    vm.name.to_string(),
+                    "Steam network test requires a cached VM Steam session",
+                );
+                print_and_push(
+                    &mut output,
+                    &format!("  {}: FAILED — {needed}", vm.name),
+                    verbose,
+                );
+                return Err(needed.into());
+            }
+
             match crate::steam::ensure_steam(backend, &vm.ip, &config.vm_user, &compositor).await {
                 Ok(()) => {
                     print_and_push(&mut output, &format!("  {}: Steam ready", vm.name), verbose)
                 }
                 Err(e) => {
+                    let needed = crate::steam::GuardCodeNeeded::for_vm_name(
+                        vm.name.to_string(),
+                        "cached Steam session is missing or expired",
+                    );
                     print_and_push(
                         &mut output,
-                        &format!("  {}: FAILED — {e}", vm.name),
+                        &format!("  {}: FAILED — {needed}\n  Diagnostics: {e}", vm.name),
                         verbose,
                     );
-                    anyhow::bail!("Steam setup failed on {}", vm.name);
+                    return Err(needed.into());
                 }
             }
         }
@@ -979,9 +1004,14 @@ pub async fn run<S>(
         }
         NetworkMode::Steam => {
             default_host_args = "--auto-host-steam --auto-play".to_string();
-            let target_flag = crate::accounts::local_steam_id()
-                .map(|id| format!(" --steam-target-id {id}"))
-                .unwrap_or_default();
+            // `--steam-target-id` points VMs at the host operator's Steam
+            // account, not at any per-VM cached session directory.
+            let host_steam_id = crate::accounts::local_steam_id().map_err(|error| {
+                anyhow::anyhow!(
+                    "Steam network tests need the host operator's Steam ID for --steam-target-id, but no host Steam login was found: {error}. Log into Steam on the host operator account before running Steam-network tests."
+                )
+            })?;
+            let target_flag = format!(" --steam-target-id {host_steam_id}");
             default_vm_args = format!("--auto-join-steam --auto-play{vm_headless}{target_flag}");
         }
     }

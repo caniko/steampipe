@@ -93,7 +93,7 @@ in {
     };
 
     systemd.services.steampipe-steam-warm = {
-      description = "cluster-ctl steam warm (one-shot)";
+      description = "cluster-ctl steam warm (one-shot; expired Steam Guard sessions fail fast and require operator re-login)";
       after = [
         "NetworkManager-wait-online.service"
         "network-online.target"

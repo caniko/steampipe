@@ -401,10 +401,8 @@ mod tests {
         format!("{header}.{payload}.")
     }
 
-    fn write_vm_state(root: &Path, vm_name: &str, persona: &str, steam_id: &str, exp: i64) {
-        let config_dir = root.join(vm_name).join("config");
-        let token_dir = config_dir.join(steam_id);
-        std::fs::create_dir_all(&token_dir).expect("create token dir");
+    fn write_loginusers(config_dir: &Path, persona: &str, steam_id: &str) {
+        std::fs::create_dir_all(config_dir).expect("create config dir");
         std::fs::write(
             config_dir.join("loginusers.vdf"),
             format!(
@@ -419,6 +417,13 @@ mod tests {
             ),
         )
         .expect("write loginusers.vdf");
+    }
+
+    fn write_vm_state(root: &Path, vm_name: &str, persona: &str, steam_id: &str, exp: i64) {
+        let config_dir = root.join(vm_name).join("config");
+        let token_dir = config_dir.join(steam_id);
+        std::fs::create_dir_all(&token_dir).expect("create token dir");
+        write_loginusers(&config_dir, persona, steam_id);
         std::fs::write(
             token_dir.join("local.vdf"),
             format!(r#""RefreshToken_{steam_id}"   "{}""#, test_jwt(exp)),
@@ -487,6 +492,46 @@ mod tests {
         assert_eq!(
             classify_session_status(temp.path(), "vm-missing", DEFAULT_WARN_WITHIN_DAYS),
             SessionStatus::Unknown
+        );
+    }
+
+    #[test]
+    fn classify_session_status_accepts_per_steamid_local_vdf_without_config_vdf() {
+        let temp = tempfile::tempdir().expect("temp login state dir");
+        let now = chrono::Utc::now().timestamp();
+        write_vm_state(
+            temp.path(),
+            "vm-local-only",
+            "PersonaLocal",
+            "76561198000000004",
+            now + 90 * 86_400,
+        );
+
+        assert_eq!(
+            classify_session_status(temp.path(), "vm-local-only", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::Ok
+        );
+    }
+
+    #[test]
+    fn classify_session_status_accepts_config_vdf_fallback_without_local_vdf() {
+        let temp = tempfile::tempdir().expect("temp login state dir");
+        let now = chrono::Utc::now().timestamp();
+        let steam_id = "76561198000000005";
+        let config_dir = temp.path().join("vm-config-only").join("config");
+        write_loginusers(&config_dir, "PersonaConfig", steam_id);
+        std::fs::write(
+            config_dir.join("config.vdf"),
+            format!(
+                r#""RefreshToken_{steam_id}"   "{}""#,
+                test_jwt(now + 90 * 86_400)
+            ),
+        )
+        .expect("write config.vdf");
+
+        assert_eq!(
+            classify_session_status(temp.path(), "vm-config-only", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::Ok
         );
     }
 }
