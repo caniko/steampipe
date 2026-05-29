@@ -44,16 +44,9 @@ pub fn read_virtiofsd_pids(state_dir: &Path, vm_name: &str) -> Vec<u32> {
 }
 
 /// Write the virtiofsd helper PIDs for `vm_name`, one per line.
-pub fn write_virtiofsd_pids(
-    state_dir: &Path,
-    vm_name: &str,
-    pids: &[u32],
-) -> anyhow::Result<()> {
+pub fn write_virtiofsd_pids(state_dir: &Path, vm_name: &str, pids: &[u32]) -> anyhow::Result<()> {
     let pid_file = state_dir.join(format!("{vm_name}.virtiofsd.pid"));
-    let body: String = pids
-        .iter()
-        .map(|pid| format!("{pid}\n"))
-        .collect();
+    let body: String = pids.iter().map(|pid| format!("{pid}\n")).collect();
     std::fs::write(pid_file, body)?;
     Ok(())
 }

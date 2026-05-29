@@ -479,11 +479,7 @@ fn parse_supervisord_program_commands(conf: &str) -> Vec<PathBuf> {
             continue;
         }
         if let Some(value) = line.strip_prefix("command=") {
-            let first = value
-                .split_whitespace()
-                .next()
-                .unwrap_or("")
-                .trim();
+            let first = value.split_whitespace().next().unwrap_or("").trim();
             if !first.is_empty() {
                 out.push(PathBuf::from(first));
             }
@@ -523,9 +519,9 @@ fn virtiofs_socket_names(runner: &Path) -> std::io::Result<Vec<String>> {
 
 fn parse_virtiofs_socket_names(runner_contents: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for token in runner_contents.split(|c: char| {
-        c.is_whitespace() || matches!(c, ',' | '\'' | '"' | '=')
-    }) {
+    for token in
+        runner_contents.split(|c: char| c.is_whitespace() || matches!(c, ',' | '\'' | '"' | '='))
+    {
         if token.contains("virtiofs") && token.ends_with(".sock") {
             let name = token.trim();
             if !name.is_empty() && !out.iter().any(|existing: &String| existing == name) {
@@ -972,10 +968,7 @@ user=root
 
     #[test]
     fn tail_log_returns_last_n_nonempty_lines() {
-        let dir = std::env::temp_dir().join(format!(
-            "steampipe-tail-log-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("steampipe-tail-log-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let log = dir.join("v.log");
@@ -989,10 +982,8 @@ user=root
 
     #[test]
     fn tail_log_returns_placeholder_for_missing_file() {
-        let missing = std::env::temp_dir().join(format!(
-            "steampipe-tail-log-missing-{}",
-            std::process::id()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("steampipe-tail-log-missing-{}", std::process::id()));
         let tail = super::tail_log(&missing, 4);
         assert!(tail.contains("no log at"));
     }
@@ -1013,10 +1004,7 @@ user=root
         // crosvm uses `socket=<name>.sock` rather than `path=`.
         let runner = "--vhost-user 'type=fs,socket=vm-2-virtiofs-steampipe-ssh-authorized.sock'";
         let sockets = super::parse_virtiofs_socket_names(runner);
-        assert_eq!(
-            sockets,
-            vec!["vm-2-virtiofs-steampipe-ssh-authorized.sock"]
-        );
+        assert_eq!(sockets, vec!["vm-2-virtiofs-steampipe-ssh-authorized.sock"]);
     }
 
     #[test]
@@ -1044,10 +1032,8 @@ user=root
 
     #[test]
     fn wait_for_virtiofs_sockets_returns_when_files_appear() {
-        let dir = std::env::temp_dir().join(format!(
-            "steampipe-virtiofs-wait-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("steampipe-virtiofs-wait-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("vm-1-virtiofs-steam-state-vm-1.sock"), "").unwrap();
@@ -1085,16 +1071,10 @@ user=root
         let dir_for_thread = dir.clone();
         let writer = std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(200));
-            std::fs::write(
-                dir_for_thread.join("vm-9-virtiofs-late.sock"),
-                "",
-            )
-            .unwrap();
+            std::fs::write(dir_for_thread.join("vm-9-virtiofs-late.sock"), "").unwrap();
         });
-        let result = super::wait_for_virtiofs_sockets(
-            &dir,
-            &["vm-9-virtiofs-late.sock".to_string()],
-        );
+        let result =
+            super::wait_for_virtiofs_sockets(&dir, &["vm-9-virtiofs-late.sock".to_string()]);
         writer.join().unwrap();
         assert!(result.is_ok());
         let _ = std::fs::remove_dir_all(&dir);
@@ -1134,10 +1114,8 @@ user=root
     fn virtiofsd_runner_spawns_socket_before_microvm_runs() {
         use std::os::unix::fs::PermissionsExt;
 
-        let scratch = std::env::temp_dir().join(format!(
-            "steampipe-virtiofsd-e2e-{}",
-            std::process::id()
-        ));
+        let scratch =
+            std::env::temp_dir().join(format!("steampipe-virtiofsd-e2e-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&scratch);
         let runners_dir = scratch.join("runners");
         let state_dir = scratch.join("state");
