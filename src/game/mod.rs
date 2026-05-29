@@ -4,4 +4,6 @@ pub mod compositor;
 pub mod run;
 pub mod scene;
 pub mod steam;
+pub mod steam_auth;
+pub mod steam_session;
 pub mod visual;

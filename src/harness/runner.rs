@@ -389,11 +389,10 @@ impl HeartbeatSource for LocalHeartbeat<'_> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("game_progress_") && name.ends_with(".json") {
-                if let Ok(content) = std::fs::read_to_string(entry.path()) {
+            if name.starts_with("game_progress_") && name.ends_with(".json")
+                && let Ok(content) = std::fs::read_to_string(entry.path()) {
                     snapshots.extend(parse_heartbeats(&content));
                 }
-            }
         }
         snapshots
     }
@@ -1619,11 +1618,10 @@ pub async fn run<S>(
     if let Some(ref cmd) = test_config.on_complete {
         crate::ui::hooks::run_hook(cmd, &hook_vars).await;
     }
-    if failed > 0 {
-        if let Some(ref cmd) = test_config.on_failure {
+    if failed > 0
+        && let Some(ref cmd) = test_config.on_failure {
             crate::ui::hooks::run_hook(cmd, &hook_vars).await;
         }
-    }
 
     if failed > 0 {
         anyhow::bail!("{output}\n{failed}/{total} runs failed");

@@ -304,12 +304,11 @@ impl SteampipeMcp {
         let mut cmd = Command::new("nix");
         cmd.arg("run").arg(&flake_ref);
 
-        if let Some(ref args) = input.args {
-            if !args.is_empty() {
+        if let Some(ref args) = input.args
+            && !args.is_empty() {
                 cmd.arg("--");
                 cmd.args(args);
             }
-        }
 
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

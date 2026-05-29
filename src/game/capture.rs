@@ -669,16 +669,14 @@ pub async fn screenshot_all<S>(
         match result {
             Ok(path) => {
                 println!("  {name}: {}", path.display());
-                if let Some(validator) = options.validator.as_deref() {
-                    if let Err(error) = run_validator(validator, &path, name.as_ref(), options) {
+                if let Some(validator) = options.validator.as_deref()
+                    && let Err(error) = run_validator(validator, &path, name.as_ref(), options) {
                         failures.push(format!("{name}: {error}"));
                     }
-                }
-                if let Some(visual) = options.golden.as_ref() {
-                    if let Err(error) = run_golden_validator(visual, &path, options) {
+                if let Some(visual) = options.golden.as_ref()
+                    && let Err(error) = run_golden_validator(visual, &path, options) {
                         failures.push(format!("{name}: {error}"));
                     }
-                }
             }
             Err(e) => {
                 eprintln!("  {name}: {e}");

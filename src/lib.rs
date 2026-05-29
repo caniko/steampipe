@@ -801,11 +801,10 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
     };
     if let Some(key) = &cli.ssh_key {
         config.ssh_key = key.clone();
-    } else if module_only {
-        if let Some(key) = module.as_ref().and_then(|m| m.ssh_key.as_ref()) {
+    } else if module_only
+        && let Some(key) = module.as_ref().and_then(|m| m.ssh_key.as_ref()) {
             config.ssh_key = key.clone();
         }
-    }
     if let Some(dir) = &cli.state_dir {
         config.state_dir = dir.clone();
     }

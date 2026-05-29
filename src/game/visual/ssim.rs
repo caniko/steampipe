@@ -4,7 +4,7 @@ use image::{DynamicImage, RgbaImage};
 // dependencies, and is already aligned with this project via `image` 0.25.
 // `dssim-core` is oriented around DSSIM/MS-SSIM distance semantics rather than
 // the scene threshold model here, and `fast-ssim2` currently requires Rust 1.89
-// while this crate declares MSRV 1.87. The wrapper converts masked/ROI RGBA
+// while this crate declares MSRV 1.88. The wrapper converts masked/ROI RGBA
 // frames to luma and uses MSSIMSimple, keeping threshold semantics as
 // "1.0 means identical, lower means less similar".
 pub fn mssim(actual: &RgbaImage, golden: &RgbaImage) -> anyhow::Result<f64> {

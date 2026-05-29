@@ -453,11 +453,10 @@ fn parse_supervisord_conf_path(wrapper: &str) -> Option<PathBuf> {
         if let Some(rest) = tok.strip_prefix("--configuration=") {
             return Some(PathBuf::from(rest));
         }
-        if tok == "--configuration" || tok == "-c" {
-            if let Some(value) = tokens.next() {
+        if (tok == "--configuration" || tok == "-c")
+            && let Some(value) = tokens.next() {
                 return Some(PathBuf::from(value));
             }
-        }
     }
     None
 }

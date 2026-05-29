@@ -4,7 +4,7 @@ use std::io::{self, BufRead, ErrorKind, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::core::backend::{Backend, microvm_log_path};
 use crate::core::config::{BridgeReady, ClusterConfig, Unchecked, VmDef, par_each_vm};
@@ -12,8 +12,9 @@ use crate::core::credentials::{CredentialsMap, VmCredentials};
 use crate::core::nixos_module::{Discovery, NixosModuleConfig, RowStatus};
 use crate::game::accounts::{self, SessionStatus};
 use crate::vm::lease;
-use tokio::process::Command;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader, Lines};
+use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use zeroize::Zeroize;
 
 const LOGIN_SSH_TIMEOUT_SECS: u32 = 180;
@@ -920,8 +921,11 @@ impl GuardProvider {
         }
     }
 
+    /// Build a GUI provider pinned to a specific helper binary. Test-only;
+    /// `pub(crate)` so sibling modules' tests (e.g. `steam_auth`) can drive the
+    /// retry session against a fake helper script.
     #[cfg(test)]
-    fn helper_gui_with_binary(helper_bin: PathBuf) -> Self {
+    pub(crate) fn helper_gui_with_binary(helper_bin: PathBuf) -> Self {
         Self::HelperGui {
             prompt_lock: Arc::new(AsyncMutex::new(())),
             helper_bin: Some(helper_bin),
@@ -998,6 +1002,258 @@ impl GuardProvider {
             Self::FailFast => Ok(GuardCodeOutcome::Unavailable),
         }
     }
+
+    /// Open a retry-capable Guard code source for the headless token mint.
+    ///
+    /// For [`GuardProvider::HelperGui`] this spawns ONE persistent dialog
+    /// (`--interactive`) that stays open across rejected codes — showing each
+    /// rejection inline and closing only on success / cancel / timeout — so a
+    /// corrected code is resubmitted on the *same* `steam-vent` auth session
+    /// (never mailing a fresh email code). If the dialog can't be shown it
+    /// degrades exactly like [`request`](Self::request): a terminal prompt when
+    /// `stdin_fallback` and a TTY, otherwise fail-fast. The other providers
+    /// (`--code`, stdin, fail-fast) are adapted via one-shot `request()` per
+    /// attempt, with `invalid_retry` reflecting the prior rejection.
+    pub(crate) async fn open_retry_session(
+        &self,
+        vm_name: &str,
+        steam_user: &str,
+        reason: &str,
+    ) -> GuardRetrySession {
+        if let Self::HelperGui {
+            prompt_lock,
+            helper_bin,
+            stdin_fallback,
+        } = self
+        {
+            // Serialize on the shared prompt lock for the WHOLE interactive
+            // session, not per-prompt: a persistent dialog (or its terminal
+            // fallback) owns the operator's attention for its entire lifetime,
+            // so concurrent automated logins (`steam login` over many VMs) must
+            // not pop several dialogs — or race the terminal — at once. Held
+            // until the session drops. (`--code`/fail-fast take the branch below
+            // and stay fully parallel; direct stdin serializes per-prompt inside
+            // `request()`.)
+            let guard = Arc::clone(prompt_lock).lock_owned().await;
+            let cx = GuardPromptContext {
+                vm_name,
+                steam_user,
+                reason,
+                invalid_retry: false,
+            };
+            if let Some(dialog) = spawn_guard_dialog(&cx, helper_bin.as_deref()) {
+                return GuardRetrySession {
+                    inner: RetryInner::Dialog(Box::new(dialog)),
+                    _prompt_guard: Some(guard),
+                };
+            }
+            // The dialog couldn't be launched (no helper command / spawn failed).
+            // Mirror request()'s degradation rather than dead-ending. The terminal
+            // reader uses a fresh, uncontended lock (a different `Arc`) so it does
+            // NOT re-lock the session guard we already hold — that would deadlock.
+            let provider = if *stdin_fallback && io::stdin().is_terminal() {
+                eprintln!("  Steam Guard dialog unavailable; falling back to terminal input.");
+                GuardProvider::stdin()
+            } else {
+                GuardProvider::fail_fast()
+            };
+            return GuardRetrySession::from_provider(
+                provider,
+                vm_name,
+                steam_user,
+                reason,
+                Some(guard),
+            );
+        }
+
+        GuardRetrySession::from_provider(self.clone(), vm_name, steam_user, reason, None)
+    }
+}
+
+/// The result of asking a [`GuardRetrySession`] for the next code.
+pub(crate) enum GuardRetryNext {
+    /// A code to submit to Steam.
+    Code(String),
+    /// The operator cancelled or the prompt timed out.
+    Cancelled,
+    /// No code channel was available (fail-fast / dialog could not be shown).
+    Unavailable,
+}
+
+/// A retry-capable Guard code source for the headless token mint: it yields one
+/// code per attempt and, for the GUI provider, keeps a single dialog window open
+/// across rejected codes (see [`GuardProvider::open_retry_session`]).
+pub(crate) struct GuardRetrySession {
+    inner: RetryInner,
+    /// Held for interactive sessions (GUI dialog / terminal fallback) so
+    /// concurrent automated logins serialize on the operator — one prompt at a
+    /// time. `None` for non-interactive sources (`--code`, fail-fast), preserving
+    /// their parallelism. Released when the session is dropped.
+    _prompt_guard: Option<OwnedMutexGuard<()>>,
+}
+
+enum RetryInner {
+    /// A live, persistent GUI dialog process (boxed — it is far larger than the
+    /// `Provider` variant: it owns the child handle, a pipe writer, and a
+    /// buffered line reader).
+    Dialog(Box<GuardDialog>),
+    /// A one-shot provider (`--code`, stdin, fail-fast) adapted to the retry
+    /// interface by re-invoking `request()` per attempt.
+    Provider {
+        provider: GuardProvider,
+        vm_name: String,
+        steam_user: String,
+        reason: String,
+    },
+}
+
+impl GuardRetrySession {
+    fn from_provider(
+        provider: GuardProvider,
+        vm_name: &str,
+        steam_user: &str,
+        reason: &str,
+        prompt_guard: Option<OwnedMutexGuard<()>>,
+    ) -> Self {
+        Self {
+            inner: RetryInner::Provider {
+                provider,
+                vm_name: vm_name.to_owned(),
+                steam_user: steam_user.to_owned(),
+                reason: reason.to_owned(),
+            },
+            _prompt_guard: prompt_guard,
+        }
+    }
+
+    /// Request the next code. `previous_error` is `Some` when a prior code on
+    /// this session was rejected, which surfaces inline in the dialog (or as the
+    /// `invalid_retry` banner on the terminal/one-shot path).
+    pub(crate) async fn next_code(&mut self, previous_error: Option<&str>) -> GuardRetryNext {
+        match &mut self.inner {
+            RetryInner::Dialog(dialog) => {
+                if let Some(msg) = previous_error {
+                    dialog.show_error(msg).await;
+                }
+                dialog.read_code().await
+            }
+            RetryInner::Provider {
+                provider,
+                vm_name,
+                steam_user,
+                reason,
+            } => {
+                let cx = GuardPromptContext {
+                    vm_name,
+                    steam_user,
+                    reason,
+                    invalid_retry: previous_error.is_some(),
+                };
+                match provider.request(&cx).await {
+                    Ok(GuardCodeOutcome::Code(code)) => GuardRetryNext::Code(code),
+                    Ok(GuardCodeOutcome::Cancelled) => GuardRetryNext::Cancelled,
+                    Ok(GuardCodeOutcome::Unavailable) | Err(_) => GuardRetryNext::Unavailable,
+                }
+            }
+        }
+    }
+
+    /// Signal a successful login so a persistent dialog closes itself (exit 0).
+    /// A no-op for the one-shot provider path.
+    pub(crate) async fn confirm_success(&mut self) {
+        if let RetryInner::Dialog(dialog) = &mut self.inner {
+            dialog.confirm_success().await;
+        }
+    }
+}
+
+/// A live, persistent Steam Guard dialog: the same window stays open across
+/// rejected codes. cluster-ctl reads one code line per Submit from the child's
+/// stdout and writes control lines (`OK` / `ERR <msg>`) to its stdin. Dropping
+/// it reaps the child (`kill_on_drop`), so a fatal non-Guard error closes the
+/// window without a bespoke control message.
+struct GuardDialog {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: Lines<BufReader<ChildStdout>>,
+}
+
+impl GuardDialog {
+    /// Read the next code the operator submits, or classify why the dialog
+    /// closed: Cancel (exit 10) / Timeout (exit 11) map to [`GuardRetryNext::Cancelled`],
+    /// any other exit (display-unavailable / unexpected) to [`GuardRetryNext::Unavailable`].
+    async fn read_code(&mut self) -> GuardRetryNext {
+        match self.stdout.next_line().await {
+            Ok(Some(line)) => GuardRetryNext::Code(line.trim().to_owned()),
+            Ok(None) | Err(_) => match self.child.wait().await.ok().and_then(|s| s.code()) {
+                Some(10 | 11) => GuardRetryNext::Cancelled,
+                _ => GuardRetryNext::Unavailable,
+            },
+        }
+    }
+
+    /// Show a rejection inline and re-enable input; the window stays open.
+    async fn show_error(&mut self, msg: &str) {
+        let line = format!("ERR {}\n", sanitize_control_message(msg));
+        let _ = self.stdin.write_all(line.as_bytes()).await;
+        let _ = self.stdin.flush().await;
+    }
+
+    /// Tell the dialog the login succeeded so it closes gracefully (exit 0).
+    /// Bounded so a wedged dialog never hangs the mint — `kill_on_drop` reaps it.
+    async fn confirm_success(&mut self) {
+        let _ = self.stdin.write_all(b"OK\n").await;
+        let _ = self.stdin.flush().await;
+        let _ = tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await;
+    }
+}
+
+/// Spawn the Guard prompt helper in persistent interactive mode. Returns `None`
+/// when no helper command is available or the spawn / pipe setup fails (the
+/// caller then degrades to a terminal prompt or fail-fast).
+fn spawn_guard_dialog(
+    cx: &GuardPromptContext<'_>,
+    override_path: Option<&Path>,
+) -> Option<GuardDialog> {
+    let mut command = guard_prompt_command(override_path)?;
+    command
+        .arg("--vm")
+        .arg(cx.vm_name)
+        .arg("--user")
+        .arg(cx.steam_user)
+        .arg("--reason")
+        .arg(cx.reason)
+        .arg("--timeout-secs")
+        .arg(GUARD_PROMPT_TIMEOUT_SECS.to_string())
+        .arg("--interactive")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}");
+            return None;
+        }
+    };
+    let stdin = child.stdin.take()?;
+    let stdout = child.stdout.take()?;
+    Some(GuardDialog {
+        child,
+        stdin,
+        stdout: BufReader::new(stdout).lines(),
+    })
+}
+
+/// Strip the control-line framing characters and bound the length so an error
+/// message can neither inject extra `OK`/`ERR` lines nor overflow the dialog.
+fn sanitize_control_message(msg: &str) -> String {
+    msg.chars()
+        .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+        .take(200)
+        .collect()
 }
 
 #[cfg(test)]
@@ -1081,8 +1337,8 @@ pub(crate) async fn login(
     let mut logged_in = 0usize;
     let mut skipped = 0usize;
     for vm in &targets {
-        if !force {
-            if let Some(login_state_dir) = login_state_dir {
+        if !force
+            && let Some(login_state_dir) = login_state_dir {
                 let vm_name = vm.name.to_string();
                 let status = accounts::classify_session_status(
                     login_state_dir,
@@ -1106,7 +1362,6 @@ pub(crate) async fn login(
                 }
                 println!("  {}: {}, logging in", vm.name, status.login_reason());
             }
-        }
 
         let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
         let mut log = LoginLog::stdout();
@@ -1151,8 +1406,8 @@ async fn login_vm_attempt(
     log: &mut LoginLog,
 ) -> LoginAttempt {
     let mut login_reason = login_reason_for_vm(login_state_dir, vm, force);
-    if !force {
-        if let Some(login_state_dir) = login_state_dir {
+    if !force
+        && let Some(login_state_dir) = login_state_dir {
             let vm_name = vm.name.to_string();
             let status = accounts::classify_session_status(
                 login_state_dir,
@@ -1179,7 +1434,6 @@ async fn login_vm_attempt(
                 status.login_reason()
             ));
         }
-    }
 
     let Some(vm_creds) = creds.and_then(|c| c.get::<str>(&vm.name)) else {
         return LoginAttempt::Failed(anyhow::anyhow!(
@@ -1194,6 +1448,7 @@ async fn login_vm_attempt(
         vm_creds,
         &login_reason,
         guard_provider,
+        login_state_dir,
         log,
     )
     .await
@@ -1436,96 +1691,73 @@ fn read_guard_code_line_from_stdin() -> anyhow::Result<Option<String>> {
 }
 
 async fn login_single_vm_automated(
-    config: &ClusterConfig<BridgeReady>,
+    _config: &ClusterConfig<BridgeReady>,
     vm: &VmDef,
-    login_runners_dir: &Path,
+    _login_runners_dir: &Path,
     creds: &VmCredentials,
     login_reason: &str,
     guard_provider: &GuardProvider,
+    login_state_dir: Option<&Path>,
     log: &mut LoginLog,
 ) -> anyhow::Result<LoginOutcome> {
-    let backend = &config.backend;
-
     log.blank();
     log.line("══════════════════════════════════════════════════");
     log.line(format!("  Steam login for {} ({})", vm.name, vm.ip));
-    log.line("  Mode: automated (credentials from TOML)");
+    log.line("  Mode: headless token mint (no in-VM Steam GUI)");
     log.line("══════════════════════════════════════════════════");
 
-    let reachable = backend.is_reachable(&vm.ip).await;
-    let started_vm = match login_boot_action(true, reachable) {
-        LoginBootAction::ReuseRunning => {
-            log.line(format!("  {}: already up, skipping reboot", vm.name));
-            false
-        }
-        LoginBootAction::Restart => {
-            backend.stop_instance(config, vm);
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    let vm_name = vm.name.to_string();
+    mint_and_write_session(creds, &vm_name, login_reason, guard_provider, login_state_dir, log).await
+}
 
-            log.line("  Booting VM...");
-            crate::core::admission::admit().await;
-            let pid = backend.start_instance(config, vm, login_runners_dir)?;
-            lease::write_claim(vm.index, &config.lock_dir, &config.cluster_name, pid)?;
-            true
-        }
+/// Mint a SteamClient session headlessly and persist it to the VM's login-state
+/// share.
+///
+/// No VM boot, SSH, steamcmd, or in-VM Steam GUI is involved: the
+/// SteamClient-audience refresh token is minted host-side via
+/// [`crate::game::steam_auth::mint_session`] (with the Guard code obtained
+/// through `guard_provider`) and written via
+/// [`crate::game::steam_session::write_session`] so the host detector reports
+/// `Ok` and the VM's Steam client can auto-login from it.
+async fn mint_and_write_session(
+    creds: &VmCredentials,
+    vm_name: &str,
+    login_reason: &str,
+    guard_provider: &GuardProvider,
+    login_state_dir: Option<&Path>,
+    log: &mut LoginLog,
+) -> anyhow::Result<LoginOutcome> {
+    let Some(login_state_dir) = login_state_dir else {
+        anyhow::bail!(
+            "cannot persist Steam session for {vm_name}: no loginStateDir configured \
+             (set services.steampipe-cluster's loginStateDir, or pass --login-state-dir)"
+        );
     };
 
-    let config_for_cleanup = config.clone();
-    let vm_for_cleanup = vm.clone();
-    let cleanup = move || {
-        config_for_cleanup
-            .backend
-            .stop_instance(&config_for_cleanup, &vm_for_cleanup);
-        lease::remove_claim(vm_for_cleanup.index, &config_for_cleanup.lock_dir);
-    };
-
-    if started_vm {
-        if !backend.wait_ready(&vm.ip, LOGIN_SSH_TIMEOUT_SECS).await {
+    log.line(format!(
+        "  Minting Steam session for {} (headless, no in-VM GUI)...",
+        creds.steam_user
+    ));
+    match crate::game::steam_auth::mint_session(creds, vm_name, login_reason, guard_provider).await? {
+        crate::game::steam_auth::MintOutcome::Minted(session) => {
+            crate::game::steam_session::write_session(login_state_dir, vm_name, &session)
+                .map_err(|e| anyhow::anyhow!("writing Steam session for {vm_name}: {e}"))?;
+            let expiry = if session.expires_at > 0 {
+                let days = (session.expires_at - chrono::Utc::now().timestamp()) / 86_400;
+                format!(", token expires in ~{days} days")
+            } else {
+                String::new()
+            };
             log.line(format!(
-                "  Waiting for SSH... timeout after {LOGIN_SSH_TIMEOUT_SECS}s"
+                "  Login successful (SteamID {}{expiry}); session written to login state.",
+                session.steam_id64
             ));
-            print_vm_log_tail(&config.state_dir, vm, log);
-            cleanup();
-            anyhow::bail!("SSH timeout for {}", vm.name);
+            Ok(LoginOutcome::Completed)
         }
-        log.line("  Waiting for SSH... ready");
+        crate::game::steam_auth::MintOutcome::GuardCodeNeeded(needed) => {
+            Ok(LoginOutcome::GuardCodeNeeded(needed))
+        }
     }
-
-    let outcome = automated_login(
-        backend,
-        vm,
-        creds,
-        &config.vm_user,
-        &config.state_dir,
-        login_reason,
-        guard_provider,
-        log,
-    )
-    .await?;
-
-    if matches!(outcome, LoginOutcome::GuardCodeNeeded(_)) {
-        return Ok(outcome);
-    }
-
-    if !started_vm {
-        log.line(format!("  {} done.", vm.name));
-        return Ok(outcome);
-    }
-
-    log.line("  Shutting down Steam and VM...");
-    let _ = graceful_stop_steam(backend, &vm.ip, &config.vm_user).await;
-    backend
-        .run_cmd(
-            &vm.ip,
-            "pkill -x wayvnc 2>/dev/null; pkill -x sway 2>/dev/null",
-        )
-        .await;
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    backend.stop_instance(config, vm);
-    lease::remove_claim(vm.index, &config.lock_dir);
-    log.line(format!("  {} done.", vm.name));
-
-    Ok(outcome)
 }
 
 async fn login_single_vm(
@@ -3229,6 +3461,111 @@ echo ABCDE"#,
         assert_eq!(first.unwrap(), GuardCodeOutcome::Code("ABCDE".to_owned()));
         assert_eq!(second.unwrap(), GuardCodeOutcome::Code("ABCDE".to_owned()));
         assert!(!overlap.exists(), "helper processes overlapped");
+    }
+
+    #[tokio::test]
+    async fn retry_session_dialog_yields_code_then_confirms_success() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("helper");
+        // Persistent dialog: print a code, then wait for the `OK` control line.
+        write_helper_script(&helper, "echo CODE1\nIFS= read -r _line\nexit 0");
+
+        let mut session = GuardProvider::helper_gui_with_binary(helper)
+            .open_retry_session("vm-1", "account", "test login")
+            .await;
+
+        match session.next_code(None).await {
+            GuardRetryNext::Code(code) => assert_eq!(code, "CODE1"),
+            other => panic!("expected a code, got {:?}", DebugNext(&other)),
+        }
+        // Closing on success must not hang (bounded wait + kill_on_drop).
+        session.confirm_success().await;
+    }
+
+    #[tokio::test]
+    async fn retry_session_dialog_reprompts_after_rejection() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("helper");
+        // First code, then on the `ERR` control line emit a corrected code, then
+        // wait for `OK`. This proves the SAME process serves both attempts.
+        write_helper_script(
+            &helper,
+            "echo CODE1\nIFS= read -r first\necho CODE2\nIFS= read -r _second\nexit 0",
+        );
+
+        let mut session = GuardProvider::helper_gui_with_binary(helper)
+            .open_retry_session("vm-1", "account", "test login")
+            .await;
+
+        match session.next_code(None).await {
+            GuardRetryNext::Code(code) => assert_eq!(code, "CODE1"),
+            other => panic!("expected first code, got {:?}", DebugNext(&other)),
+        }
+        match session.next_code(Some("that code was rejected")).await {
+            GuardRetryNext::Code(code) => assert_eq!(code, "CODE2"),
+            other => panic!("expected corrected code, got {:?}", DebugNext(&other)),
+        }
+        session.confirm_success().await;
+    }
+
+    #[tokio::test]
+    async fn retry_session_dialog_cancel_maps_to_cancelled() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("helper");
+        // Exit 10 == the operator clicked Cancel.
+        write_helper_script(&helper, "exit 10");
+
+        let mut session = GuardProvider::helper_gui_with_binary(helper)
+            .open_retry_session("vm-1", "account", "test login")
+            .await;
+
+        assert!(
+            matches!(session.next_code(None).await, GuardRetryNext::Cancelled),
+            "cancel exit code must map to Cancelled"
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_session_dialog_display_failure_maps_to_unavailable() {
+        let temp = tempfile::tempdir().unwrap();
+        let helper = temp.path().join("helper");
+        // Exit 12 == no usable display; must be Unavailable (→ GuardCodeNeeded),
+        // not Cancelled.
+        write_helper_script(&helper, "exit 12");
+
+        let mut session = GuardProvider::helper_gui_with_binary(helper)
+            .open_retry_session("vm-1", "account", "test login")
+            .await;
+
+        assert!(
+            matches!(session.next_code(None).await, GuardRetryNext::Unavailable),
+            "display-unavailable exit code must map to Unavailable"
+        );
+    }
+
+    /// `GuardRetryNext` carries a `String`, so give panics a readable form
+    /// without deriving `Debug` on the public type.
+    struct DebugNext<'a>(&'a GuardRetryNext);
+    impl std::fmt::Debug for DebugNext<'_> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0 {
+                GuardRetryNext::Code(_) => f.write_str("Code(..)"),
+                GuardRetryNext::Cancelled => f.write_str("Cancelled"),
+                GuardRetryNext::Unavailable => f.write_str("Unavailable"),
+            }
+        }
+    }
+
+    #[test]
+    fn sanitize_control_message_strips_newlines_and_caps_length() {
+        assert_eq!(
+            sanitize_control_message("line one\nline two\r\nthree"),
+            "line one line two  three"
+        );
+        assert_eq!(sanitize_control_message(&"x".repeat(500)).len(), 200);
+        // Without injected newlines the message can't break the `ERR <msg>`
+        // single-line control protocol.
+        assert!(!sanitize_control_message("a\nOK").contains('\n'));
     }
 
     #[test]

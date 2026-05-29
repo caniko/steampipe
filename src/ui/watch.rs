@@ -144,8 +144,8 @@ async fn run_loop<S>(
             if remaining.is_zero() {
                 break;
             }
-            if event::poll(remaining.min(Duration::from_millis(250)))? {
-                if let Event::Key(key) = event::read()? {
+            if event::poll(remaining.min(Duration::from_millis(250)))?
+                && let Event::Key(key) = event::read()? {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -155,7 +155,6 @@ async fn run_loop<S>(
                         _ => {}
                     }
                 }
-            }
         }
     }
 }

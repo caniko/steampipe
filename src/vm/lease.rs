@@ -213,11 +213,10 @@ fn read_proc_cmdline(pid: u32) -> Option<String> {
 pub fn list_cluster_vms(cluster: &str, max_vms: u8, lock_dir: &Path) -> Vec<u8> {
     let mut ids = Vec::new();
     for id in 1..=max_vms {
-        if let Some(info) = probe_holder(id, lock_dir) {
-            if info.cluster == cluster {
+        if let Some(info) = probe_holder(id, lock_dir)
+            && info.cluster == cluster {
                 ids.push(id);
             }
-        }
     }
     ids
 }

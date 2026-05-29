@@ -357,8 +357,14 @@ fn read_refresh_jwt(path: &Path) -> Option<String> {
 }
 
 fn extract_refresh_jwt(contents: &str) -> Option<&str> {
+    // Steam's refresh tokens are JWTs whose header/payload JSON is space-padded
+    // (`{ "typ": "JWT", ... }`), so they base64url-encode to an `eyA...` prefix
+    // rather than the canonical `eyJ...`. Accept any `ey`-prefixed base64url JWT
+    // (dots included) so both real Steam tokens and canonical JWTs are detected;
+    // a non-JWT false match is harmless because its payload won't decode an
+    // `exp` claim and is classified `NoToken`.
     static RE: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r#""(eyJ[A-Za-z0-9_\-\.]+)""#).unwrap());
+        LazyLock::new(|| regex::Regex::new(r#""(ey[A-Za-z0-9_\-\.]+)""#).unwrap());
     RE.captures(contents)
         .and_then(|captures| captures.get(1))
         .map(|match_| match_.as_str())
@@ -436,6 +442,16 @@ mod tests {
         let vdf = r#""RefreshToken_76561198000000001"   "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE3OTUxNzgwMDB9.sig" "#;
         let jwt = extract_refresh_jwt(vdf).expect("jwt present");
         assert!(jwt.starts_with("eyJ"));
+    }
+
+    #[test]
+    fn extract_refresh_jwt_matches_space_padded_steam_token() {
+        // Real Steam client refresh tokens have a space-padded JSON header
+        // (`{ "typ"...`), encoding to an `eyA...` prefix — must still be detected.
+        let vdf = r#""76561198727542502"   "eyAidHlwIjogIkpXVCIgfQ.eyAiZXhwIjogMTc5ODMzNTQxMiB9.sig-part_AB-cd" "#;
+        let jwt = extract_refresh_jwt(vdf).expect("steam jwt present");
+        assert!(jwt.starts_with("eyA"));
+        assert_eq!(jwt.split('.').count(), 3);
     }
 
     #[test]
