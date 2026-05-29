@@ -1,0 +1,36 @@
+[package]
+name = "cluster-guard-prompt"
+version = "0.1.0"
+edition = "2024"
+license = "EUPL-1.2"
+rust-version = "1.88"
+publish = false
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+# Enable both renderers: iced uses wgpu (hardware Vulkan/GL/Metal) when a GPU is
+# available and automatically falls back to the tiny-skia software renderer when
+# wgpu can't initialize. This "auto-discover" avoids a hard GPU requirement while
+# still using the GPU path where it works.
+iced = { version = "0.14", default-features = false, features = [
+    "wgpu",
+    "tiny-skia",
+    "x11",
+    "wayland",
+    "tokio",
+] }
+zeroize = "1"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+clone_on_copy = "warn"
+collapsible_if = "warn"
+collapsible_str_replace = "warn"
+if_same_then_else = "warn"
+manual_find = "warn"
+new_without_default = "warn"
+too_many_arguments = "allow"
+type_complexity = "allow"
+unnecessary_get_then_check = "warn"

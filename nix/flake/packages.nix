@@ -67,22 +67,70 @@
   commonArgs = {
     inherit src;
     strictDeps = true;
+  };
+
+  clusterCtlArgs = commonArgs // {
+    cargoExtraArgs = "--package steampipe --bin cluster-ctl";
     nativeBuildInputs = [pkgs.makeWrapper];
   };
 
-  cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+  clusterCtlCargoArtifacts = craneLib.buildDepsOnly clusterCtlArgs;
 
-  cluster-ctl = craneLib.buildPackage (commonArgs
+  cluster-ctl = craneLib.buildPackage (clusterCtlArgs
     // {
       pname = "cluster-ctl";
       version = "0.1.0";
-      inherit cargoArtifacts;
+      cargoArtifacts = clusterCtlCargoArtifacts;
       postInstall = ''
         wrapProgram $out/bin/cluster-ctl \
-          --prefix PATH : ${lib.makeBinPath [pkgs.weston]}
+          --prefix PATH : ${lib.makeBinPath [pkgs.weston cluster-guard-prompt]}
+      '';
+    });
+
+  guiRuntimeLibs = [
+    pkgs.fontconfig
+    pkgs.freetype
+    pkgs.libGL
+    pkgs.libx11
+    pkgs.libxcb
+    pkgs.libxcursor
+    pkgs.libxi
+    pkgs.libxkbcommon
+    pkgs.libxrandr
+    pkgs.vulkan-loader
+    pkgs.wayland
+  ];
+
+  guardPromptArgs = commonArgs // {
+    cargoExtraArgs = "--package cluster-guard-prompt --bin cluster-guard-prompt";
+    nativeBuildInputs = [
+      pkgs.makeWrapper
+      pkgs.pkg-config
+    ];
+    buildInputs =
+      guiRuntimeLibs
+      ++ [
+        pkgs.wayland-protocols
+      ];
+  };
+
+  guardPromptCargoArtifacts = craneLib.buildDepsOnly guardPromptArgs;
+
+  cluster-guard-prompt = craneLib.buildPackage (guardPromptArgs
+    // {
+      pname = "cluster-guard-prompt";
+      version = "0.1.0";
+      cargoArtifacts = guardPromptCargoArtifacts;
+      postInstall = ''
+        wrapProgram $out/bin/cluster-guard-prompt \
+          --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath guiRuntimeLibs} \
+          --suffix LD_LIBRARY_PATH : /run/opengl-driver/lib \
+          --set-default LIBGL_DRIVERS_PATH /run/opengl-driver/lib/dri \
+          --set-default __EGL_VENDOR_LIBRARY_DIRS /run/opengl-driver/share/glvnd/egl_vendor.d \
+          --set-default XDG_DATA_DIRS ${pkgs.gsettings-desktop-schemas}/share/gsettings-schemas/${pkgs.gsettings-desktop-schemas.name}:${pkgs.gtk3}/share/gsettings-schemas/${pkgs.gtk3.name}:/run/opengl-driver/share
       '';
     });
 in {
   default = cluster-ctl;
-  inherit docs website site;
+  inherit cluster-ctl cluster-guard-prompt docs website site;
 }
