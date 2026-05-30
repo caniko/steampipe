@@ -1,8 +1,5 @@
 [workspace]
 members = ["crates/cluster-guard-prompt"]
-# Vendored steam-vent fork (patched for in-session Steam Guard retry) is a path
-# dependency, not a workspace member — it keeps its own edition/lints.
-exclude = ["vendor/steam-vent"]
 resolver = "3"
 
 [package]
@@ -53,7 +50,7 @@ tokio = { version = "1", features = [
 toml = "1"
 rmcp = { version = "0.17", features = ["server", "transport-io"] }
 schemars = "1"
-steam-vent = { path = "vendor/steam-vent" }
+steam-vent = { git = "https://codeberg.org/caniko/steam-vent.git", branch = "integration" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 vnc = "0.4"
