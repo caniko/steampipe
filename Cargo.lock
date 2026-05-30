@@ -4892,8 +4892,6 @@ dependencies = [
 [[package]]
 name = "steam-vent-crypto"
 version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c37c08a0e9fa3fbc85a3359a02cf82700e39810a01e707aeaa1869915def112d"
 dependencies = [
  "aes",
  "bytes",
@@ -4903,7 +4901,7 @@ dependencies = [
  "rand 0.8.5",
  "rsa",
  "sha-1",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

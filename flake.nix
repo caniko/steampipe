@@ -15,6 +15,16 @@
     crane.follows = "rs-harbor/crane";
     flake-utils.follows = "rs-harbor/flake-utils";
     microvm.url = "github:astro/microvm.nix";
+
+    # Our patched steam-vent fork (the `vendor/steam-vent` git submodule). Nix
+    # flakes don't pull submodule contents into the build source, so the same
+    # branch is also taken as a non-flake input and spliced into the build tree
+    # at `vendor/steam-vent` (see nix/flake/packages.nix). Keep this `ref` in
+    # sync with the submodule commit when bumping the fork.
+    steam-vent-fork = {
+      url = "git+https://codeberg.org/caniko/steam-vent.git?ref=integration";
+      flake = false;
+    };
   };
 
   outputs = {
@@ -24,6 +34,7 @@
     rust-overlay,
     flake-utils,
     microvm,
+    steam-vent-fork,
     ...
   }:
     # Steampipe is x86_64-linux only: the cluster targets QEMU/KVM,
@@ -49,7 +60,7 @@
       };
 
       packages = import ./nix/flake/packages.nix {
-        inherit craneLib lib pkgs root;
+        inherit craneLib lib pkgs root steam-vent-fork;
       };
     in {
       inherit packages;

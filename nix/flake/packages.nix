@@ -3,6 +3,7 @@
   lib,
   pkgs,
   root,
+  steam-vent-fork,
 }: let
   docs = pkgs.stdenv.mkDerivation {
     pname = "steampipe-docs";
@@ -62,7 +63,17 @@
     cp -r ${docs}/* $out/docs/
   '';
 
-  src = craneLib.cleanCargoSource root;
+  # `vendor/steam-vent` is a git submodule (our patched steam-vent fork). Flake
+  # source does NOT include submodule contents, so splice the same fork in from
+  # the `steam-vent-fork` non-flake input. The fork is copied wholesale (not
+  # cleanCargoSource-filtered) so its non-Rust build assets survive — notably
+  # `crypto/system.pem`, which steam-vent-crypto's build script embeds.
+  src = pkgs.runCommandLocal "steampipe-src" {} ''
+    cp -r --no-preserve=mode,ownership ${craneLib.cleanCargoSource root} $out
+    rm -rf $out/vendor/steam-vent
+    mkdir -p $out/vendor
+    cp -r --no-preserve=mode,ownership ${steam-vent-fork} $out/vendor/steam-vent
+  '';
 
   commonArgs = {
     inherit src;
