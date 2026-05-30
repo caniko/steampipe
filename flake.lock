@@ -144,7 +144,8 @@
         "rust-overlay": [
           "rs-harbor",
           "rust-overlay"
-        ]
+        ],
+        "steam-vent-fork": "steam-vent-fork"
       }
     },
     "rs-harbor": {
@@ -204,6 +205,23 @@
       "original": {
         "type": "git",
         "url": "https://spectrum-os.org/git/spectrum"
+      }
+    },
+    "steam-vent-fork": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1780128271,
+        "narHash": "sha256-tMpWsVrinkvSV1DYsPYIKvDcDQi+Px8RrPRl7MUJ+aM=",
+        "ref": "integration",
+        "rev": "eeb45aed9dd46b1e265b67fcc2416dcdb8431467",
+        "revCount": 265,
+        "type": "git",
+        "url": "https://codeberg.org/caniko/steam-vent.git"
+      },
+      "original": {
+        "ref": "integration",
+        "type": "git",
+        "url": "https://codeberg.org/caniko/steam-vent.git"
       }
     },
     "systems": {

@@ -1,0 +1,4 @@
+[submodule "vendor/steam-vent"]
+	path = vendor/steam-vent
+	url = ssh://git@codeberg.org/caniko/steam-vent.git
+	branch = integration
