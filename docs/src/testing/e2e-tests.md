@@ -24,14 +24,35 @@ cluster-ctl --vm-count 7 test \
 3. **Start Steam** - if `--network steam`, ensures Steam is running on all VMs
 4. **Run loop** - for each iteration:
    - Kill leftover game processes on VMs
+   - Configure VM core dumps for the game child
    - Launch game on each VM via SSH (detached, logging to `game.log`)
    - Launch game locally (host player)
    - Monitor heartbeat files every 2s (local) and 10s (VMs)
    - Wait for local process exit or timeout
    - Classify result: PASS, FAIL, or TIMEOUT
-   - Collect VM logs and optionally capture screenshots on failure
+   - Collect VM logs, panic sidecars, core dumps, and optionally screenshots on failure
 5. **Report** - summary with pass/fail/timeout counts
 6. **Save** - results stored in test history
+
+## Failure artifacts
+
+VM game children run with `ulimit -c unlimited`. Before launch, `cluster-ctl`
+sets `kernel.core_pattern` to:
+
+```text
+/tmp/cluster-cores/<cluster>/<vm>/<run-id>/core.%e.%p
+```
+
+Older per-VM core directories are pruned so only the newest three runs remain.
+On failure, panic sidecars and core files are copied back with a bounded timeout:
+
+```text
+target/cluster/<run-id>/
+├── panics/<vm>/panic-<n>.log
+└── cores/<vm>/core.*
+```
+
+`<run-id>` is `<cluster>-<YYYYMMDD-HHMMSS>-run-<N>`.
 
 ## Configuration flags
 

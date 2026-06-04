@@ -583,16 +583,38 @@ cluster-ctl --vm-count 7 test \
 3. **Start Steam** — if `--network steam`, ensures Steam is running on all VMs
 4. **Run loop** — for each iteration:
    - Kill any leftover game processes on VMs
+   - Configure VM core dumps for the game child (`ulimit -c unlimited` and
+     `/tmp/cluster-cores/<cluster>/<vm>/<run-id>/core.%e.%p`)
    - Launch game on each VM via SSH (detached, logging to `game.log`)
    - Launch game locally (host player)
    - **Monitor** — poll heartbeat files (`game_progress_*.json`) every 2s
      (local) and 10s (VMs). If a heartbeat stalls for 30s, kill everything.
    - Wait for local process exit or timeout
    - Classify result: PASS (exit 0), FAIL (non-zero exit), TIMEOUT
-   - Collect VM logs on failure
+   - Collect VM logs, panic sidecars, and core dumps on failure
    - Optionally capture screenshots on failure
 5. **Report** — summary with pass/fail/timeout counts
 6. **Save** — results stored in test history
+
+### Failure artifacts
+
+On each VM launch, `cluster-ctl` creates a run-specific core directory under
+`/tmp/cluster-cores/<cluster>/<vm>/<run-id>/`, sets `kernel.core_pattern` to
+`core.%e.%p` inside that directory, and prunes older per-VM core directories so
+only the newest three runs remain. The game child is launched after
+`ulimit -c unlimited`.
+
+When a run fails, teardown stages panic sidecars and core files with a bounded
+copy timeout and downloads them under:
+
+```text
+target/cluster/<run-id>/
+├── panics/<vm>/panic-<n>.log
+└── cores/<vm>/core.*
+```
+
+`<run-id>` is `<cluster>-<YYYYMMDD-HHMMSS>-run-<N>` with path-unsafe
+characters replaced by `-`.
 
 ### Test configuration flags
 

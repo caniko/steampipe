@@ -75,6 +75,9 @@ pub struct TestConfig {
 const DEFAULT_HARD_TIMEOUT_MIN_SECS: u64 = 1_800;
 const DEFAULT_HARD_TIMEOUT_MULTIPLIER: u64 = 5;
 const CAPTURE_WARN_BYTES: u64 = 500 * 1024 * 1024;
+const CORE_DUMP_BASE_DIR: &str = "/tmp/cluster-cores";
+const ARTIFACT_COPY_TIMEOUT: Duration = Duration::from_secs(20);
+const RETAINED_CORE_RUNS: usize = 3;
 
 pub fn resolve_hard_timeout(timeout: Duration, explicit: Option<Duration>) -> Duration {
     explicit.unwrap_or_else(|| {
@@ -389,10 +392,12 @@ impl HeartbeatSource for LocalHeartbeat<'_> {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("game_progress_") && name.ends_with(".json")
-                && let Ok(content) = std::fs::read_to_string(entry.path()) {
-                    snapshots.extend(parse_heartbeats(&content));
-                }
+            if name.starts_with("game_progress_")
+                && name.ends_with(".json")
+                && let Ok(content) = std::fs::read_to_string(entry.path())
+            {
+                snapshots.extend(parse_heartbeats(&content));
+            }
         }
         snapshots
     }
@@ -1055,10 +1060,16 @@ pub async fn run<S>(
         test_config.players,
         vm_count,
     );
+    let artifact_session_id = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
 
     for run_num in 1..=test_config.max_runs {
         let run_start = Instant::now();
         let run_label = format!("run-{run_num}");
+        let artifact_run_id = artifact_run_id(&config.cluster_name, &artifact_session_id, run_num);
+        let run_artifact_root = project_root
+            .join("target")
+            .join("cluster")
+            .join(&artifact_run_id);
         print_and_push(
             &mut output,
             &format!("=== RUN {run_num}/{} ===", test_config.max_runs),
@@ -1147,6 +1158,9 @@ pub async fn run<S>(
                 vm_args,
                 &vm_heartbeat_subdir,
                 &test_config.env,
+                &config.cluster_name,
+                &artifact_run_id,
+                &vm.name,
             )
             .await
             {
@@ -1401,6 +1415,19 @@ pub async fn run<S>(
                 output.push('\n');
             }
 
+            harvest_failure_artifacts(
+                backend,
+                target_vms,
+                &config.remote_dir,
+                &vm_heartbeat_subdir,
+                &config.cluster_name,
+                &artifact_run_id,
+                &run_artifact_root,
+                &mut output,
+                verbose,
+            )
+            .await;
+
             // Capture screenshots on failure
             if matches!(
                 test_config.capture_mode,
@@ -1619,9 +1646,10 @@ pub async fn run<S>(
         crate::ui::hooks::run_hook(cmd, &hook_vars).await;
     }
     if failed > 0
-        && let Some(ref cmd) = test_config.on_failure {
-            crate::ui::hooks::run_hook(cmd, &hook_vars).await;
-        }
+        && let Some(ref cmd) = test_config.on_failure
+    {
+        crate::ui::hooks::run_hook(cmd, &hook_vars).await;
+    }
 
     if failed > 0 {
         anyhow::bail!("{output}\n{failed}/{total} runs failed");
@@ -1695,6 +1723,71 @@ fn format_inline_exports(env: &std::collections::BTreeMap<String, String>) -> St
     out
 }
 
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
+fn sanitize_artifact_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.') {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    if out.is_empty() { "run".into() } else { out }
+}
+
+fn artifact_run_id(cluster_name: &str, session_id: &str, run_num: u32) -> String {
+    format!(
+        "{}-{session_id}-run-{run_num}",
+        sanitize_artifact_component(cluster_name)
+    )
+}
+
+fn vm_core_run_dir(cluster_name: &str, artifact_run_id: &str, vm_name: &VmName) -> String {
+    format!(
+        "{}/{}/{}/{}",
+        CORE_DUMP_BASE_DIR,
+        sanitize_artifact_component(cluster_name),
+        sanitize_artifact_component(vm_name.as_ref()),
+        sanitize_artifact_component(artifact_run_id),
+    )
+}
+
+fn vm_core_parent_dir(cluster_name: &str, vm_name: &VmName) -> String {
+    format!(
+        "{}/{}/{}",
+        CORE_DUMP_BASE_DIR,
+        sanitize_artifact_component(cluster_name),
+        sanitize_artifact_component(vm_name.as_ref()),
+    )
+}
+
+fn build_vm_core_setup_cmd(cluster_name: &str, artifact_run_id: &str, vm_name: &VmName) -> String {
+    let core_dir = vm_core_run_dir(cluster_name, artifact_run_id, vm_name);
+    let parent_dir = vm_core_parent_dir(cluster_name, vm_name);
+    let core_pattern = format!("{core_dir}/core.%e.%p");
+    let quoted_core_dir = shell_quote(&core_dir);
+    let quoted_parent_dir = shell_quote(&parent_dir);
+    let quoted_core_pattern = shell_quote(&core_pattern);
+
+    format!(
+        "mkdir -p {quoted_core_dir} && chmod 0777 {quoted_core_dir} && \
+         if command -v sudo >/dev/null 2>&1; then \
+             sudo -n sysctl -w kernel.core_pattern={quoted_core_pattern} >/dev/null; \
+         else \
+             sysctl -w kernel.core_pattern={quoted_core_pattern} >/dev/null; \
+         fi && \
+         if [ -d {quoted_parent_dir} ]; then \
+             old_dirs=$(find {quoted_parent_dir} -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\\n' 2>/dev/null | sort -rn | tail -n +{} | cut -d' ' -f2-); \
+             if [ -n \"$old_dirs\" ]; then printf '%s\\n' \"$old_dirs\" | xargs -r rm -rf; fi; \
+         fi",
+        RETAINED_CORE_RUNS + 1,
+    )
+}
+
 /// Build the bash -c command we hand to SSH on the VM to launch the game.
 ///
 /// Caller-supplied env (e.g. `THESPAN_SESSION_ID` from the auto-set or
@@ -1712,10 +1805,15 @@ fn build_vm_launch_cmd(
     args: &str,
     heartbeat_dir: &str,
     extra_env: &std::collections::BTreeMap<String, String>,
+    cluster_name: &str,
+    artifact_run_id: &str,
+    vm_name: &VmName,
 ) -> String {
     let extra_exports = format_inline_exports(extra_env);
+    let core_setup = build_vm_core_setup_cmd(cluster_name, artifact_run_id, vm_name);
     format!(
         "mkdir -p {remote_dir}/{heartbeat_dir} && \
+         {core_setup} && \
          cd {remote_dir} && \
          . /etc/profile.d/steampipe-graphics.sh 2>/dev/null || true && \
          export LD_LIBRARY_PATH=\"{remote_dir}:${{STEAMPIPE_GRAPHICS_LIB_PATH:-}}:$LD_LIBRARY_PATH\" \
@@ -1723,6 +1821,7 @@ fn build_vm_launch_cmd(
          WAYLAND_DISPLAY=wayland-1 \
          WGPU_BACKEND=vulkan \
          STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir}{extra_exports} && \
+         ulimit -c unlimited && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     )
 }
@@ -1737,6 +1836,9 @@ async fn launch_game(
     args: &str,
     heartbeat_dir: &str,
     extra_env: &std::collections::BTreeMap<String, String>,
+    cluster_name: &str,
+    artifact_run_id: &str,
+    vm_name: &VmName,
 ) -> anyhow::Result<()> {
     // Per-cluster heartbeat dir on the VM (`<remote_dir>/<heartbeat_dir>`)
     // mirrors the host-side scoping. Lease partitioning already guarantees one
@@ -1756,6 +1858,9 @@ async fn launch_game(
         args,
         heartbeat_dir,
         extra_env,
+        cluster_name,
+        artifact_run_id,
+        vm_name,
     );
     // Use run_cmd_timeout to avoid hanging if the channel doesn't close
     let result = backend
@@ -1769,6 +1874,129 @@ async fn launch_game(
         anyhow::bail!("{}", result.stderr);
     }
     Ok(())
+}
+
+async fn harvest_failure_artifacts(
+    backend: &Backend,
+    target_vms: &[crate::core::config::VmDef],
+    remote_dir: &str,
+    heartbeat_dir: &str,
+    cluster_name: &str,
+    artifact_run_id: &str,
+    run_artifact_root: &Path,
+    output: &mut String,
+    verbose: bool,
+) {
+    let _ = std::fs::create_dir_all(run_artifact_root.join("panics"));
+    let _ = std::fs::create_dir_all(run_artifact_root.join("cores"));
+
+    let mut copied_any = false;
+    for vm in target_vms {
+        let core_dir = vm_core_run_dir(cluster_name, artifact_run_id, &vm.name);
+        let stage_dir = format!(
+            "/tmp/steampipe-artifact-harvest/{}/{}",
+            sanitize_artifact_component(artifact_run_id),
+            sanitize_artifact_component(vm.name.as_ref())
+        );
+        let stage_cmd = build_artifact_stage_cmd(
+            remote_dir,
+            heartbeat_dir,
+            &core_dir,
+            &stage_dir,
+            vm.name.as_ref(),
+        );
+
+        let staged = backend
+            .run_cmd_timeout(&vm.ip, &stage_cmd, ARTIFACT_COPY_TIMEOUT)
+            .await;
+        if !staged.success {
+            eprintln!(
+                "Warning: failed to stage failure artifacts from {}: {}",
+                vm.name,
+                staged.stderr.trim()
+            );
+            continue;
+        }
+
+        let download = tokio::time::timeout(
+            ARTIFACT_COPY_TIMEOUT,
+            backend.download(&vm.ip, &format!("{stage_dir}/"), run_artifact_root),
+        )
+        .await;
+        match download {
+            Ok(Ok(())) => {
+                let count = staged.stdout.trim().parse::<u32>().unwrap_or(0);
+                if count > 0 {
+                    copied_any = true;
+                    print_and_push(
+                        output,
+                        &format!(
+                            "  {}: harvested {count} failure artifact(s) into {}",
+                            vm.name,
+                            run_artifact_root.display()
+                        ),
+                        verbose,
+                    );
+                }
+            }
+            Ok(Err(error)) => eprintln!(
+                "Warning: failed to download failure artifacts from {}: {error}",
+                vm.name
+            ),
+            Err(_) => eprintln!(
+                "Warning: timed out downloading failure artifacts from {}",
+                vm.name
+            ),
+        }
+    }
+
+    if !copied_any {
+        print_and_push(
+            output,
+            &format!(
+                "  no panic sidecars or core files found under {}",
+                run_artifact_root.display()
+            ),
+            verbose,
+        );
+    }
+}
+
+fn build_artifact_stage_cmd(
+    remote_dir: &str,
+    heartbeat_dir: &str,
+    core_dir: &str,
+    stage_dir: &str,
+    vm_name: &str,
+) -> String {
+    let heartbeat_abs = format!("{remote_dir}/{heartbeat_dir}");
+    let panic_dest = format!(
+        "{stage_dir}/panics/{}",
+        sanitize_artifact_component(vm_name)
+    );
+    let core_dest = format!("{stage_dir}/cores/{}", sanitize_artifact_component(vm_name));
+    format!(
+        "rm -rf {stage} && mkdir -p {panic_dest} {core_dest} && \
+         panic_count=0; \
+         for root in {heartbeat} {remote} \"$HOME/.local/state/steampipe\"; do \
+             if [ -d \"$root\" ]; then \
+                 while IFS= read -r panic_log; do \
+                     if [ -s \"$panic_log\" ]; then \
+                         panic_count=$((panic_count + 1)); \
+                         cp \"$panic_log\" {panic_dest}/panic-$panic_count.log; \
+                     fi; \
+                 done <<STEAMPIPE_PANIC_LIST\n$(find \"$root\" -type f -name panic.log 2>/dev/null)\nSTEAMPIPE_PANIC_LIST\n\
+             fi; \
+         done; \
+         if [ -d {core_dir} ]; then find {core_dir} -maxdepth 1 -type f -name 'core.*' -size +0c -exec cp {{}} {core_dest}/ \\; 2>/dev/null; fi; \
+         find {stage} -type f | wc -l",
+        stage = shell_quote(stage_dir),
+        panic_dest = shell_quote(&panic_dest),
+        core_dest = shell_quote(&core_dest),
+        heartbeat = shell_quote(&heartbeat_abs),
+        remote = shell_quote(remote_dir),
+        core_dir = shell_quote(core_dir),
+    )
 }
 
 async fn collect_vm_log(
@@ -1892,24 +2120,25 @@ fn monitor_local_process(
     };
 
     loop {
+        if start.elapsed() > hard_timeout {
+            exit_code = kill_and_reap(child, shutdown_timeout);
+            let now = now_ms() as u64;
+            let runtime_secs = start.elapsed().as_secs();
+            let (source, stalled_secs, snapshot) =
+                select_hard_timeout_context(now, &local_state, &vm_state);
+            failure = Some(MonitorFailure::hard_timeout(
+                runtime_secs,
+                hard_timeout.as_secs(),
+                source,
+                stalled_secs,
+                snapshot,
+            ));
+            break;
+        }
+
         match child.try_wait() {
             Ok(Some(status)) => {
                 exit_code = status.code();
-                break;
-            }
-            Ok(None) if start.elapsed() > hard_timeout => {
-                exit_code = kill_and_reap(child, shutdown_timeout);
-                let now = now_ms() as u64;
-                let runtime_secs = start.elapsed().as_secs();
-                let (source, stalled_secs, snapshot) =
-                    select_hard_timeout_context(now, &local_state, &vm_state);
-                failure = Some(MonitorFailure::hard_timeout(
-                    runtime_secs,
-                    hard_timeout.as_secs(),
-                    source,
-                    stalled_secs,
-                    snapshot,
-                ));
                 break;
             }
             Ok(None) => {
@@ -2029,6 +2258,28 @@ pub fn exit_code_label(code: i32, custom: &HashMap<i32, String>) -> Cow<'static,
 mod tests {
     use super::*;
 
+    fn test_vm_name() -> VmName {
+        VmName("vm-1".into())
+    }
+
+    fn test_launch_cmd(
+        heartbeat_dir: &str,
+        env: &std::collections::BTreeMap<String, String>,
+    ) -> String {
+        build_vm_launch_cmd(
+            "/home/u/cb",
+            "chessbender",
+            "u",
+            "game.log",
+            "--auto-join-udp --auto-play",
+            heartbeat_dir,
+            env,
+            "1v1-uifull",
+            "1v1-uifull-20260604-120000-run-1",
+            &test_vm_name(),
+        )
+    }
+
     #[test]
     fn parse_heartbeats_single() {
         let input = r#"{"timestamp_ms":1000,"phase":"Battle","round":1,"turn":2,"progress_seq":3}"#;
@@ -2104,15 +2355,7 @@ mod tests {
     #[test]
     fn build_vm_launch_cmd_empty_env_unchanged() {
         let env = std::collections::BTreeMap::new();
-        let cmd = build_vm_launch_cmd(
-            "/home/u/cb",
-            "chessbender",
-            "u",
-            "game.log",
-            "--auto-join-udp --auto-play",
-            ".steampipe-runtime/1v1/heartbeats",
-            &env,
-        );
+        let cmd = test_launch_cmd(".steampipe-runtime/1v1/heartbeats", &env);
         assert!(
             cmd.contains("WGPU_BACKEND=vulkan"),
             "expected Vulkan-first default in VM launch env, got: {cmd}",
@@ -2127,6 +2370,14 @@ mod tests {
             !cmd.contains("THESPAN_SESSION_ID="),
             "expected no env injection: {cmd}"
         );
+        assert!(
+            cmd.contains("kernel.core_pattern='/tmp/cluster-cores/1v1-uifull/vm-1/1v1-uifull-20260604-120000-run-1/core.%e.%p'"),
+            "expected VM core pattern setup before launch: {cmd}"
+        );
+        assert!(
+            cmd.contains("ulimit -c unlimited &&"),
+            "expected core dump ulimit before launch: {cmd}"
+        );
     }
 
     /// With session id set, the bash command exports it on the same line
@@ -2135,15 +2386,7 @@ mod tests {
     fn build_vm_launch_cmd_injects_session_id() {
         let mut env = std::collections::BTreeMap::new();
         env.insert("THESPAN_SESSION_ID".into(), "1v1-uifull-12345".into());
-        let cmd = build_vm_launch_cmd(
-            "/home/u/cb",
-            "chessbender",
-            "u",
-            "game.log",
-            "--auto-join-udp --auto-play",
-            ".steampipe-runtime/1v1-uifull/heartbeats",
-            &env,
-        );
+        let cmd = test_launch_cmd(".steampipe-runtime/1v1-uifull/heartbeats", &env);
         assert!(
             cmd.contains("THESPAN_SESSION_ID='1v1-uifull-12345' &&"),
             "expected session id on the same export line, got: {cmd}",
@@ -2164,15 +2407,7 @@ mod tests {
         env.insert("GALLIUM_DRIVER".into(), "virgl".into());
         env.insert("MESA_LOADER_DRIVER_OVERRIDE".into(), "virtio_gpu".into());
         env.insert("WGPU_BACKEND".into(), "gl".into());
-        let cmd = build_vm_launch_cmd(
-            "/home/u/cb",
-            "chessbender",
-            "u",
-            "game.log",
-            "--auto-join-udp --auto-play",
-            ".steampipe-runtime/1v1-uifull-egl/heartbeats",
-            &env,
-        );
+        let cmd = test_launch_cmd(".steampipe-runtime/1v1-uifull-egl/heartbeats", &env);
 
         let default_idx = cmd.find("WGPU_BACKEND=vulkan").unwrap();
         let override_idx = cmd.find("WGPU_BACKEND='gl'").unwrap();
@@ -2189,6 +2424,30 @@ mod tests {
             override_idx < nohup_idx && mesa_idx < nohup_idx && gallium_idx < nohup_idx,
             "EGL override env must apply to game launch: {cmd}"
         );
+    }
+
+    #[test]
+    fn artifact_run_id_sanitizes_cluster_component() {
+        assert_eq!(
+            artifact_run_id("1v1/ui full", "20260604-120000", 2),
+            "1v1-ui-full-20260604-120000-run-2"
+        );
+    }
+
+    #[test]
+    fn artifact_stage_cmd_copies_panic_sidecars_and_cores() {
+        let cmd = build_artifact_stage_cmd(
+            "/home/u/cb",
+            ".steampipe-runtime/1v1-uifull/heartbeats",
+            "/tmp/cluster-cores/1v1-uifull/vm-1/run-1",
+            "/tmp/steampipe-artifact-harvest/run-1/vm-1",
+            "vm-1",
+        );
+        assert!(cmd.contains("/panics/vm-1"));
+        assert!(cmd.contains("panic-$panic_count.log"));
+        assert!(cmd.contains("/cores/vm-1"));
+        assert!(cmd.contains("find '/tmp/cluster-cores/1v1-uifull/vm-1/run-1'"));
+        assert!(cmd.contains("wc -l"));
     }
 
     #[test]
@@ -2358,6 +2617,48 @@ mod tests {
             .is_none()
         );
         assert_eq!(state.last_progress_at_ms, Some(31_000));
+    }
+
+    #[tokio::test]
+    async fn monitor_local_process_enforces_hard_timeout_without_heartbeats() {
+        let scratch =
+            tempfile::tempdir().expect("create monitor hard-timeout heartbeat scratch dir");
+        let mut child = std::process::Command::new("sleep");
+        child
+            .arg("30")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt as _;
+            child.process_group(0);
+        }
+        let mut child = child.spawn().expect("spawn sleep");
+
+        let (_combined, exit_code, failure) = tokio::task::spawn_blocking(move || {
+            monitor_local_process(
+                &mut child,
+                Duration::from_secs(30),
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                scratch.path(),
+                &[],
+                &Backend::new_local(std::env::temp_dir()),
+                "/tmp/unused",
+                "unused",
+                30,
+                None,
+            )
+        })
+        .await
+        .expect("monitor task should join")
+        .expect("monitor should return");
+
+        assert_ne!(exit_code, Some(0));
+        let failure = failure.expect("expected hard timeout failure");
+        assert_eq!(failure.kind, TimeoutKind::HardTimeout);
+        assert!(failure.banner.contains("HARD_TIMEOUT"));
     }
 
     #[test]
