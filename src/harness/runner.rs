@@ -1316,6 +1316,15 @@ pub async fn run<S>(
         let local_fatal = fatal_output_marker(&combined);
         let mut vm_logs_for_report: Option<Vec<(String, String)>> = None;
         let mut vm_fatal = None;
+        let remote_artifact_count = probe_failure_artifacts(
+            backend,
+            target_vms,
+            &config.remote_dir,
+            &vm_heartbeat_subdir,
+            &config.cluster_name,
+            &artifact_run_id,
+        )
+        .await;
         if monitor_failure.is_none() && exit_code == Some(0) && local_fatal.is_none() {
             let mut logs = Vec::new();
             for vm in target_vms {
@@ -1356,6 +1365,17 @@ pub async fn run<S>(
                 &format!("--- FAIL (fatal marker: {label}) ---"),
                 verbose,
             );
+        } else if remote_artifact_count > 0 {
+            failed += 1;
+            failure_code = Some(1);
+            recorded_exit_code = Some(1);
+            run_status = RunStatus::Fail;
+            run_label = "REMOTE_ARTIFACT".into();
+            print_and_push(
+                &mut output,
+                &format!("--- FAIL (remote failure artifacts: {remote_artifact_count}) ---"),
+                verbose,
+            );
         } else if exit_code == Some(0) {
             passed += 1;
             failure_code = None;
@@ -1387,8 +1407,10 @@ pub async fn run<S>(
         }
 
         // Collect VM logs on failure
-        let run_failed =
-            monitor_failure.is_some() || exit_code != Some(0) || fatal_marker.is_some();
+        let run_failed = monitor_failure.is_some()
+            || exit_code != Some(0)
+            || fatal_marker.is_some()
+            || remote_artifact_count > 0;
         if run_failed {
             output.push_str("\n--- VM logs (last 30 lines each) ---\n");
             if vm_logs_for_report.is_none() {
@@ -1960,6 +1982,39 @@ async fn harvest_failure_artifacts(
             verbose,
         );
     }
+}
+
+async fn probe_failure_artifacts(
+    backend: &Backend,
+    target_vms: &[crate::core::config::VmDef],
+    remote_dir: &str,
+    heartbeat_dir: &str,
+    cluster_name: &str,
+    artifact_run_id: &str,
+) -> u32 {
+    let mut count = 0u32;
+    for vm in target_vms {
+        let core_dir = vm_core_run_dir(cluster_name, artifact_run_id, &vm.name);
+        let stage_dir = format!(
+            "/tmp/steampipe-artifact-probe/{}/{}",
+            sanitize_artifact_component(artifact_run_id),
+            sanitize_artifact_component(vm.name.as_ref())
+        );
+        let stage_cmd = build_artifact_stage_cmd(
+            remote_dir,
+            heartbeat_dir,
+            &core_dir,
+            &stage_dir,
+            vm.name.as_ref(),
+        );
+        let staged = backend
+            .run_cmd_timeout(&vm.ip, &stage_cmd, ARTIFACT_COPY_TIMEOUT)
+            .await;
+        if staged.success {
+            count = count.saturating_add(staged.stdout.trim().parse::<u32>().unwrap_or(0));
+        }
+    }
+    count
 }
 
 fn build_artifact_stage_cmd(
