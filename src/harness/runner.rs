@@ -1835,6 +1835,7 @@ fn build_vm_launch_cmd(
     let core_setup = build_vm_core_setup_cmd(cluster_name, artifact_run_id, vm_name);
     format!(
         "mkdir -p {remote_dir}/{heartbeat_dir} && \
+         (find {remote_dir}/{heartbeat_dir} -type f -name panic.log -delete 2>/dev/null || true) && \
          {core_setup} && \
          cd {remote_dir} && \
          . /etc/profile.d/steampipe-graphics.sh 2>/dev/null || true && \
@@ -2033,23 +2034,20 @@ fn build_artifact_stage_cmd(
     format!(
         "rm -rf {stage} && mkdir -p {panic_dest} {core_dest} && \
          panic_count=0; \
-         for root in {heartbeat} {remote} \"$HOME/.local/state/steampipe\"; do \
-             if [ -d \"$root\" ]; then \
-                 while IFS= read -r panic_log; do \
-                     if [ -s \"$panic_log\" ]; then \
-                         panic_count=$((panic_count + 1)); \
-                         cp \"$panic_log\" {panic_dest}/panic-$panic_count.log; \
-                     fi; \
-                 done <<STEAMPIPE_PANIC_LIST\n$(find \"$root\" -type f -name panic.log 2>/dev/null)\nSTEAMPIPE_PANIC_LIST\n\
-             fi; \
-         done; \
+         if [ -d {heartbeat} ]; then \
+             while IFS= read -r panic_log; do \
+                 if [ -s \"$panic_log\" ]; then \
+                     panic_count=$((panic_count + 1)); \
+                     cp \"$panic_log\" {panic_dest}/panic-$panic_count.log; \
+                 fi; \
+             done <<STEAMPIPE_PANIC_LIST\n$(find {heartbeat} -type f -name panic.log 2>/dev/null)\nSTEAMPIPE_PANIC_LIST\n\
+         fi; \
          if [ -d {core_dir} ]; then find {core_dir} -maxdepth 1 -type f -name 'core.*' -size +0c -exec cp {{}} {core_dest}/ \\; 2>/dev/null; fi; \
          find {stage} -type f | wc -l",
         stage = shell_quote(stage_dir),
         panic_dest = shell_quote(&panic_dest),
         core_dest = shell_quote(&core_dest),
         heartbeat = shell_quote(&heartbeat_abs),
-        remote = shell_quote(remote_dir),
         core_dir = shell_quote(core_dir),
     )
 }
