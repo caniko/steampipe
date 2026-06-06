@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, SystemTime};
 
 use crate::core::backend::{Backend, microvm_log_path};
-use crate::core::config::{BridgeReady, ClusterConfig, Unchecked, VmDef, par_each_vm};
+use crate::core::config::{BridgeReady, ClusterConfig, Unchecked, VmDef, VmName, par_each_vm};
 use crate::core::credentials::{CredentialsMap, VmCredentials};
 use crate::core::nixos_module::{Discovery, NixosModuleConfig, RowStatus};
 use crate::game::accounts::{self, SessionStatus};
@@ -812,7 +812,10 @@ fn cargo_workspace_root_from_current_exe() -> Option<PathBuf> {
     loop {
         if dir.file_name() == Some(OsStr::new("target")) {
             let root = dir.parent()?;
-            return root.join("Cargo.toml").is_file().then(|| root.to_path_buf());
+            return root
+                .join("Cargo.toml")
+                .is_file()
+                .then(|| root.to_path_buf());
         }
         dir = dir.parent()?;
     }
@@ -845,7 +848,9 @@ async fn request_guard_code_from_helper(
     let output = match command.output().await {
         Ok(output) => output,
         Err(error) => {
-            eprintln!("  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}");
+            eprintln!(
+                "  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}"
+            );
             return Ok(GuardCodeOutcome::Unavailable);
         }
     };
@@ -992,9 +997,7 @@ impl GuardProvider {
                     && *stdin_fallback
                     && io::stdin().is_terminal()
                 {
-                    eprintln!(
-                        "  Steam Guard dialog unavailable; falling back to terminal input."
-                    );
+                    eprintln!("  Steam Guard dialog unavailable; falling back to terminal input.");
                     return read_guard_code_from_stdin(cx);
                 }
                 Ok(outcome)
@@ -1234,7 +1237,9 @@ fn spawn_guard_dialog(
     let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
-            eprintln!("  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}");
+            eprintln!(
+                "  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}"
+            );
             return None;
         }
     };
@@ -1337,31 +1342,30 @@ pub(crate) async fn login(
     let mut logged_in = 0usize;
     let mut skipped = 0usize;
     for vm in &targets {
-        if !force
-            && let Some(login_state_dir) = login_state_dir {
-                let vm_name = vm.name.to_string();
-                let status = accounts::classify_session_status(
+        if !force && let Some(login_state_dir) = login_state_dir {
+            let vm_name = vm.name.to_string();
+            let status = accounts::classify_session_status(
+                login_state_dir,
+                &vm_name,
+                accounts::DEFAULT_WARN_WITHIN_DAYS,
+            );
+            if status == SessionStatus::Ok {
+                let info = accounts::read_account_info(
                     login_state_dir,
-                    &vm_name,
+                    vm_name,
+                    None,
                     accounts::DEFAULT_WARN_WITHIN_DAYS,
                 );
-                if status == SessionStatus::Ok {
-                    let info = accounts::read_account_info(
-                        login_state_dir,
-                        vm_name,
-                        None,
-                        accounts::DEFAULT_WARN_WITHIN_DAYS,
-                    );
-                    let persona = info.persona.as_deref().unwrap_or("unknown");
-                    println!(
-                        "  {}: already logged in ({persona}), skipping (use --force to re-login)",
-                        vm.name
-                    );
-                    skipped += 1;
-                    continue;
-                }
-                println!("  {}: {}, logging in", vm.name, status.login_reason());
+                let persona = info.persona.as_deref().unwrap_or("unknown");
+                println!(
+                    "  {}: already logged in ({persona}), skipping (use --force to re-login)",
+                    vm.name
+                );
+                skipped += 1;
+                continue;
             }
+            println!("  {}: {}, logging in", vm.name, status.login_reason());
+        }
 
         let vm_creds = creds.and_then(|c| c.get::<str>(&vm.name));
         let mut log = LoginLog::stdout();
@@ -1406,34 +1410,33 @@ async fn login_vm_attempt(
     log: &mut LoginLog,
 ) -> LoginAttempt {
     let mut login_reason = login_reason_for_vm(login_state_dir, vm, force);
-    if !force
-        && let Some(login_state_dir) = login_state_dir {
-            let vm_name = vm.name.to_string();
-            let status = accounts::classify_session_status(
+    if !force && let Some(login_state_dir) = login_state_dir {
+        let vm_name = vm.name.to_string();
+        let status = accounts::classify_session_status(
+            login_state_dir,
+            &vm_name,
+            accounts::DEFAULT_WARN_WITHIN_DAYS,
+        );
+        if status == SessionStatus::Ok {
+            let info = accounts::read_account_info(
                 login_state_dir,
-                &vm_name,
+                vm_name,
+                None,
                 accounts::DEFAULT_WARN_WITHIN_DAYS,
             );
-            if status == SessionStatus::Ok {
-                let info = accounts::read_account_info(
-                    login_state_dir,
-                    vm_name,
-                    None,
-                    accounts::DEFAULT_WARN_WITHIN_DAYS,
-                );
-                let persona = info.persona.as_deref().unwrap_or("unknown");
-                return LoginAttempt::Skipped(format!(
-                    "  {}: already logged in ({persona}), skipping (use --force to re-login)",
-                    vm.name
-                ));
-            }
-            login_reason = status.login_reason().to_string();
-            log.line(format!(
-                "  {}: {}, logging in",
-                vm.name,
-                status.login_reason()
+            let persona = info.persona.as_deref().unwrap_or("unknown");
+            return LoginAttempt::Skipped(format!(
+                "  {}: already logged in ({persona}), skipping (use --force to re-login)",
+                vm.name
             ));
         }
+        login_reason = status.login_reason().to_string();
+        log.line(format!(
+            "  {}: {}, logging in",
+            vm.name,
+            status.login_reason()
+        ));
+    }
 
     let Some(vm_creds) = creds.and_then(|c| c.get::<str>(&vm.name)) else {
         return LoginAttempt::Failed(anyhow::anyhow!(
@@ -1707,7 +1710,15 @@ async fn login_single_vm_automated(
     log.line("══════════════════════════════════════════════════");
 
     let vm_name = vm.name.to_string();
-    mint_and_write_session(creds, &vm_name, login_reason, guard_provider, login_state_dir, log).await
+    mint_and_write_session(
+        creds,
+        &vm_name,
+        login_reason,
+        guard_provider,
+        login_state_dir,
+        log,
+    )
+    .await
 }
 
 /// Mint a SteamClient session headlessly and persist it to the VM's login-state
@@ -1738,7 +1749,9 @@ async fn mint_and_write_session(
         "  Minting Steam session for {} (headless, no in-VM GUI)...",
         creds.steam_user
     ));
-    match crate::game::steam_auth::mint_session(creds, vm_name, login_reason, guard_provider).await? {
+    match crate::game::steam_auth::mint_session(creds, vm_name, login_reason, guard_provider)
+        .await?
+    {
         crate::game::steam_auth::MintOutcome::Minted(session) => {
             crate::game::steam_session::write_session(login_state_dir, vm_name, &session)
                 .map_err(|e| anyhow::anyhow!("writing Steam session for {vm_name}: {e}"))?;
@@ -1932,9 +1945,10 @@ fn vm_log_tail_lines(log: &str) -> Vec<&str> {
 /// Auto-login Steam on already-running VMs using credentials.
 /// Called after `vm::up()` to transparently establish Steam sessions.
 pub async fn auto_login<S>(
-    config: &ClusterConfig<S>,
+    _config: &ClusterConfig<S>,
     vms: &[VmDef],
     creds: &CredentialsMap,
+    login_state_dir: Option<&Path>,
 ) -> anyhow::Result<()> {
     // Filter to VMs that have credentials
     let with_creds: Vec<_> = vms
@@ -1947,43 +1961,59 @@ pub async fn auto_login<S>(
     }
 
     println!("==> Auto-login Steam on {} VM(s)...", with_creds.len());
-    let backend = config.backend.clone();
-    let vm_user = config.vm_user.clone();
-    let state_dir = config.state_dir.clone();
     let guard_provider = GuardProvider::select(None, LoginContext::force_non_interactive(), true);
+    let login_state_dir = login_state_dir.map(Path::to_path_buf);
 
     let results = par_each_vm(vms, |vm| {
-        let backend = backend.clone();
-        let vm_user = vm_user.clone();
-        let state_dir = state_dir.clone();
         let creds = creds.clone();
         let guard_provider = guard_provider.clone();
+        let login_state_dir = login_state_dir.clone();
         async move {
             let Some(vm_creds) = creds.get::<str>(&vm.name) else {
-                return (vm.name, None);
+                return AutoLoginReport::no_credentials(vm.name);
             };
             let mut log = LoginLog::silent();
-            match automated_login(
-                &backend,
-                &vm,
-                vm_creds,
-                &vm_user,
-                &state_dir,
-                "auto-login",
-                &guard_provider,
-                &mut log,
-            )
-            .await
-            {
-                Ok(LoginOutcome::Completed) => (vm.name, Some(true)),
-                Ok(LoginOutcome::GuardCodeNeeded(needed)) => {
-                    eprintln!("  {needed}");
-                    (vm.name, Some(false))
+            let vm_name = vm.name.to_string();
+            match auto_login_action(login_state_dir.as_deref(), &vm_name) {
+                AutoLoginAction::UseExisting => {
+                    return AutoLoginReport::ok(
+                        vm.name,
+                        "existing Steam session OK".to_string(),
+                    );
                 }
-                Ok(LoginOutcome::ManualCompletionNeeded) => (vm.name, Some(false)),
-                Err(e) => {
-                    eprintln!("  {}: login failed: {e}", vm.name);
-                    (vm.name, Some(false))
+                AutoLoginAction::MintSession { status } => {
+                    let reason = status.login_reason();
+                    match mint_and_write_session(
+                        vm_creds,
+                        &vm_name,
+                        reason,
+                        &guard_provider,
+                        login_state_dir.as_deref(),
+                        &mut log,
+                    )
+                    .await
+                    {
+                        Ok(LoginOutcome::Completed) => AutoLoginReport::ok(
+                            vm.name,
+                            format!("refreshed Steam session ({reason})"),
+                        ),
+                        Ok(LoginOutcome::GuardCodeNeeded(needed)) => {
+                            eprintln!("  {needed}");
+                            AutoLoginReport::failed(vm.name)
+                        }
+                        Ok(LoginOutcome::ManualCompletionNeeded) => AutoLoginReport::failed(vm.name),
+                        Err(e) => {
+                            eprintln!("  {}: login failed: {e}", vm.name);
+                            AutoLoginReport::failed(vm.name)
+                        }
+                    }
+                }
+                AutoLoginAction::MissingLoginStateDir => {
+                    eprintln!(
+                        "  {}: login failed: no loginStateDir configured; cannot persist a Steam session",
+                        vm.name
+                    );
+                    AutoLoginReport::failed(vm.name)
                 }
             }
         }
@@ -1992,13 +2022,13 @@ pub async fn auto_login<S>(
 
     let mut ok = 0;
     let mut fail = 0;
-    for (name, result) in &results {
-        match result {
-            Some(true) => {
-                println!("  {name}: logged in");
+    for report in &results {
+        match &report.result {
+            Some(Ok(message)) => {
+                println!("  {}: {message}", report.name);
                 ok += 1;
             }
-            Some(false) => fail += 1,
+            Some(Err(())) => fail += 1,
             None => {} // no creds for this VM
         }
     }
@@ -2013,6 +2043,55 @@ pub async fn auto_login<S>(
     }
 
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AutoLoginReport {
+    name: VmName,
+    result: Option<Result<String, ()>>,
+}
+
+impl AutoLoginReport {
+    fn no_credentials(name: VmName) -> Self {
+        Self { name, result: None }
+    }
+
+    fn ok(name: VmName, message: String) -> Self {
+        Self {
+            name,
+            result: Some(Ok(message)),
+        }
+    }
+
+    fn failed(name: VmName) -> Self {
+        Self {
+            name,
+            result: Some(Err(())),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AutoLoginAction {
+    UseExisting,
+    MintSession { status: SessionStatus },
+    MissingLoginStateDir,
+}
+
+fn auto_login_action(login_state_dir: Option<&Path>, vm_name: &str) -> AutoLoginAction {
+    let Some(login_state_dir) = login_state_dir else {
+        return AutoLoginAction::MissingLoginStateDir;
+    };
+    let status = accounts::classify_session_status(
+        login_state_dir,
+        vm_name,
+        accounts::DEFAULT_WARN_WITHIN_DAYS,
+    );
+    if status == SessionStatus::Ok {
+        AutoLoginAction::UseExisting
+    } else {
+        AutoLoginAction::MintSession { status }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3015,8 +3094,101 @@ fn format_date(timestamp: SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::{IpAddr, VmName};
+    use crate::core::config::IpAddr;
+    use base64::Engine as _;
     use std::os::unix::fs::PermissionsExt;
+
+    fn test_jwt(exp: i64) -> String {
+        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(r#"{"alg":"none"}"#);
+        let payload =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(format!(r#"{{"exp":{exp}}}"#));
+        format!("{header}.{payload}.")
+    }
+
+    fn write_login_state(root: &Path, vm_name: &str, steam_id: &str, exp: i64) {
+        let config_dir = root.join(vm_name).join("config");
+        let token_dir = config_dir.join(steam_id);
+        std::fs::create_dir_all(&token_dir).expect("create token dir");
+        std::fs::write(
+            config_dir.join("loginusers.vdf"),
+            format!(
+                r#""users"
+{{
+    "{steam_id}"
+    {{
+        "PersonaName"    "{vm_name}"
+    }}
+}}
+"#
+            ),
+        )
+        .expect("write loginusers.vdf");
+        std::fs::write(
+            token_dir.join("local.vdf"),
+            format!(r#""RefreshToken_{steam_id}"   "{}""#, test_jwt(exp)),
+        )
+        .expect("write local.vdf");
+    }
+
+    #[test]
+    fn auto_login_action_skips_healthy_persisted_session() {
+        let temp = tempfile::tempdir().expect("temp login state dir");
+        let now = chrono::Utc::now().timestamp();
+        write_login_state(temp.path(), "vm-1", "76561198000000001", now + 90 * 86_400);
+
+        assert_eq!(
+            auto_login_action(Some(temp.path()), "vm-1"),
+            AutoLoginAction::UseExisting
+        );
+    }
+
+    #[test]
+    fn auto_login_action_mints_for_unhealthy_persisted_sessions() {
+        let temp = tempfile::tempdir().expect("temp login state dir");
+        let now = chrono::Utc::now().timestamp();
+        write_login_state(
+            temp.path(),
+            "vm-stale",
+            "76561198000000002",
+            now + 7 * 86_400,
+        );
+        write_login_state(temp.path(), "vm-expired", "76561198000000003", now - 86_400);
+        std::fs::create_dir_all(temp.path().join("vm-no-token").join("config"))
+            .expect("create no-token state");
+
+        assert_eq!(
+            auto_login_action(Some(temp.path()), "vm-stale"),
+            AutoLoginAction::MintSession {
+                status: SessionStatus::Stale
+            }
+        );
+        assert_eq!(
+            auto_login_action(Some(temp.path()), "vm-expired"),
+            AutoLoginAction::MintSession {
+                status: SessionStatus::Expired
+            }
+        );
+        assert_eq!(
+            auto_login_action(Some(temp.path()), "vm-no-token"),
+            AutoLoginAction::MintSession {
+                status: SessionStatus::NoToken
+            }
+        );
+        assert_eq!(
+            auto_login_action(Some(temp.path()), "vm-missing"),
+            AutoLoginAction::MintSession {
+                status: SessionStatus::Unknown
+            }
+        );
+    }
+
+    #[test]
+    fn auto_login_action_requires_login_state_dir() {
+        assert_eq!(
+            auto_login_action(None, "vm-1"),
+            AutoLoginAction::MissingLoginStateDir
+        );
+    }
 
     #[test]
     fn shell_escape_no_quotes() {

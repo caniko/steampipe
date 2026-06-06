@@ -66,26 +66,6 @@ pub async fn show<S>(
         )
     })?;
 
-    if config.vms.is_empty() {
-        println!(
-            "==> Configured Steam accounts ({}; not leased)\n",
-            host.accounts.len()
-        );
-        println!("{:<8} {:<12} {:<20}", "VM", "Status", "Account");
-        println!("{}", "-".repeat(44));
-        for account in &host.accounts {
-            println!(
-                "{:<8} {:<12} {:<20}",
-                account.vm, "not leased", account.steam_user
-            );
-        }
-        if host.accounts.is_empty() {
-            println!();
-            println!("  No configured accounts in host config");
-        }
-        return Ok(());
-    }
-
     let targets = account_targets(config, host);
     if targets.is_empty() {
         println!(

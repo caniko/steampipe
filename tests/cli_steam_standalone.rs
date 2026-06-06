@@ -404,14 +404,12 @@ fn accounts_without_lease_uses_host_config_accounts() {
 
     assert!(output.status.success(), "{output:?}");
     let stdout = output_string(&output);
-    assert!(
-        stdout.contains("Configured Steam accounts (3; not leased)"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("Checking Steam accounts from"), "{stdout}");
     assert!(stdout.contains("alice"), "{stdout}");
     assert!(stdout.contains("bob"), "{stdout}");
     assert!(stdout.contains("carol"), "{stdout}");
-    assert!(stdout.contains("not leased"), "{stdout}");
+    assert!(stdout.contains("UNKNOWN"), "{stdout}");
+    assert!(!stdout.contains("not leased"), "{stdout}");
 }
 
 #[test]
