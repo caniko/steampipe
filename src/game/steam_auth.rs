@@ -113,7 +113,8 @@ impl RetryConfirmationHandler for DialogRetryHandler {
             match session.next_code(previous_error.as_deref()).await {
                 GuardRetryNext::Code(code) => Some(code),
                 GuardRetryNext::Cancelled => {
-                    *abort_reason.lock().expect("abort-reason mutex") = Some(AbortReason::Cancelled);
+                    *abort_reason.lock().expect("abort-reason mutex") =
+                        Some(AbortReason::Cancelled);
                     None
                 }
                 GuardRetryNext::Unavailable => {

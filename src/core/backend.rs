@@ -454,9 +454,10 @@ fn parse_supervisord_conf_path(wrapper: &str) -> Option<PathBuf> {
             return Some(PathBuf::from(rest));
         }
         if (tok == "--configuration" || tok == "-c")
-            && let Some(value) = tokens.next() {
-                return Some(PathBuf::from(value));
-            }
+            && let Some(value) = tokens.next()
+        {
+            return Some(PathBuf::from(value));
+        }
     }
     None
 }

@@ -9,7 +9,7 @@ use std::time::Duration;
 use clap::Parser;
 use iced::futures::{SinkExt, Stream};
 use iced::widget::{button, column, container, row, text, text_input};
-use iced::{window, Alignment, Element, Length, Subscription, Task, Theme};
+use iced::{Alignment, Element, Length, Subscription, Task, Theme, window};
 use zeroize::Zeroize;
 
 const EXIT_CANCELLED: i32 = 10;
@@ -343,30 +343,33 @@ fn subscription(prompt: &Prompt) -> Subscription<Message> {
 /// Stream cluster-ctl's control lines (read from stdin) as [`Message`]s. Runs on
 /// iced's tokio executor; ends after `OK` or when stdin closes.
 fn control_stream() -> impl Stream<Item = Message> {
-    iced::stream::channel(8, |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
-        use tokio::io::AsyncBufReadExt as _;
+    iced::stream::channel(
+        8,
+        |mut sender: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use tokio::io::AsyncBufReadExt as _;
 
-        let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
-        loop {
-            match lines.next_line().await {
-                Ok(Some(line)) => {
-                    if let Some(message) = parse_control_line(&line) {
-                        let stop = matches!(message, Message::Control(Control::Accept));
-                        if sender.send(message).await.is_err() {
-                            break;
-                        }
-                        if stop {
-                            break;
+            let mut lines = tokio::io::BufReader::new(tokio::io::stdin()).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        if let Some(message) = parse_control_line(&line) {
+                            let stop = matches!(message, Message::Control(Control::Accept));
+                            if sender.send(message).await.is_err() {
+                                break;
+                            }
+                            if stop {
+                                break;
+                            }
                         }
                     }
-                }
-                Ok(None) | Err(_) => {
-                    let _ = sender.send(Message::StdinClosed).await;
-                    break;
+                    Ok(None) | Err(_) => {
+                        let _ = sender.send(Message::StdinClosed).await;
+                        break;
+                    }
                 }
             }
-        }
-    })
+        },
+    )
 }
 
 /// Parse one control line. Recognises `OK` and `ERR <msg>`; unknown lines are

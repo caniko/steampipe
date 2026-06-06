@@ -145,16 +145,17 @@ async fn run_loop<S>(
                 break;
             }
             if event::poll(remaining.min(Duration::from_millis(250)))?
-                && let Event::Key(key) = event::read()? {
-                    match key.code {
-                        KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            return Ok(());
-                        }
-                        KeyCode::Char('r') => break,
-                        _ => {}
+                && let Event::Key(key) = event::read()?
+            {
+                match key.code {
+                    KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(());
                     }
+                    KeyCode::Char('r') => break,
+                    _ => {}
                 }
+            }
         }
     }
 }

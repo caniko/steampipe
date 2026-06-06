@@ -33,9 +33,15 @@ pub(crate) fn write_session(
     // Token file first: the session only "appears" complete once loginusers.vdf
     // (written second) references a SteamID whose token is already present.
     let local_vdf = steam_id_dir.join("local.vdf");
-    write_atomic(&local_vdf, &render_local_vdf(&steam_id, &session.refresh_token))?;
+    write_atomic(
+        &local_vdf,
+        &render_local_vdf(&steam_id, &session.refresh_token),
+    )?;
 
-    let persona = session.persona_name.as_deref().unwrap_or(&session.account_name);
+    let persona = session
+        .persona_name
+        .as_deref()
+        .unwrap_or(&session.account_name);
     let loginusers = config_dir.join("loginusers.vdf");
     write_atomic(
         &loginusers,
@@ -142,15 +148,20 @@ mod tests {
         // Files exist where expected.
         let config = dir.path().join("vm-1").join("config");
         assert!(config.join("loginusers.vdf").is_file());
-        assert!(config.join(steam_id.to_string()).join("local.vdf").is_file());
+        assert!(
+            config
+                .join(steam_id.to_string())
+                .join("local.vdf")
+                .is_file()
+        );
 
         // loginusers.vdf carries the 17-digit SteamID + a PersonaName.
         let lu = std::fs::read_to_string(config.join("loginusers.vdf")).unwrap();
         assert!(lu.contains(&steam_id.to_string()));
         assert!(lu.contains("\"PersonaName\""));
         // local.vdf carries the eyJ token.
-        let lv = std::fs::read_to_string(config.join(steam_id.to_string()).join("local.vdf"))
-            .unwrap();
+        let lv =
+            std::fs::read_to_string(config.join(steam_id.to_string()).join("local.vdf")).unwrap();
         assert!(lv.contains("eyJ"));
     }
 
@@ -176,7 +187,10 @@ mod tests {
         let future = chrono::Utc::now().timestamp() + 200 * 86_400;
         write_session(dir.path(), "vm-3", &sample(76_561_198_000_000_002, future)).unwrap();
         let lu = std::fs::read_to_string(
-            dir.path().join("vm-3").join("config").join("loginusers.vdf"),
+            dir.path()
+                .join("vm-3")
+                .join("config")
+                .join("loginusers.vdf"),
         )
         .unwrap();
         assert!(lu.contains("\"PersonaName\"\t\t\"caniko_jarvis_1\""));

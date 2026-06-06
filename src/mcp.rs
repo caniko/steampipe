@@ -305,10 +305,11 @@ impl SteampipeMcp {
         cmd.arg("run").arg(&flake_ref);
 
         if let Some(ref args) = input.args
-            && !args.is_empty() {
-                cmd.arg("--");
-                cmd.args(args);
-            }
+            && !args.is_empty()
+        {
+            cmd.arg("--");
+            cmd.args(args);
+        }
 
         cmd.stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

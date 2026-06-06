@@ -7,9 +7,10 @@ pub(crate) fn validate_netem_params(
     loss_percent: Option<f32>,
 ) -> anyhow::Result<()> {
     if let Some(loss) = loss_percent
-        && !(0.0..=100.0).contains(&loss) {
-            anyhow::bail!("loss percentage must be between 0 and 100, got {loss}");
-        }
+        && !(0.0..=100.0).contains(&loss)
+    {
+        anyhow::bail!("loss percentage must be between 0 and 100, got {loss}");
+    }
     if let Some(jit) = jitter_ms {
         if latency_ms.is_none() {
             anyhow::bail!("--jitter requires --latency");

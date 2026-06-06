@@ -214,9 +214,10 @@ pub fn list_cluster_vms(cluster: &str, max_vms: u8, lock_dir: &Path) -> Vec<u8> 
     let mut ids = Vec::new();
     for id in 1..=max_vms {
         if let Some(info) = probe_holder(id, lock_dir)
-            && info.cluster == cluster {
-                ids.push(id);
-            }
+            && info.cluster == cluster
+        {
+            ids.push(id);
+        }
     }
     ids
 }
