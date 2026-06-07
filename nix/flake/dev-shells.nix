@@ -36,7 +36,6 @@ in
         pkgs.cargo-outdated
         pkgs.just
         pkgs.mdbook
-        pkgs.zola
         pkgs.pkg-config
         pkgs.wayland-protocols
         packages.default
@@ -46,7 +45,6 @@ in
 
     extraShellHook = ''
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath guiRuntimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-      echo "Website: cd website && zola serve"
       echo "Documentation: cd docs && mdbook serve"
     '';
   }

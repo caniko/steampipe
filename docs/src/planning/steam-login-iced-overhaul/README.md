@@ -68,7 +68,7 @@ research dossier:
 | 05 — State-sync / session-detection convergence fix | [05-state-sync-convergence.md](./05-state-sync-convergence.md) | 01 | `src/game/steam.rs`, `src/game/accounts.rs` | 02, 03, 04 | **Yes** (gates 07) |
 | 06 — Headless/MCP fail-fast contract across callers | [06-headless-failfast-contract.md](./06-headless-failfast-contract.md) | 01, 02 | `src/mcp.rs`, `src/harness/runner.rs`, `src/game/steam.rs` | 04, 05 | No |
 | 07 — Retire interactive VNC login + gate login-runner GUI packages | [07-retire-vnc-login.md](./07-retire-vnc-login.md) | 01–06 green | `src/game/steam.rs`, `src/ui/cli.rs`, `nix/cluster-vm-base.nix`, `nix/lib/test-cluster.nix` | — | No |
-| 08 — Docs, CLI help, tests, plan retirement | [08-docs-and-tests/README.md](./08-docs-and-tests/README.md) | 01–07 | `docs/`, `README.md`, `website/`, `tests/`, `src/ui/cli.rs` | — | No |
+| 08 — Docs, CLI help, tests, plan retirement | [08-docs-and-tests/README.md](./08-docs-and-tests/README.md) | 01–07 | `docs/`, `README.md`, `tests/`, `src/ui/cli.rs` | — | No |
 
 > **Serialization hazard — `src/game/steam.rs`.** Phases 01, 02, 04, 05, 06, 07
 > all edit this file. They are sequenced so each lands on top of the prior; an
@@ -97,7 +97,7 @@ research dossier:
   Phase 05's host verification proving steamcmd-only login establishes machine
   trust — do not start until that evidence exists.
 - **Wave 4 (after 01–07 green):** **Phase 08** docs + tests. The two sub-layers
-  (docs/website vs tests/CLI-help) are disjoint and fan out in parallel; the
+  (docs vs tests/CLI-help) are disjoint and fan out in parallel; the
   tests sub-layer needs the final code behavior, so it follows the code phases.
 - **Plan exhausted** after Wave 4.
 
@@ -126,8 +126,8 @@ research dossier:
 - [ ] `cargo build`, `cargo clippy` (workspace lints in `Cargo.toml`), and
       `cargo test` (incl. `tests/cli_steam_standalone.rs`) are green; the new
       typed-outcome and fail-fast paths have unit/integration coverage.
-- [ ] `docs/src/configuration/steam-credentials.md`, README steam sections, and
-      website copy describe the new default flow and the headless contract; the
+- [ ] `docs/src/configuration/steam-credentials.md` and README steam sections
+      describe the new default flow and the headless contract; the
       shipped lifecycle behavior remains documented in stable docs.
 
 ## Global constraints (apply to every phase)

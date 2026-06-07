@@ -1,8 +1,9 @@
 /target
+/result
+/result-*
 .cargo/config.toml
 .cargo/config.toml.bak
 docs/book/
-website/public/
 tests/fixture/result*
 tests/fixture/.direnv
 tests/fixture/golden/.candidate/

@@ -1,0 +1,25 @@
+name: Publish Pages
+
+on:
+  push:
+    branches: [trunk]
+
+jobs:
+  publish:
+    runs-on: codeberg-small
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: https://github.com/cachix/install-nix-action@v31
+
+      - name: Build site
+        run: nix build .#site
+
+      - name: Publish to Codeberg Pages
+        uses: https://codeberg.org/git-pages/action@v2
+        with:
+          site: "https://${{ forge.repository_owner }}.codeberg.page/steampipe/"
+          token: ${{ forge.token }}
+          source: result/

@@ -1,4 +1,4 @@
-# Phase 08 · Sub-layer 01 — Docs & website rewrite
+# Phase 08 · Sub-layer 01 — Docs rewrite
 
 > **Recommended Codex model: GPT 5.5 medium**
 >
@@ -15,7 +15,7 @@ one that edits `docs/src/SUMMARY.md`.
 
 ## Goal
 
-Every documentation and website surface describes the new Steam login flow:
+Every documentation surface describes the new Steam login flow:
 auto-steamcmd on missing/expired session, a host-side iced dialog
 (`cluster-guard-prompt`) for the one-time code, completion in a single invocation,
 the `--code`/`STEAMPIPE_GUARD_CODE` non-interactive path, the headless fail-fast
@@ -39,17 +39,15 @@ surface still presents the VNC two-phase model as the default.
    `:784-791`, `:992`, `:58-60`): replace "VNC in and complete Steam Guard" and
    "Automated login may not work with Steam Guard accounts" with the new flow;
    update the command reference for `steam login`/`guard`.
-3. **Update `website/content/_index.md`** (`:13-15` "Interactive VNC-based
-   login") to the host-dialog framing.
-4. **Update getting-started** (`docs/src/getting-started/quick-start.md:86`,
+3. **Update getting-started** (`docs/src/getting-started/quick-start.md:86`,
    `installation.md`, `host-config.md:54-61`) for the new login UX and the
    `cluster-guard-prompt` dependency on graphical operator hosts.
-5. **Wire `docs/src/SUMMARY.md`** if any new doc pages are added; ensure the new
+4. **Wire `docs/src/SUMMARY.md`** if any new doc pages are added; ensure the new
    flow is discoverable.
-6. **Preserve shipped lifecycle behavior in stable docs** per the dossier's
+5. **Preserve shipped lifecycle behavior in stable docs** per the dossier's
    "Existing Plan Status": keep virtiofsd lifecycle, parallel login, and
    fill-the-gaps guidance in contributor/user docs.
-7. `mdbook build docs` to confirm it renders.
+6. `mdbook build docs` to confirm it renders.
 
 ## Acceptance criteria
 
@@ -57,7 +55,7 @@ surface still presents the VNC two-phase model as the default.
       documents `--code`/`STEAMPIPE_GUARD_CODE` and headless fail-fast, and has a
       clearly-labelled Fallbacks section; `rg "VNC into|complete the Steam login"
       docs/` returns only fallback context.
-- [ ] README + website no longer present VNC as the default login; command
+- [ ] README no longer presents VNC as the default login; command
       reference matches the new CLI.
 - [ ] `mdbook build docs` succeeds; new/changed pages are in `SUMMARY.md`.
 - [ ] The shipped lifecycle behavior remains documented in stable docs.
@@ -66,7 +64,7 @@ surface still presents the VNC two-phase model as the default.
 
 - `docs/src/configuration/steam-credentials.md`, `docs/src/getting-started/*`,
   `docs/src/configuration/host-config.md`, `docs/src/SUMMARY.md`
-- `README.md`, `website/content/_index.md`
+- `README.md`
 
 ## Pitfalls
 

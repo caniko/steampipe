@@ -11,10 +11,10 @@
 
 | # | Slug | Model | Touches | Sub-layer file |
 |---|------|-------|---------|----------------|
-| 01 | docs-rewrite | 5.5 medium | `docs/src/configuration/steam-credentials.md`, `README.md`, `website/content/_index.md`, `docs/src/getting-started/*`, `docs/src/SUMMARY.md` | [sub-01-docs-rewrite.md](./sub-01-docs-rewrite.md) |
+| 01 | docs-rewrite | 5.5 medium | `docs/src/configuration/steam-credentials.md`, `README.md`, `docs/src/getting-started/*`, `docs/src/SUMMARY.md` | [sub-01-docs-rewrite.md](./sub-01-docs-rewrite.md) |
 | 02 | tests-and-cli-help | 5.4 medium | `tests/cli_steam_standalone.rs`, new login tests, `src/ui/cli.rs` help strings | [sub-02-tests-and-cli-help.md](./sub-02-tests-and-cli-help.md) |
 
-These two streams touch disjoint files (prose/`docs` + `website` vs `tests` +
+These two streams touch disjoint files (prose/`docs` vs `tests` +
 `cli.rs` help text), have independent acceptance subcriteria, need no
 mid-execution communication, and can be retried independently — so they fan out as
 sub-layers. The user dispatches them in parallel and merges.
@@ -31,7 +31,7 @@ lifecycle behavior remains covered by stable docs.
 
 Phases 01–07 changed behavior the docs and tests still describe the old way of.
 The dossier's incompatibility #14 catalogues the doc surfaces that enshrine the
-VNC two-phase model (`steam-credentials.md`, README, website), and the critic
+VNC two-phase model (`steam-credentials.md`, README), and the critic
 flagged that `tests/cli_steam_standalone.rs` asserts exact stdout and has **no**
 login/guard coverage. Leaving these stale ships a product whose docs and tests
 contradict its behavior.
@@ -57,8 +57,8 @@ files so the merge is a clean union with no conflicts. After both land:
 
 - [ ] `docs/src/configuration/steam-credentials.md` describes auto-steamcmd + host
       dialog as the default, the `--code`/`STEAMPIPE_GUARD_CODE` and headless
-      fail-fast contract, and VNC/`steam guard` only as fallbacks; README +
-      website copy match.
+      fail-fast contract, and VNC/`steam guard` only as fallbacks; README copy
+      matches.
 - [ ] `tests/cli_steam_standalone.rs` passes with any updated exact-stdout
       strings, and new tests cover the typed `GuardCodeNeeded` outcome + fail-fast
       (no-display/`--non-interactive`) path; `cargo test` is green.

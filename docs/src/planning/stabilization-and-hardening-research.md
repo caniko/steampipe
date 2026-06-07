@@ -94,7 +94,7 @@ next steps are listed but not phased.
 | [src/mcp.rs](../../../src/mcp.rs) lines 1, 302; `rmcp 0.17` `tool_router` | The MCP server exposes a tool surface to an external client (Claude / LLM). Inputs land in `ClusterParams { cluster, vm_count }` and similar structs and reach `nix` and other subprocesses. No `tracing-subscriber` means MCP server tool calls produce no host-side audit log. |
 | [src/core/admission.rs](../../../src/core/admission.rs) | `OnceLock`-cached global `AdmissionGate`. Failure path is "log and disengage throttling" — defense in depth, not a hard dependency. |
 | [tests/cli_steam_standalone.rs](../../../tests/cli_steam_standalone.rs) | Only one integration test file (526 lines). Uses `serial_test` + `STEAMPIPE_ETC_DIR` env-var sandboxing. Comprehensive for CLI surface but only one binary integration suite. |
-| [website/](../../../website/) directory exists | Zola site sources committed; no Pages workflow exists. mdBook docs likewise have no publish workflow. |
+| Former `website/` Zola tree | Replaced by the docs-only mdBook Pages output; the active deployable site is `nix build .#site`. |
 | `git log -1 --pretty=%s -- docs/src/planning/hypervisor-restructure/README.md` ancestry vs. `git status` | Planning docs are not deleted in HEAD — the deletion is in the operator's working tree, pending. Suggests retire-in-progress, not retired. |
 
 ## Existing Plan Status

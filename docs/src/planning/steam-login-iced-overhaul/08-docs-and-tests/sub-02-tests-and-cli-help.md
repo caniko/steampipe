@@ -22,7 +22,7 @@ integration tests are updated to match any changed output. The
 
 ## Out of scope
 
-- Docs/website/SUMMARY — sub-01.
+- Docs/SUMMARY — sub-01.
 - Behavior changes — Phases 01–07 (if a test exposes a bug, file it back to the
   owning phase).
 
