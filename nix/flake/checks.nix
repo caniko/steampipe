@@ -89,6 +89,19 @@
     }
   ];
 
+  steamSessionRefreshEval = mkSystem [
+    steampipeModule
+    ../modules/steam-session-refresh.nix
+    clusterUserModule
+    baseClusterConfig
+    {
+      services.steampipe-cluster.loginRunners = {
+        enable = true;
+        sshAuthorizedKey = fakeSshAuthorizedKey;
+      };
+    }
+  ];
+
   hostWarmTimerMissingRunnersEval = mkSystem [
     steampipeModule
     ../modules/warm-timer.nix
@@ -262,6 +275,37 @@ in
         warmCommandText="$(cat "$warmCommand")"
         case "$warmCommandText" in
           *"--runners-dir"*) echo "host warm timer should rely on module.json, not --runners-dir" >&2; exit 1 ;;
+        esac
+        case "$warmCommandText" in
+          *"cluster-ctl"*"--vm-count 2"*"--ssh-key /var/lib/steampipe/ssh/cluster_key"*"steam warm"*) ;;
+          *) echo "unexpected warm command: $warmCommandText" >&2; exit 1 ;;
+        esac
+        touch "$out"
+      '';
+
+    steam-session-refresh-eval =
+      pkgs.runCommand "steam-session-refresh-eval" {
+        runnersEnabled =
+          if steamSessionRefreshEval.config.services.steampipe-cluster.runners.enable
+          then "true"
+          else "false";
+        runnersSshAuthorizedKey = steamSessionRefreshEval.config.services.steampipe-cluster.runners.sshAuthorizedKey;
+        warmTimerEnabled =
+          if steamSessionRefreshEval.config.services.steampipe-warm-timer.enable
+          then "true"
+          else "false";
+        timerOnCalendar = steamSessionRefreshEval.config.systemd.timers.steampipe-steam-warm.timerConfig.OnCalendar;
+        timerRandomizedDelaySec = steamSessionRefreshEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
+        warmCommand = steamSessionRefreshEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
+      } ''
+        test "$runnersEnabled" = true
+        test "$runnersSshAuthorizedKey" = ${lib.escapeShellArg fakeSshAuthorizedKey}
+        test "$warmTimerEnabled" = true
+        test "$timerOnCalendar" = weekly
+        test "$timerRandomizedDelaySec" = 1h
+        warmCommandText="$(cat "$warmCommand")"
+        case "$warmCommandText" in
+          *"--runners-dir"*) echo "steam session refresh should rely on module.json, not --runners-dir" >&2; exit 1 ;;
         esac
         case "$warmCommandText" in
           *"cluster-ctl"*"--vm-count 2"*"--ssh-key /var/lib/steampipe/ssh/cluster_key"*"steam warm"*) ;;
