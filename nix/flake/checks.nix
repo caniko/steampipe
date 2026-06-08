@@ -81,10 +81,6 @@
     clusterUserModule
     baseClusterConfig
     {
-      services.steampipe-cluster.runners = {
-        enable = true;
-        sshAuthorizedKey = fakeSshAuthorizedKey;
-      };
       services.steampipe-warm-timer.enable = true;
     }
   ];
@@ -99,16 +95,6 @@
         enable = true;
         sshAuthorizedKey = fakeSshAuthorizedKey;
       };
-    }
-  ];
-
-  hostWarmTimerMissingRunnersEval = mkSystem [
-    steampipeModule
-    ../modules/warm-timer.nix
-    clusterUserModule
-    baseClusterConfig
-    {
-      services.steampipe-warm-timer.enable = true;
     }
   ];
 
@@ -275,6 +261,7 @@ in
         serviceUser = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.User;
         serviceRuntimeDirectory = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectory;
         serviceRuntimeDirectoryMode = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectoryMode;
+        serviceUMask = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.UMask;
         serviceEnv = builtins.concatStringsSep " " hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.Environment;
         warmCommand = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
       } ''
@@ -284,6 +271,7 @@ in
         test "$serviceUser" = cluster
         test "$serviceRuntimeDirectory" = steampipe-steam-warm
         test "$serviceRuntimeDirectoryMode" = 0700
+        test "$serviceUMask" = 0077
         case "$serviceEnv" in
           *"HOME=/home/cluster"*"XDG_RUNTIME_DIR=/run/steampipe-steam-warm"*) ;;
           *) echo "unexpected host warm timer env: $serviceEnv" >&2; exit 1 ;;
@@ -293,7 +281,16 @@ in
           *"--runners-dir"*) echo "host warm timer should rely on module.json, not --runners-dir" >&2; exit 1 ;;
         esac
         case "$warmCommandText" in
-          *"cluster-ctl"*"--vm-count 2"*"--ssh-key /var/lib/steampipe/ssh/cluster_key"*"steam warm"*) ;;
+          *"--ssh-key"*) echo "host warm timer should not use SSH" >&2; exit 1 ;;
+        esac
+        case "$warmCommandText" in
+          *"--vm-count"*) echo "host warm timer should not pass vm-count" >&2; exit 1 ;;
+        esac
+        case "$warmCommandText" in
+          *"steam warm"*) echo "host warm timer should not use steam warm" >&2; exit 1 ;;
+        esac
+        case "$warmCommandText" in
+          *"cluster-ctl"*"--non-interactive"*"--no-gui"*"steam refresh"*) ;;
           *) echo "unexpected warm command: $warmCommandText" >&2; exit 1 ;;
         esac
         touch "$out"
@@ -305,7 +302,6 @@ in
           if steamSessionRefreshEval.config.services.steampipe-cluster.runners.enable
           then "true"
           else "false";
-        runnersSshAuthorizedKey = steamSessionRefreshEval.config.services.steampipe-cluster.runners.sshAuthorizedKey;
         warmTimerEnabled =
           if steamSessionRefreshEval.config.services.steampipe-warm-timer.enable
           then "true"
@@ -314,8 +310,7 @@ in
         timerRandomizedDelaySec = steamSessionRefreshEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
         warmCommand = steamSessionRefreshEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
       } ''
-        test "$runnersEnabled" = true
-        test "$runnersSshAuthorizedKey" = ${lib.escapeShellArg fakeSshAuthorizedKey}
+        test "$runnersEnabled" = false
         test "$warmTimerEnabled" = true
         test "$timerOnCalendar" = weekly
         test "$timerRandomizedDelaySec" = 1h
@@ -324,28 +319,17 @@ in
           *"--runners-dir"*) echo "steam session refresh should rely on module.json, not --runners-dir" >&2; exit 1 ;;
         esac
         case "$warmCommandText" in
-          *"cluster-ctl"*"--vm-count 2"*"--ssh-key /var/lib/steampipe/ssh/cluster_key"*"steam warm"*) ;;
-          *) echo "unexpected warm command: $warmCommandText" >&2; exit 1 ;;
+          *"--ssh-key"*) echo "steam session refresh should not use SSH" >&2; exit 1 ;;
         esac
-        touch "$out"
-      '';
-
-    host-warm-timer-missing-runners-eval =
-      pkgs.runCommand "host-warm-timer-missing-runners-eval" {
-        assertionMessage = let
-          failed =
-            lib.findFirst
-            (assertion: !assertion.assertion)
-            null
-            hostWarmTimerMissingRunnersEval.config.assertions;
-        in
-          if failed == null
-          then ""
-          else failed.message;
-      } ''
-        case "$assertionMessage" in
-          *"services.steampipe-warm-timer.enable requires services.steampipe-cluster.runners.enable"*) ;;
-          *) echo "expected runners.enable assertion not seen: $assertionMessage" >&2; exit 1 ;;
+        case "$warmCommandText" in
+          *"--vm-count"*) echo "steam session refresh should not pass vm-count" >&2; exit 1 ;;
+        esac
+        case "$warmCommandText" in
+          *"steam warm"*) echo "steam session refresh should not use steam warm" >&2; exit 1 ;;
+        esac
+        case "$warmCommandText" in
+          *"cluster-ctl"*"--non-interactive"*"--no-gui"*"steam refresh"*) ;;
+          *) echo "unexpected warm command: $warmCommandText" >&2; exit 1 ;;
         esac
         touch "$out"
       '';
@@ -355,6 +339,7 @@ in
         enabledJson = moduleLoginRunnersEnabledEval.config.environment.etc."steampipe/module.json".text;
         disabledJson = moduleLoginRunnersDisabledEval.config.environment.etc."steampipe/module.json".text;
         loginRunnersDir = moduleLoginRunnersEnabledEval.config.environment.etc."steampipe/login-runners".source;
+        tmpfilesRules = builtins.concatStringsSep "\n" moduleLoginRunnersEnabledEval.config.systemd.tmpfiles.rules;
       } ''
                 ${pkgs.python3}/bin/python - <<'PY'
         import json
@@ -363,15 +348,17 @@ in
         enabled = json.loads(os.environ["enabledJson"])
         disabled = json.loads(os.environ["disabledJson"])
 
-        assert enabled["schemaVersion"] == 2
+        assert enabled["schemaVersion"] == 3
         assert enabled["vmCount"] == 2
         assert enabled["vmUser"] == "cluster"
+        assert enabled["guardDataPath"] == "/var/lib/steampipe/guard/machine_tokens.json"
         assert enabled["loginRunnersDir"] == "/etc/steampipe/login-runners"
         assert enabled["sshKey"] == "/var/lib/steampipe/ssh/cluster_key"
 
-        assert disabled["schemaVersion"] == 2
+        assert disabled["schemaVersion"] == 3
         assert disabled["vmCount"] == 2
         assert disabled["vmUser"] == "cluster"
+        assert disabled["guardDataPath"] == "/var/lib/steampipe/guard/machine_tokens.json"
         assert "loginRunnersDir" not in disabled
         assert "sshKey" not in disabled
         PY
@@ -379,6 +366,14 @@ in
                 test -x "$loginRunnersDir/vm-1/bin/microvm-run"
                 test -x "$loginRunnersDir/vm-2/bin/microvm-run"
                 test ! -e "$loginRunnersDir/vm-3"
+                case "$tmpfilesRules" in
+                  *"d /var/lib/steampipe/guard 0700 cluster users -"*) ;;
+                  *) echo "guard data directory tmpfiles rule missing or wrong owner: $tmpfilesRules" >&2; exit 1 ;;
+                esac
+                case "$tmpfilesRules" in
+                  *"z /var/lib/steampipe/guard/machine_tokens.json 0600 cluster users -"*) ;;
+                  *) echo "guard data file tmpfiles rule missing or wrong owner: $tmpfilesRules" >&2; exit 1 ;;
+                esac
                 touch "$out"
       '';
 
@@ -403,16 +398,18 @@ in
         enabled = json.loads(os.environ["enabledJson"])
         disabled = json.loads(os.environ["disabledJson"])
 
-        assert enabled["schemaVersion"] == 2
+        assert enabled["schemaVersion"] == 3
         assert enabled["vmCount"] == 2
         assert enabled["vmUser"] == "cluster"
+        assert enabled["guardDataPath"] == "/var/lib/steampipe/guard/machine_tokens.json"
         assert enabled["runnersDir"] == "/etc/steampipe/runners"
         assert enabled["sshKey"] == "/var/lib/steampipe/ssh/cluster_key"
         assert "loginRunnersDir" not in enabled
 
-        assert disabled["schemaVersion"] == 2
+        assert disabled["schemaVersion"] == 3
         assert disabled["vmCount"] == 2
         assert disabled["vmUser"] == "cluster"
+        assert disabled["guardDataPath"] == "/var/lib/steampipe/guard/machine_tokens.json"
         assert "runnersDir" not in disabled
         assert "sshKey" not in disabled
         PY
@@ -443,9 +440,10 @@ in
 
         enabled = json.loads(os.environ["enabledJson"])
 
-        assert enabled["schemaVersion"] == 2
+        assert enabled["schemaVersion"] == 3
         assert enabled["vmCount"] == 2
         assert enabled["vmUser"] == "cluster"
+        assert enabled["guardDataPath"] == "/var/lib/steampipe/guard/machine_tokens.json"
         assert enabled["runnersDir"] == "/etc/steampipe/runners"
         assert enabled["sshKey"] == "/var/lib/steampipe/ssh/cluster_key"
         assert "loginRunnersDir" not in enabled

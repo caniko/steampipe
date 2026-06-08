@@ -16,6 +16,12 @@
 //! mistyped code inline instead of restarting auth (which would mail a fresh
 //! code).
 
+use std::collections::HashMap;
+use std::fs::{self, OpenOptions};
+use std::io::{Error as IoError, ErrorKind, Write as _};
+#[cfg(unix)]
+use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use anyhow::Context as _;
@@ -23,7 +29,9 @@ use base64::Engine as _;
 use tokio::sync::Mutex as AsyncMutex;
 use zeroize::Zeroize as _;
 
-use steam_vent::auth::{ConfirmationMethod, NullGuardDataStore, RetryConfirmationHandler};
+use steam_vent::auth::{
+    ConfirmationMethod, GuardDataStore, NullGuardDataStore, RetryConfirmationHandler,
+};
 use steam_vent::{Connection, ServerList};
 
 use crate::core::credentials::VmCredentials;
@@ -127,6 +135,103 @@ impl RetryConfirmationHandler for DialogRetryHandler {
     }
 }
 
+enum SteampipeGuardDataStore {
+    File { path: PathBuf },
+    Null(NullGuardDataStore),
+}
+
+impl SteampipeGuardDataStore {
+    fn new(path: Option<&Path>) -> Self {
+        match path {
+            Some(path) => Self::File {
+                path: path.to_path_buf(),
+            },
+            None => Self::Null(NullGuardDataStore),
+        }
+    }
+
+    fn load_all(path: &Path) -> Result<HashMap<String, String>, IoError> {
+        match fs::read_to_string(path) {
+            Ok(raw) => serde_json::from_str(&raw).map_err(|err| {
+                IoError::new(
+                    ErrorKind::InvalidData,
+                    format!(
+                        "parse Steam Guard machine tokens at {}: {err}",
+                        path.display()
+                    ),
+                )
+            }),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(HashMap::new()),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn save_all(path: &Path, tokens: &HashMap<String, String>) -> Result<(), IoError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
+        }
+
+        let raw = serde_json::to_vec(tokens).map_err(|err| {
+            IoError::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "encode Steam Guard machine tokens at {}: {err}",
+                    path.display()
+                ),
+            )
+        })?;
+        let tmp = path.with_extension("json.tmp");
+        {
+            let mut options = OpenOptions::new();
+            options.create(true).write(true).truncate(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            let mut file = options.open(&tmp)?;
+            file.write_all(&raw)?;
+            file.write_all(b"\n")?;
+            file.sync_all()?;
+        }
+        #[cfg(unix)]
+        fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))?;
+        fs::rename(&tmp, path)?;
+        #[cfg(unix)]
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        Ok(())
+    }
+}
+
+impl GuardDataStore for SteampipeGuardDataStore {
+    type Err = IoError;
+
+    async fn store(&mut self, account: &str, machine_token: String) -> Result<(), Self::Err> {
+        match self {
+            Self::File { path } => {
+                if machine_token.is_empty() {
+                    return Ok(());
+                }
+                let mut tokens = Self::load_all(path)?;
+                tokens.insert(account.to_owned(), machine_token);
+                Self::save_all(path, &tokens)
+            }
+            Self::Null(store) => store
+                .store(account, machine_token)
+                .await
+                .map_err(|never| match never {}),
+        }
+    }
+
+    async fn load(&mut self, account: &str) -> Result<Option<String>, Self::Err> {
+        match self {
+            Self::File { path } => Ok(Self::load_all(path)?
+                .remove(account)
+                .filter(|token| !token.is_empty())),
+            Self::Null(store) => store.load(account).await.map_err(|never| match never {}),
+        }
+    }
+}
+
 /// Authenticate the SteamClient platform headlessly and return a minted session.
 ///
 /// The Guard code (if Steam challenges) is obtained through `provider`, with a
@@ -138,6 +243,7 @@ pub(crate) async fn mint_session(
     vm_name: &str,
     login_reason: &str,
     provider: &GuardProvider,
+    guard_data_path: Option<&Path>,
 ) -> anyhow::Result<MintOutcome> {
     let server_list = ServerList::discover()
         .await
@@ -159,7 +265,7 @@ pub(crate) async fn mint_session(
         &server_list,
         &creds.steam_user,
         &password,
-        NullGuardDataStore,
+        SteampipeGuardDataStore::new(guard_data_path),
         handler,
     )
     .await;
@@ -249,6 +355,41 @@ mod tests {
     fn redact_replaces_secret() {
         assert_eq!(redact("pw=hunter2 here", "hunter2"), "pw=[REDACTED] here");
         assert_eq!(redact("anything", ""), "anything");
+    }
+
+    #[tokio::test]
+    async fn steampipe_guard_data_store_persists_machine_tokens() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let path = temp.path().join("guard").join("machine_tokens.json");
+        let mut store = SteampipeGuardDataStore::new(Some(&path));
+
+        store
+            .store("alice", "token-a".to_string())
+            .await
+            .expect("store alice");
+        store
+            .store("bob", "token-b".to_string())
+            .await
+            .expect("store bob");
+
+        assert_eq!(
+            store.load("alice").await.expect("load alice").as_deref(),
+            Some("token-a")
+        );
+        assert_eq!(
+            store.load("bob").await.expect("load bob").as_deref(),
+            Some("token-b")
+        );
+
+        #[cfg(unix)]
+        {
+            let mode = std::fs::metadata(&path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o600);
+        }
     }
 
     // The Cancelled-vs-Unavailable distinction is the headless contract: a

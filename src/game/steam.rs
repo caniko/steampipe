@@ -1280,6 +1280,7 @@ pub(crate) async fn login(
     creds: Option<&CredentialsMap>,
     force: bool,
     login_state_dir: Option<&Path>,
+    guard_data_path: Option<&Path>,
     guard_provider: &GuardProvider,
 ) -> anyhow::Result<LoginOutcome> {
     let targets = config.resolve_targets(target, continue_from)?;
@@ -1305,12 +1306,14 @@ pub(crate) async fn login(
         let login_runners_dir = login_runners_dir.to_path_buf();
         let creds = creds.cloned();
         let login_state_dir = login_state_dir.map(Path::to_path_buf);
+        let guard_data_path = guard_data_path.map(Path::to_path_buf);
         let guard_provider = guard_provider.clone();
         let results = par_each_vm(&targets, move |vm| {
             let config = config.clone();
             let login_runners_dir = login_runners_dir.clone();
             let creds = creds.clone();
             let login_state_dir = login_state_dir.clone();
+            let guard_data_path = guard_data_path.clone();
             let guard_provider = guard_provider.clone();
             async move {
                 let mut log = LoginLog::buffered();
@@ -1320,6 +1323,7 @@ pub(crate) async fn login(
                     &login_runners_dir,
                     creds.as_ref(),
                     login_state_dir.as_deref(),
+                    guard_data_path.as_deref(),
                     force,
                     &guard_provider,
                     &mut log,
@@ -1405,6 +1409,7 @@ async fn login_vm_attempt(
     login_runners_dir: &Path,
     creds: Option<&CredentialsMap>,
     login_state_dir: Option<&Path>,
+    guard_data_path: Option<&Path>,
     force: bool,
     guard_provider: &GuardProvider,
     log: &mut LoginLog,
@@ -1452,6 +1457,7 @@ async fn login_vm_attempt(
         &login_reason,
         guard_provider,
         login_state_dir,
+        guard_data_path,
         log,
     )
     .await
@@ -1701,6 +1707,7 @@ async fn login_single_vm_automated(
     login_reason: &str,
     guard_provider: &GuardProvider,
     login_state_dir: Option<&Path>,
+    guard_data_path: Option<&Path>,
     log: &mut LoginLog,
 ) -> anyhow::Result<LoginOutcome> {
     log.blank();
@@ -1716,9 +1723,127 @@ async fn login_single_vm_automated(
         login_reason,
         guard_provider,
         login_state_dir,
+        guard_data_path,
         log,
     )
     .await
+}
+
+/// Refresh SteamClient sessions host-side with configured credentials.
+///
+/// This is deliberately independent of runners, SSH, bridge setup, and VM
+/// startup. Existing valid login-state artifacts are left untouched unless
+/// `force` is set.
+pub(crate) async fn refresh<S>(
+    config: &ClusterConfig<S>,
+    target: Option<&str>,
+    continue_from: bool,
+    creds: Option<&CredentialsMap>,
+    force: bool,
+    login_state_dir: Option<&Path>,
+    guard_data_path: Option<&Path>,
+    guard_provider: &GuardProvider,
+) -> anyhow::Result<LoginOutcome> {
+    let Some(creds) = creds else {
+        anyhow::bail!("steam refresh requires configured Steam credentials");
+    };
+    let Some(login_state_dir) = login_state_dir else {
+        anyhow::bail!("steam refresh requires loginStateDir from the steampipe host config");
+    };
+
+    let targets = config.resolve_targets(target, continue_from)?;
+    let login_state_dir = login_state_dir.to_path_buf();
+    let guard_data_path = guard_data_path.map(Path::to_path_buf);
+    let creds = creds.clone();
+    let guard_provider = guard_provider.clone();
+
+    let results = par_each_vm(&targets, move |vm| {
+        let creds = creds.clone();
+        let login_state_dir = login_state_dir.clone();
+        let guard_data_path = guard_data_path.clone();
+        let guard_provider = guard_provider.clone();
+        async move {
+            let mut log = LoginLog::buffered();
+            let Some(vm_creds) = creds.get::<str>(&vm.name) else {
+                return LoginReport {
+                    vm_index: vm.index,
+                    vm_name: vm.name.to_string(),
+                    output: log.into_output(),
+                    attempt: LoginAttempt::Skipped(format!(
+                        "  {}: no credentials configured, skipping",
+                        vm.name
+                    )),
+                };
+            };
+
+            let vm_name = vm.name.to_string();
+            if !force {
+                let status = accounts::classify_session_status(
+                    &login_state_dir,
+                    &vm_name,
+                    accounts::DEFAULT_WARN_WITHIN_DAYS,
+                );
+                if status == SessionStatus::Ok {
+                    let info = accounts::read_account_info(
+                        &login_state_dir,
+                        vm_name,
+                        None,
+                        accounts::DEFAULT_WARN_WITHIN_DAYS,
+                    );
+                    let persona = info.persona.as_deref().unwrap_or("unknown");
+                    return LoginReport {
+                        vm_index: vm.index,
+                        vm_name: vm.name.to_string(),
+                        output: log.into_output(),
+                        attempt: LoginAttempt::Skipped(format!(
+                            "  {}: already fresh ({persona}), skipping (use --force to re-mint)",
+                            vm.name
+                        )),
+                    };
+                }
+            }
+
+            let reason = if force {
+                "forced refresh".to_string()
+            } else {
+                accounts::classify_session_status(
+                    &login_state_dir,
+                    &vm_name,
+                    accounts::DEFAULT_WARN_WITHIN_DAYS,
+                )
+                .login_reason()
+                .to_string()
+            };
+            log.line(format!("  {}: {reason}, refreshing", vm.name));
+            let attempt = match mint_and_write_session(
+                vm_creds,
+                &vm_name,
+                &reason,
+                &guard_provider,
+                Some(&login_state_dir),
+                guard_data_path.as_deref(),
+                &mut log,
+            )
+            .await
+            {
+                Ok(LoginOutcome::Completed) => LoginAttempt::LoggedIn,
+                Ok(LoginOutcome::GuardCodeNeeded(needed)) => LoginAttempt::GuardCodeNeeded(needed),
+                Ok(LoginOutcome::ManualCompletionNeeded) => LoginAttempt::Failed(anyhow::anyhow!(
+                    "manual completion is not supported by steam refresh"
+                )),
+                Err(err) => LoginAttempt::Failed(err),
+            };
+            LoginReport {
+                vm_index: vm.index,
+                vm_name: vm.name.to_string(),
+                output: log.into_output(),
+                attempt,
+            }
+        }
+    })
+    .await?;
+
+    finish_login_reports(results, targets.len())
 }
 
 /// Mint a SteamClient session headlessly and persist it to the VM's login-state
@@ -1736,6 +1861,7 @@ async fn mint_and_write_session(
     login_reason: &str,
     guard_provider: &GuardProvider,
     login_state_dir: Option<&Path>,
+    guard_data_path: Option<&Path>,
     log: &mut LoginLog,
 ) -> anyhow::Result<LoginOutcome> {
     let Some(login_state_dir) = login_state_dir else {
@@ -1749,8 +1875,14 @@ async fn mint_and_write_session(
         "  Minting Steam session for {} (headless, no in-VM GUI)...",
         creds.steam_user
     ));
-    match crate::game::steam_auth::mint_session(creds, vm_name, login_reason, guard_provider)
-        .await?
+    match crate::game::steam_auth::mint_session(
+        creds,
+        vm_name,
+        login_reason,
+        guard_provider,
+        guard_data_path,
+    )
+    .await?
     {
         crate::game::steam_auth::MintOutcome::Minted(session) => {
             crate::game::steam_session::write_session(login_state_dir, vm_name, &session)
@@ -1949,6 +2081,7 @@ pub async fn auto_login<S>(
     vms: &[VmDef],
     creds: &CredentialsMap,
     login_state_dir: Option<&Path>,
+    guard_data_path: Option<&Path>,
 ) -> anyhow::Result<()> {
     // Filter to VMs that have credentials
     let with_creds: Vec<_> = vms
@@ -1963,11 +2096,13 @@ pub async fn auto_login<S>(
     println!("==> Auto-login Steam on {} VM(s)...", with_creds.len());
     let guard_provider = GuardProvider::select(None, LoginContext::force_non_interactive(), true);
     let login_state_dir = login_state_dir.map(Path::to_path_buf);
+    let guard_data_path = guard_data_path.map(Path::to_path_buf);
 
     let results = par_each_vm(vms, |vm| {
         let creds = creds.clone();
         let guard_provider = guard_provider.clone();
         let login_state_dir = login_state_dir.clone();
+        let guard_data_path = guard_data_path.clone();
         async move {
             let Some(vm_creds) = creds.get::<str>(&vm.name) else {
                 return AutoLoginReport::no_credentials(vm.name);
@@ -1989,6 +2124,7 @@ pub async fn auto_login<S>(
                         reason,
                         &guard_provider,
                         login_state_dir.as_deref(),
+                        guard_data_path.as_deref(),
                         &mut log,
                     )
                     .await

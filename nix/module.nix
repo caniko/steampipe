@@ -19,6 +19,7 @@
     else "root";
   loginRunnerSshDir = "/var/lib/steampipe/ssh";
   loginRunnerSshKey = "${loginRunnerSshDir}/cluster_key";
+  guardDataDir = builtins.dirOf cfg.guardDataPath;
 
   clusterCtlCompletions =
     pkgs.runCommand "cluster-ctl-completions" {
@@ -242,6 +243,16 @@ in {
         Each VM gets a subdirectory (e.g. vm-1/, vm-2/) containing
         the Steam state tree. Project-level flakes mount each VM's
         subdirectory writable at the VM user's ~/.local/share/Steam.
+      '';
+    };
+
+    guardDataPath = lib.mkOption {
+      type = lib.types.path;
+      default = "/var/lib/steampipe/guard/machine_tokens.json";
+      description = ''
+        Host path where steam-vent machine tokens are persisted for
+        headless SteamClient session refresh. The file is written with mode
+        0600 by cluster-ctl and its parent directory is owned by tapOwner.
       '';
     };
 
@@ -517,6 +528,8 @@ in {
       ++ (map (name: "d ${cfg.loginStateDir}/${name} 0700 ${loginStateOwner} users -") vmNames)
       ++ [
         "d /var/lib/steampipe 0755 root root -"
+        "d ${guardDataDir} 0700 ${loginStateOwner} users -"
+        "z ${cfg.guardDataPath} 0600 ${loginStateOwner} users -"
         "d ${loginRunnerSshDir} 0700 ${loginStateOwner} users -"
       ];
 
@@ -525,8 +538,7 @@ in {
     };
 
     # Write module config so project-level flakes can discover NixOS-level settings.
-    # schemaVersion 2 keeps the JSON shape unchanged but changes loginStateDir
-    # consumers from boot-time read-only injection to one writable Steam share.
+    # schemaVersion 3 adds guardDataPath for steam-vent machine-token storage.
     environment.etc."steampipe/module.json" = {
       text = builtins.toJSON ({
           accounts =
@@ -541,9 +553,10 @@ in {
             then "/etc/steampipe/credentials.toml"
             else null;
           hostIp = cfg.hostIp;
+          guardDataPath = toString cfg.guardDataPath;
           loginStateDir = toString cfg.loginStateDir;
           prefix = cfg.prefix;
-          schemaVersion = 2;
+          schemaVersion = 3;
           subnet = cfg.subnet;
           tapOwner = cfg.tapOwner;
           vmCount = cfg.vmCount;

@@ -223,7 +223,7 @@ pub enum Commands {
         verify: bool,
     },
 
-    /// Steam-related operations (login, guard, check, start, accounts, clean-logins)
+    /// Steam-related operations (login, refresh, guard, check, start, accounts, clean-logins)
     Steam {
         #[command(subcommand)]
         action: SteamAction,
@@ -609,7 +609,9 @@ impl Commands {
             self,
             Self::Admission { .. }
                 | Self::Steam {
-                    action: SteamAction::Guard { .. } | SteamAction::Info
+                    action: SteamAction::Guard { .. }
+                        | SteamAction::Refresh { .. }
+                        | SteamAction::Info
                 }
                 | Self::Netem { .. }
         )
@@ -640,6 +642,21 @@ pub enum SteamAction {
         #[arg(long)]
         force: bool,
         /// Pre-supplied Steam Guard code for single-shot automated login.
+        #[arg(long)]
+        code: Option<String>,
+    },
+
+    /// Refresh persisted SteamClient sessions host-side without booting VMs
+    Refresh {
+        /// Target VM: "all" (default), "3", or "vm-3". Omit to refresh all VMs.
+        target: Option<String>,
+        /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
+        #[arg(short = '+', long)]
+        continue_from: bool,
+        /// Re-mint every selected VM even if it already has a valid Steam session.
+        #[arg(long)]
+        force: bool,
+        /// Pre-supplied Steam Guard code for single-shot forced refresh.
         #[arg(long)]
         code: Option<String>,
     },
@@ -1004,6 +1021,53 @@ mod tests {
                 assert_eq!(code.as_deref(), Some("ABCDE"));
             }
             _ => panic!("expected Steam login command"),
+        }
+    }
+
+    #[test]
+    fn steam_refresh_accepts_target_force_and_code() {
+        let cli = parse(&["steam", "refresh", "vm-3", "--force", "--code", "ABCDE"]);
+        assert!(cli.vm_count.is_none());
+        assert!(!cli.command.needs_vm_count());
+        match cli.command {
+            Commands::Steam {
+                action:
+                    SteamAction::Refresh {
+                        target,
+                        continue_from,
+                        force,
+                        code,
+                    },
+            } => {
+                assert_eq!(target.as_deref(), Some("vm-3"));
+                assert!(!continue_from);
+                assert!(force);
+                assert_eq!(code.as_deref(), Some("ABCDE"));
+            }
+            _ => panic!("expected Steam refresh command"),
+        }
+    }
+
+    #[test]
+    fn steam_refresh_accepts_continue_from_short_flag() {
+        let cli = parse(&["steam", "refresh", "-+", "3"]);
+        assert!(!cli.command.needs_vm_count());
+        match cli.command {
+            Commands::Steam {
+                action:
+                    SteamAction::Refresh {
+                        target,
+                        continue_from,
+                        force,
+                        code,
+                    },
+            } => {
+                assert_eq!(target.as_deref(), Some("3"));
+                assert!(continue_from);
+                assert!(!force);
+                assert!(code.is_none());
+            }
+            _ => panic!("expected Steam refresh command"),
         }
     }
 

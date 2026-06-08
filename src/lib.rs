@@ -261,7 +261,9 @@ fn command_uses_credentials(command: &Commands) -> bool {
         command,
         Commands::Up { .. }
             | Commands::Steam {
-                action: SteamAction::Login { .. } | SteamAction::Guard { .. }
+                action: SteamAction::Login { .. }
+                    | SteamAction::Refresh { .. }
+                    | SteamAction::Guard { .. }
             }
     )
 }
@@ -548,6 +550,23 @@ fn steam_login_context(non_interactive: bool, mcp_non_interactive: bool) -> stea
     }
 }
 
+fn guard_data_path_from_login_state_dir(login_state_dir: &Path) -> PathBuf {
+    login_state_dir
+        .parent()
+        .unwrap_or(login_state_dir)
+        .join("guard")
+        .join("machine_tokens.json")
+}
+
+fn resolved_guard_data_path(module: Option<&NixosModuleConfig>) -> Option<PathBuf> {
+    let module = module?;
+    module.guard_data_path.clone().or_else(|| {
+        Some(guard_data_path_from_login_state_dir(
+            &module.login_state_dir,
+        ))
+    })
+}
+
 async fn run_steam_login_command(
     config: &ClusterConfig,
     module: Option<&NixosModuleConfig>,
@@ -576,6 +595,7 @@ async fn run_steam_login_command(
     bridge::ensure_bridge(config, project_root)?;
     let validated = config.clone().validate_or_skip_bridge()?;
     let login_state_dir = module.map(|m| m.login_state_dir.as_path());
+    let guard_data_path = resolved_guard_data_path(module);
     let code = code.or_else(|| std::env::var("STEAMPIPE_GUARD_CODE").ok());
     let login_context = steam_login_context(
         non_interactive,
@@ -590,6 +610,7 @@ async fn run_steam_login_command(
         creds,
         force,
         login_state_dir,
+        guard_data_path.as_deref(),
         &guard_provider,
     )
     .await
@@ -920,7 +941,15 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             // Auto-login Steam if credentials were provided
             if let Some(creds) = &creds {
                 let login_state_dir = module.as_ref().map(|host| host.login_state_dir.as_path());
-                steam::auto_login(&validated, &started, creds, login_state_dir).await?;
+                let guard_data_path = resolved_guard_data_path(module.as_ref());
+                steam::auto_login(
+                    &validated,
+                    &started,
+                    creds,
+                    login_state_dir,
+                    guard_data_path.as_deref(),
+                )
+                .await?;
             }
         }
         Commands::Restart {
@@ -1004,6 +1033,37 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
                     cli.non_interactive,
                     cli.no_gui,
                     creds.as_ref(),
+                )
+                .await?
+                {
+                    steam::LoginOutcome::Completed
+                    | steam::LoginOutcome::ManualCompletionNeeded => {}
+                    steam::LoginOutcome::GuardCodeNeeded(needed) => return Err(needed.into()),
+                }
+            }
+            SteamAction::Refresh {
+                target,
+                continue_from,
+                force,
+                code,
+            } => {
+                let login_state_dir = module.as_ref().map(|host| host.login_state_dir.as_path());
+                let guard_data_path = resolved_guard_data_path(module.as_ref());
+                let code = code.or_else(|| std::env::var("STEAMPIPE_GUARD_CODE").ok());
+                let login_context = steam_login_context(
+                    cli.non_interactive,
+                    std::env::var_os(mcp::MCP_NON_INTERACTIVE_ENV).is_some(),
+                );
+                let guard_provider = steam::GuardProvider::select(code, login_context, cli.no_gui);
+                match steam::refresh(
+                    &config,
+                    target.as_deref(),
+                    continue_from,
+                    creds.as_ref(),
+                    force,
+                    login_state_dir,
+                    guard_data_path.as_deref(),
+                    &guard_provider,
                 )
                 .await?
                 {
@@ -1524,7 +1584,7 @@ mod tests {
         login_runners_dir: Option<PathBuf>,
     ) -> NixosModuleConfig {
         NixosModuleConfig {
-            schema_version: 2,
+            schema_version: 3,
             vm_count: 7,
             bridge: "br-cluster".into(),
             subnet: "10.0.100".into(),
@@ -1532,6 +1592,9 @@ mod tests {
             host_ip: "10.0.100.254".into(),
             tap_owner: None,
             login_state_dir: PathBuf::from("/var/lib/steampipe/logins"),
+            guard_data_path: Some(PathBuf::from(
+                "/var/lib/steampipe/guard/machine_tokens.json",
+            )),
             credentials_path: None,
             accounts: Vec::new(),
             runners_dir,
@@ -1638,7 +1701,7 @@ mod tests {
         let temp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(
             temp.path(),
-            r#"{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"hostIp":"10.0.100.254","loginRunnersDir":"/fixture/login-runners","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":2,"subnet":"10.0.100","tapOwner":null,"vmCount":7}"#,
+            r#"{"accounts":[],"bridge":"br-cluster","credentialsPath":null,"guardDataPath":"/var/lib/steampipe/guard/machine_tokens.json","hostIp":"10.0.100.254","loginRunnersDir":"/fixture/login-runners","loginStateDir":"/var/lib/steampipe/logins","prefix":24,"schemaVersion":3,"subnet":"10.0.100","tapOwner":null,"vmCount":7}"#,
         )
         .unwrap();
         let module = core::nixos_module::load_from(temp.path()).unwrap().unwrap();
@@ -1656,6 +1719,27 @@ mod tests {
         .unwrap();
 
         assert_eq!(resolved, PathBuf::from("/fixture/login-runners"));
+    }
+
+    #[test]
+    fn guard_data_path_resolves_from_module_or_login_state_fallback() {
+        let explicit = module_config_with_paths(None, None);
+        assert_eq!(
+            resolved_guard_data_path(Some(&explicit)),
+            Some(PathBuf::from(
+                "/var/lib/steampipe/guard/machine_tokens.json",
+            ))
+        );
+
+        let mut fallback = explicit.clone();
+        fallback.guard_data_path = None;
+        fallback.login_state_dir = PathBuf::from("/srv/steampipe/logins");
+        assert_eq!(
+            resolved_guard_data_path(Some(&fallback)),
+            Some(PathBuf::from("/srv/steampipe/guard/machine_tokens.json"))
+        );
+
+        assert_eq!(resolved_guard_data_path(None), None);
     }
 
     #[test]

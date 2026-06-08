@@ -2803,6 +2803,7 @@ mod tests {
             host_ip: "10.44.0.254".into(),
             tap_owner: Some("can".into()),
             login_state_dir: PathBuf::from("/srv/steam-logins"),
+            guard_data_path: Some(PathBuf::from("/srv/steam-guard/machine_tokens.json")),
             credentials_path: Some(PathBuf::from("/etc/steampipe/credentials.toml")),
             accounts: Vec::new(),
             runners_dir: None,

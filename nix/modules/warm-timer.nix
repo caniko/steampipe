@@ -1,9 +1,7 @@
 # services.steampipe-warm-timer: flake-level NixOS module.
 #
-# Reads runner dir, SSH key, vmCount, and vmUser from
-# services.steampipe-cluster instead of injected arguments. This is the
-# host-level counterpart to (mkTestCluster {...}).warmTimerModule for projects
-# that consume steampipe via NixOS module only.
+# Reads host config from services.steampipe-cluster and refreshes persisted
+# SteamClient sessions without booting runtime VMs.
 {
   config,
   lib,
@@ -16,18 +14,16 @@
   warmCommand = pkgs.writeShellScript "steampipe-steam-warm" ''
     exec ${lib.escapeShellArgs ([
         "${clusterCfg.package}/bin/cluster-ctl"
-        "--vm-count"
-        (toString clusterCfg.vmCount)
-        "--ssh-key"
-        cfg.sshKey
+        "--non-interactive"
+        "--no-gui"
         "steam"
-        "warm"
+        "refresh"
       ]
       ++ cfg.extraArgs)}
   '';
 in {
   options.services.steampipe-warm-timer = {
-    enable = lib.mkEnableOption "weekly cluster-ctl steam warm timer (host-level)";
+    enable = lib.mkEnableOption "weekly cluster-ctl steam refresh timer (host-level)";
 
     user = lib.mkOption {
       type = lib.types.str;
@@ -39,7 +35,7 @@ in {
     sshKey = lib.mkOption {
       type = lib.types.str;
       default = "/var/lib/steampipe/ssh/cluster_key";
-      description = "SSH private key path passed to cluster-ctl via --ssh-key.";
+      description = "Deprecated compatibility option; steam refresh does not use SSH.";
     };
 
     onCalendar = lib.mkOption {
@@ -57,7 +53,7 @@ in {
     extraArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [];
-      description = "Extra arguments appended to cluster-ctl steam warm.";
+      description = "Extra arguments appended to cluster-ctl steam refresh.";
     };
   };
 
@@ -68,17 +64,13 @@ in {
         message = "services.steampipe-warm-timer.enable requires services.steampipe-cluster.enable = true.";
       }
       {
-        assertion = clusterCfg.runners.enable or false;
-        message = "services.steampipe-warm-timer.enable requires services.steampipe-cluster.runners.enable = true so cluster-ctl can resolve runnersDir from /etc/steampipe/module.json. (Decision D3: no silent disable; configure runners.enable or remove the warm timer.)";
-      }
-      {
         assertion = builtins.hasAttr cfg.user config.users.users;
         message = "services.steampipe-warm-timer.user '${cfg.user}' must be a configured user.";
       }
     ];
 
     systemd.timers.steampipe-steam-warm = {
-      description = "Refresh Steam session tokens on cluster VMs";
+      description = "Refresh Steam session tokens";
       wantedBy = ["timers.target"];
       timerConfig = {
         OnCalendar = cfg.onCalendar;
@@ -88,7 +80,7 @@ in {
     };
 
     systemd.services.steampipe-steam-warm = {
-      description = "cluster-ctl steam warm (one-shot)";
+      description = "cluster-ctl steam refresh (one-shot)";
       after = [
         "NetworkManager-wait-online.service"
         "network-online.target"
@@ -102,6 +94,7 @@ in {
         User = cfg.user;
         RuntimeDirectory = "steampipe-steam-warm";
         RuntimeDirectoryMode = "0700";
+        UMask = "0077";
         Environment = [
           "HOME=${userHome}"
           "XDG_RUNTIME_DIR=/run/steampipe-steam-warm"
