@@ -239,6 +239,9 @@ in
           then "false"
           else "true";
         serviceUser = warmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.User;
+        serviceRuntimeDirectory = warmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectory;
+        serviceRuntimeDirectoryMode = warmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectoryMode;
+        serviceEnv = builtins.concatStringsSep " " warmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.Environment;
         timerOnCalendar = warmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.OnCalendar;
         timerPersistent =
           if warmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.Persistent
@@ -249,6 +252,12 @@ in
         test "$enabled" = true
         test "$disabledByDefault" = true
         test "$serviceUser" = cluster
+        test "$serviceRuntimeDirectory" = steampipe-steam-warm
+        test "$serviceRuntimeDirectoryMode" = 0700
+        case "$serviceEnv" in
+          *"HOME=/home/cluster"*"XDG_RUNTIME_DIR=/run/steampipe-steam-warm"*) ;;
+          *) echo "unexpected warm timer env: $serviceEnv" >&2; exit 1 ;;
+        esac
         test "$timerOnCalendar" = weekly
         test "$timerPersistent" = true
         test "$timerRandomizedDelaySec" = 1h
@@ -264,14 +273,21 @@ in
           else "false";
         timerRandomizedDelaySec = hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
         serviceUser = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.User;
-        serviceHome = builtins.elemAt hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.Environment 0;
+        serviceRuntimeDirectory = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectory;
+        serviceRuntimeDirectoryMode = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectoryMode;
+        serviceEnv = builtins.concatStringsSep " " hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.Environment;
         warmCommand = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
       } ''
         test "$timerOnCalendar" = weekly
         test "$timerPersistent" = true
         test "$timerRandomizedDelaySec" = 1h
         test "$serviceUser" = cluster
-        test "$serviceHome" = HOME=/home/cluster
+        test "$serviceRuntimeDirectory" = steampipe-steam-warm
+        test "$serviceRuntimeDirectoryMode" = 0700
+        case "$serviceEnv" in
+          *"HOME=/home/cluster"*"XDG_RUNTIME_DIR=/run/steampipe-steam-warm"*) ;;
+          *) echo "unexpected host warm timer env: $serviceEnv" >&2; exit 1 ;;
+        esac
         warmCommandText="$(cat "$warmCommand")"
         case "$warmCommandText" in
           *"--runners-dir"*) echo "host warm timer should rely on module.json, not --runners-dir" >&2; exit 1 ;;

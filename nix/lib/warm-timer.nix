@@ -105,8 +105,11 @@ in {
       serviceConfig = {
         Type = "oneshot";
         User = cfg.user;
+        RuntimeDirectory = "steampipe-steam-warm";
+        RuntimeDirectoryMode = "0700";
         Environment = [
           "HOME=${userHome}"
+          "XDG_RUNTIME_DIR=/run/steampipe-steam-warm"
         ];
         ExecStart = warmCommand;
       };
