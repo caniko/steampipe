@@ -190,8 +190,8 @@ cluster-ctl steam login vm-3 -+   # vm-3..vm-N
 
 No flags needed: the host config provides the VM count, SSH key, credentials
 path, login state directory, and fallback login-runner directory. With
-credentials configured, login mints SteamClient refresh tokens on the host and
-writes them into `loginStateDir`; no login VM or VNC session is booted.
+credentials configured, login boots or reuses the VM, drives the Steam GUI under
+sway, and records only GUI-valid Steam sessions in `loginStateDir`.
 
 #### Fallback: project flake (non-NixOS hosts)
 
@@ -424,8 +424,8 @@ cluster-ctl steam login vm-3 -+   # vm-3..vm-N
 
 No flags needed: the host config provides the VM count, SSH key, credentials
 path, login state directory, and fallback login-runner directory. With
-credentials configured, login mints SteamClient refresh tokens on the host and
-writes them into `loginStateDir`; no login VM or VNC session is booted.
+credentials configured, login boots or reuses the VM, drives the Steam GUI under
+sway, and records only GUI-valid Steam sessions in `loginStateDir`.
 
 ### Fallback: project flake (non-NixOS hosts)
 
@@ -452,9 +452,10 @@ cluster-ctl --vm-count 7 \
   steam login --login-state-dir /var/lib/steampipe/logins
 ```
 
-Mints SteamClient refresh tokens on the host and writes the resulting session
-artifacts into `loginStateDir`. If Steam requires a Guard code, use the host
-dialog, `--code`, or `STEAMPIPE_GUARD_CODE`.
+Boots or reuses each selected VM, types credentials into the Steam GUI, and
+writes the resulting GUI-valid session artifacts into `loginStateDir`. If Steam
+requires a Guard code, use the host dialog, `--code`, or
+`STEAMPIPE_GUARD_CODE`.
 
 #### Manual fallback (VNC)
 
@@ -489,8 +490,8 @@ vm-1     OK     player_one           76561198000000001
 vm-2     OK     player_two           76561198000000002
 vm-3     ─      ─                    ─
 
-  2/3 VMs logged in (1 need login)
-  Run `cluster-ctl steam login` to log in missing VMs
+  2/3 VMs have GUI-valid Steam sessions (1 need login)
+  Run `cluster-ctl steam login <vm> --force` for each VM that is not GUI-valid
 ```
 
 Also warns about duplicate accounts.

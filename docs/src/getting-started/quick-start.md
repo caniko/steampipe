@@ -76,8 +76,8 @@ cluster-ctl steam login vm-3 -+   # vm-3..vm-N
 
 No flags needed: the host config provides the VM count, SSH key, credentials
 path, login state directory, and fallback login-runner directory. With
-credentials configured, login mints SteamClient refresh tokens on the host and
-writes them into `loginStateDir`; no login VM or VNC session is booted.
+credentials configured, login boots or reuses the VM, drives the Steam GUI under
+sway, and records only GUI-valid Steam sessions in `loginStateDir`.
 
 ### Fallback: project flake (non-NixOS hosts)
 

@@ -34,17 +34,16 @@ For each VM selected for login:
 
 1. Reads the VM's Steam username and password from the configured credentials
    TOML or age-encrypted credentials file.
-2. Mints a SteamClient-platform refresh token on the host through Valve's
-   authentication flow.
-3. Prompts for Steam Guard through the host dialog, `--code`, or
+2. Boots or reuses the VM and starts Steam under sway.
+3. Types the credentials into the real Steam GUI.
+4. Prompts for Steam Guard through the host dialog, `--code`, or
    `STEAMPIPE_GUARD_CODE` when Steam requires a one-time code.
-4. Writes `loginStateDir/vm-N/config/loginusers.vdf` and
-   `loginStateDir/vm-N/config/<steamID>/local.vdf`.
+5. Treats the session as valid only after Steam writes GUI login evidence into
+   `loginStateDir`.
 
-No VM boot, SSH session, `steamcmd`, in-VM Steam GUI, VNC, or X server is
-involved in the credential-backed login path. The written refresh token must be
-a SteamClient-audience JWT (`aud` includes `client`), which is what the VM's
-Steam client needs for later auto-login.
+Host-side Steam Vent/JWT artifacts are diagnostic only. They do not make
+`steam accounts` report `OK`; a GUI-valid session requires `loginusers.vdf` plus
+Steam GUI cache evidence produced by the VM client.
 
 Target specific VMs:
 
@@ -67,18 +66,16 @@ login-state share. Because the share is the VM's real
 cluster-ctl --credentials secrets/steam-creds.toml steam login
 ```
 
-Mints SteamClient refresh tokens on the host for each VM selected for login and
-writes the resulting session artifacts into `loginStateDir`.
+Boots or reuses each selected VM, types credentials into the Steam GUI, and
+writes the resulting GUI-valid session artifacts into `loginStateDir`.
 
-By default, automated `steam login` also fills the gaps only: sessions already
-reported as `OK` are skipped, while `STALE`, `EXPIRED`, and `NO_TOKEN` sessions
-are refreshed through the login flow. Pass `--force` to re-login every selected
-VM.
+By default, automated `steam login` fills the gaps only: sessions already
+reported as `OK` are skipped, while non-GUI-valid sessions are driven through
+the login flow. Pass `--force` to re-login every selected VM.
 
-Automated `steam login` runs every selected VM in parallel under the
-host-memory admission gate for consistency with other VM fan-out operations.
-It does not boot or bounce the VM. `--force` re-mints every selected VM's
-session even if the current token is still `OK`.
+Automated `steam login` prioritizes correctness over speed. Steam Guard prompts
+are serialized through the host dialog so the same prompt can show a rejected
+code and request a retry.
 
 ## Login VM lifecycle
 
@@ -162,13 +159,9 @@ Steam state is persisted in `loginStateDir/vm-N`.
 cluster-ctl --vm-count 7 steam warm --runners-dir ./result
 ```
 
-`steam warm [target]` boots the selected VM or VMs, waits until Steam is logged
-on, then gracefully stops Steam and the VM. This gives Steam a chance to rotate
-its refresh token and write the new token back into the persistent share.
-
-Run this on a steady cadence for idle clusters. A weekly cron or equivalent
-timer is the suggested default; it is frequent enough to keep the token chain
-fresh without turning warm-up into a daily operational dependency.
+`steam warm [target]` no longer creates or refreshes GUI-valid sessions. Run
+`cluster-ctl steam login <vm> --force` when `steam accounts` reports a VM as
+not GUI-valid.
 
 Targeting follows the same VM syntax as login:
 
@@ -179,43 +172,13 @@ cluster-ctl --vm-count 7 steam warm -+ vm-3 --runners-dir ./result
 
 ### Automated rotation
 
-Add the warm-timer module to your host configuration to refresh tokens on a
-weekly schedule without manual invocation. Host-level warm timers use the
-runner directory published by `services.steampipe-cluster.runners.enable`, so
-import the timer module next to the host module and enable runtime runners:
+The warm-timer module is retained for compatibility but cannot satisfy the
+Steam GUI client. Host-level warm timers should be disabled for GUI session
+freshness; use explicit `steam login` instead.
 
-```nix
-{
-  imports = [
-    inputs.steampipe.nixosModules.default
-    inputs.steampipe.nixosModules.warmTimer
-  ];
-
-  services.steampipe-cluster = {
-    enable = true;
-    tapOwner = "yourhostuser";
-    tapOwnerUid = 1000;
-    runners.enable = true;
-  };
-
-  services.steampipe-warm-timer.enable = true;
-}
-```
-
-Defaults: weekly cadence, 1-hour randomized delay, the module `tapOwner`, and
-`/var/lib/steampipe/ssh/cluster_key`. Override with `onCalendar`,
-`randomizedDelaySec`, `user`, `sshKey`, and `extraArgs`. The full options list
-is in [Global host config](./host-config.md#steampipe-warm-timer).
-
-Project-flake consumers can still use `(mkTestCluster {...}).warmTimerModule`
-when the timer should be bound to that project-built runner set instead of the
-host-level `/etc/steampipe/runners` configuration.
-
-Verify the timer is doing its job by running `cluster-ctl steam accounts` and
-checking that `RefreshAge` stays under your `--warn-within-days` threshold.
-`ExpiresIn` should remain comfortably above the warning window; if either value
-drifts, inspect `journalctl -u steampipe-steam-warm.service` for the failed
-warm run.
+Verify GUI session state with `cluster-ctl steam accounts`. JWT-only Steam Vent
+state appears as not GUI-valid and should be repaired with
+`cluster-ctl steam login <vm> --force`.
 
 ## Viewing account status
 
@@ -229,12 +192,13 @@ includes:
 - `Login`: whether `loginusers.vdf` contains a logged-in SteamID.
 - `Account`: the Steam persona name, falling back to the configured username.
 - `SteamID`: the 17-digit SteamID found in `loginusers.vdf`.
-- `RefreshAge`: days since the refresh-token file was last modified.
-- `ExpiresIn`: days until the refresh token's JWT `exp` timestamp.
-- `Status`: `OK`, `STALE`, `EXPIRED`, or `NO_TOKEN`.
+- `RefreshAge`: days since the GUI cache artifact was last modified.
+- `ExpiresIn`: retained for legacy output; GUI-valid sessions do not derive
+  status from a JWT expiry.
+- `Status`: `OK`, `NO_TOKEN`, or `UNKNOWN`.
 
-By default, `steam accounts` exits non-zero if any known refresh token expires
-within 30 days:
+By default, `steam accounts` exits non-zero when known session evidence is not
+GUI-valid:
 
 ```bash
 cluster-ctl --vm-count 7 steam accounts --warn-within-days 30
@@ -257,8 +221,7 @@ code paths:
   rotation was not flushed to disk before the VM died. This is why every "Steam
   exited a successful session" path uses `graceful_stop_steam` (sends
   `steam -shutdown`, polls `pgrep`, then SIGTERM, then SIGKILL) rather than a
-  bare `pkill`, and why `cluster-ctl steam warm` exists to refresh tokens on a
-  schedule that has nothing to do with test cadence.
+  bare `pkill`.
 - **`loginStateDir/vm-N` writes are serialized by the VM lease.** The
   per-`vm-N` virtiofs share is shared across `--cluster` names — two clusters
   configured for the same `vm-N` slot would write to the same host directory.
