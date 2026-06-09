@@ -176,8 +176,15 @@ pub enum Commands {
         runners_dir: Option<PathBuf>,
     },
 
-    /// Stop all VMs
-    Down,
+    /// Stop VMs with graceful shutdown (falls back to force-kill if frozen or unreachable)
+    Down {
+        /// Skip graceful shutdown, force-kill immediately
+        #[arg(long)]
+        force: bool,
+        /// Seconds to wait for graceful VM shutdown (default: 30)
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
+    },
 
     /// Restart VMs (stop then start)
     Restart {
@@ -532,6 +539,16 @@ pub enum Commands {
         fix: bool,
     },
 
+    /// Clean up stale VM state: dead PID files, orphaned processes, leftover sockets
+    Cleanup {
+        /// Also remove home images for unclaimed VMs
+        #[arg(long)]
+        reset: bool,
+        /// Preview changes without applying them
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Generate a steampipe.toml config template
     Init,
 
@@ -653,15 +670,15 @@ pub enum SteamAction {
         /// Continue from target through vm-7 (e.g., "3" means vm-3..vm-7)
         #[arg(short = '+', long)]
         continue_from: bool,
-        /// Re-mint every selected VM even if it already has a valid Steam session.
+        /// Re-login every selected VM even if it already has a valid Steam GUI session.
         #[arg(long)]
         force: bool,
-        /// Pre-supplied Steam Guard code for single-shot forced refresh.
+        /// Pre-supplied Steam Guard code for single-shot GUI login.
         #[arg(long)]
         code: Option<String>,
     },
 
-    /// Submit Steam Guard code to a running SteamCMD login VM
+    /// Submit Steam Guard code to a running Steam GUI login VM
     Guard {
         /// Target VM: "3" or "vm-3"
         target: String,
@@ -685,7 +702,7 @@ pub enum SteamAction {
         display: DisplayMode,
     },
 
-    /// Boot VMs, let Steam rotate refresh tokens, then gracefully stop
+    /// Deprecated: Steam GUI sessions must be created with `steam login`
     Warm {
         /// Target VM: "all", "3", "vm-3"
         target: Option<String>,
@@ -711,7 +728,7 @@ pub enum SteamAction {
 
     /// Show Steam account status across all VMs
     Accounts {
-        /// Exit non-zero if any VM's refresh token expires within N days.
+        /// Exit non-zero if any VM is missing GUI-valid Steam session evidence.
         #[arg(long, default_value_t = 30)]
         warn_within_days: i64,
     },
@@ -2364,5 +2381,401 @@ mod tests {
     fn missing_vm_count_is_none() {
         let cli = parse(&["status"]);
         assert!(cli.vm_count.is_none());
+    }
+
+    // ── Up / Down / Restart ───────────────────────────────────────────
+
+    #[test]
+    fn up_parses_basic() {
+        let cli = parse(&["--vm-count", "3", "up"]);
+        assert!(matches!(cli.command, Commands::Up { .. }));
+    }
+
+    #[test]
+    fn up_accepts_runners_dir() {
+        let cli = parse(&["--vm-count", "3", "up", "--runners-dir", "/runners"]);
+        assert!(matches!(cli.command, Commands::Up { .. }));
+    }
+
+    #[test]
+    fn down_parses_basic() {
+        let cli = parse(&["--vm-count", "3", "down"]);
+        assert!(matches!(cli.command, Commands::Down { .. }));
+    }
+
+    #[test]
+    fn down_accepts_force_and_timeout() {
+        let cli = parse(&["--vm-count", "3", "down", "--force", "--timeout", "60"]);
+        assert!(matches!(cli.command, Commands::Down { .. }));
+    }
+
+    #[test]
+    fn restart_parses_basic() {
+        let cli = parse(&["--vm-count", "3", "restart"]);
+        assert!(matches!(cli.command, Commands::Restart { .. }));
+    }
+
+    #[test]
+    fn restart_accepts_target_and_runners_dir() {
+        let cli = parse(&["--vm-count", "3", "restart", "vm-2", "--runners-dir", "/r"]);
+        assert!(matches!(cli.command, Commands::Restart { .. }));
+    }
+
+    #[test]
+    fn reset_requires_home() {
+        let cli = parse(&["--vm-count", "3", "reset", "vm-3", "--home"]);
+        assert!(matches!(cli.command, Commands::Reset { .. }));
+    }
+
+    // ── Net commands ───────────────────────────────────────────────────
+
+    #[test]
+    fn net_up_parses() {
+        let cli = parse(&["net-up"]);
+        assert!(matches!(cli.command, Commands::NetUp { .. }));
+    }
+
+    #[test]
+    fn net_up_accepts_nft_override() {
+        let cli = parse(&["net-up", "--nft", "/usr/sbin/nft"]);
+        assert!(matches!(cli.command, Commands::NetUp { .. }));
+    }
+
+    #[test]
+    fn net_down_parses() {
+        let cli = parse(&["net-down"]);
+        assert!(matches!(cli.command, Commands::NetDown { .. }));
+    }
+
+    #[test]
+    fn net_down_accepts_nft_override() {
+        let cli = parse(&["net-down", "--nft", "/usr/sbin/nft"]);
+        assert!(matches!(cli.command, Commands::NetDown { .. }));
+    }
+
+    // ── Netem commands ─────────────────────────────────────────────────
+
+    #[test]
+    fn netem_show_parses() {
+        let cli = parse(&["--vm-count", "3", "netem-show"]);
+        assert!(matches!(cli.command, Commands::NetemShow));
+    }
+
+    #[test]
+    fn netem_reset_parses() {
+        let cli = parse(&["--vm-count", "3", "netem-reset"]);
+        assert!(matches!(cli.command, Commands::NetemReset { .. }));
+    }
+
+    #[test]
+    fn netem_reset_accepts_target() {
+        let cli = parse(&["--vm-count", "3", "netem-reset", "vm-2"]);
+        assert!(matches!(cli.command, Commands::NetemReset { .. }));
+    }
+
+    // ── Snapshot commands ──────────────────────────────────────────────
+
+    #[test]
+    fn snapshot_save_parses() {
+        let cli = parse(&["--vm-count", "3", "snapshot-save", "pre-update"]);
+        assert!(matches!(cli.command, Commands::SnapshotSave { .. }));
+    }
+
+    #[test]
+    fn snapshot_restore_parses() {
+        let cli = parse(&["--vm-count", "3", "snapshot-restore", "pre-update"]);
+        assert!(matches!(cli.command, Commands::SnapshotRestore { .. }));
+    }
+
+    #[test]
+    fn snapshot_list_parses() {
+        let cli = parse(&["--vm-count", "3", "snapshot-list"]);
+        assert!(matches!(cli.command, Commands::SnapshotList));
+    }
+
+    #[test]
+    fn snapshot_delete_parses() {
+        let cli = parse(&["--vm-count", "3", "snapshot-delete", "pre-update"]);
+        assert!(matches!(cli.command, Commands::SnapshotDelete { .. }));
+    }
+
+    // ── Visual subcommands ─────────────────────────────────────────────
+
+    #[test]
+    fn visual_bless_parses() {
+        let cli = parse(&["--vm-count", "3", "visual", "bless", "main-menu", "--from", "run-7"]);
+        assert!(matches!(cli.command, Commands::Visual { action: VisualAction::Bless { .. } }));
+    }
+
+    #[test]
+    fn visual_bless_accepts_yes() {
+        let cli = parse(&["--vm-count", "3", "visual", "bless", "main-menu", "--from", "run-7", "--yes"]);
+        assert!(matches!(cli.command, Commands::Visual { action: VisualAction::Bless { .. } }));
+    }
+
+    #[test]
+    fn visual_diff_parses() {
+        let cli = parse(&["--vm-count", "3", "visual", "diff", "main-menu", "--from", "run-7"]);
+        assert!(matches!(cli.command, Commands::Visual { action: VisualAction::Diff { .. } }));
+    }
+
+    #[test]
+    fn visual_report_parses() {
+        let cli = parse(&["--vm-count", "3", "visual", "report"]);
+        assert!(matches!(cli.command, Commands::Visual { action: VisualAction::Report { .. } }));
+    }
+
+    #[test]
+    fn visual_report_accepts_run_output_and_single_file() {
+        let cli = parse(&["--vm-count", "3", "visual", "report", "--run", "run-7", "--output", "/tmp/report", "--single-file"]);
+        assert!(matches!(cli.command, Commands::Visual { action: VisualAction::Report { .. } }));
+    }
+
+    // ── GPU preflight ──────────────────────────────────────────────────
+
+    #[test]
+    fn gpu_preflight_parses() {
+        let cli = parse(&["--vm-count", "3", "gpu-preflight"]);
+        assert!(matches!(cli.command, Commands::GpuPreflight { .. }));
+    }
+
+    #[test]
+    fn gpu_preflight_accepts_target_and_json() {
+        let cli = parse(&["--vm-count", "3", "gpu-preflight", "vm-2", "--json"]);
+        assert!(matches!(cli.command, Commands::GpuPreflight { .. }));
+    }
+
+    #[test]
+    fn gpu_preflight_accepts_runners_dir() {
+        let cli = parse(&["--vm-count", "3", "gpu-preflight", "--runners-dir", "/r"]);
+        assert!(matches!(cli.command, Commands::GpuPreflight { .. }));
+    }
+
+    // ── Steam clean-logins ─────────────────────────────────────────────
+
+    #[test]
+    fn steam_clean_logins_parses() {
+        let cli = parse(&["--vm-count", "3", "steam", "clean-logins"]);
+        assert!(matches!(cli.command, Commands::Steam { action: SteamAction::CleanLogins { .. } }));
+    }
+
+    #[test]
+    fn steam_clean_logins_accepts_target_and_state_dir() {
+        let cli = parse(&["--vm-count", "3", "steam", "clean-logins", "vm-2", "--login-state-dir", "/srv/logins"]);
+        assert!(matches!(cli.command, Commands::Steam { action: SteamAction::CleanLogins { .. } }));
+    }
+
+    // ── Watch / Doctor ─────────────────────────────────────────────────
+
+    #[test]
+    fn watch_parses() {
+        let cli = parse(&["--vm-count", "3", "watch"]);
+        assert!(matches!(cli.command, Commands::Watch { .. }));
+    }
+
+    #[test]
+    fn watch_accepts_interval() {
+        let cli = parse(&["--vm-count", "3", "watch", "--interval", "10"]);
+        assert!(matches!(cli.command, Commands::Watch { .. }));
+    }
+
+    #[test]
+    fn doctor_parses() {
+        let cli = parse(&["doctor"]);
+        assert!(matches!(cli.command, Commands::Doctor { .. }));
+    }
+
+    #[test]
+    fn doctor_accepts_fix() {
+        let cli = parse(&["doctor", "--fix"]);
+        assert!(matches!(cli.command, Commands::Doctor { .. }));
+    }
+
+    // ── Init / YhConfig / Mcp / Completions ────────────────────────────
+
+    #[test]
+    fn init_parses() {
+        let cli = parse(&["init"]);
+        assert!(matches!(cli.command, Commands::Init));
+    }
+
+    #[test]
+    fn yh_config_parses() {
+        let cli = parse(&["yh-config"]);
+        assert!(matches!(cli.command, Commands::YhConfig { .. }));
+    }
+
+    #[test]
+    fn yh_config_accepts_force() {
+        let cli = parse(&["yh-config", "--force"]);
+        assert!(matches!(cli.command, Commands::YhConfig { .. }));
+    }
+
+    #[test]
+    fn mcp_parses() {
+        let cli = parse(&["mcp"]);
+        assert!(matches!(cli.command, Commands::Mcp));
+    }
+
+    #[test]
+    fn completions_parses() {
+        let cli = parse(&["completions", "bash"]);
+        assert!(matches!(cli.command, Commands::Completions { .. }));
+    }
+
+    #[test]
+    fn completions_accepts_all_shells() {
+        for shell in ["bash", "zsh", "fish", "powershell", "elvish"] {
+            let cli = parse(&["completions", shell]);
+            assert!(matches!(cli.command, Commands::Completions { .. }), "shell={shell}");
+        }
+    }
+
+    // ── Cleanup / Admission subcommands ─────────────────────────────────
+
+    #[test]
+    fn cleanup_parses() {
+        let cli = parse(&["--vm-count", "3", "cleanup"]);
+        assert!(matches!(cli.command, Commands::Cleanup { .. }));
+    }
+
+    #[test]
+    fn cleanup_accepts_reset_and_dry_run() {
+        let cli = parse(&["--vm-count", "3", "cleanup", "--reset", "--dry-run"]);
+        assert!(matches!(cli.command, Commands::Cleanup { .. }));
+    }
+
+    #[test]
+    fn admission_status_parses() {
+        let cli = parse(&["admission", "status"]);
+        assert!(matches!(cli.command, Commands::Admission { .. }));
+    }
+
+    // ── needs_vm_count exhaustive ───────────────────────────────────────
+
+    #[test]
+    fn needs_vm_count_exempts_correct_commands() {
+        // Commands that do NOT need --vm-count
+        assert!(!parse(&["admission", "status"]).command.needs_vm_count());
+        assert!(!parse(&["steam", "guard", "vm-1"]).command.needs_vm_count(), "steam guard");
+        assert!(!parse(&["steam", "refresh"]).command.needs_vm_count(), "steam refresh");
+        assert!(!parse(&["steam", "info"]).command.needs_vm_count(), "steam info");
+        assert!(!parse(&["netem", "vm-1", "--latency", "50"]).command.needs_vm_count(), "netem");
+
+        // Commands that DO need --vm-count (confirm the others are NOT exempt)
+        assert!(parse(&["completions", "bash"]).command.needs_vm_count(), "completions");
+        assert!(parse(&["mcp"]).command.needs_vm_count(), "mcp");
+        assert!(parse(&["init"]).command.needs_vm_count(), "init");
+        assert!(parse(&["yh-config"]).command.needs_vm_count(), "yh-config");
+        assert!(parse(&["doctor"]).command.needs_vm_count(), "doctor");
+        assert!(parse(&["net-up"]).command.needs_vm_count(), "net-up");
+        assert!(parse(&["net-down"]).command.needs_vm_count(), "net-down");
+    }
+
+    #[test]
+    fn needs_vm_count_requires_for_most_commands() {
+        // All other commands REQUIRE --vm-count
+        assert!(parse(&["--vm-count", "3", "up"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "down"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "restart"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "reset", "vm-3", "--home"]).command.needs_vm_count());
+        assert!(parse(&["net-up"]).command.needs_vm_count());
+        assert!(parse(&["net-down"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "deploy"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "steam", "login"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "steam", "check"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "steam", "start"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "steam", "accounts"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "steam", "clean-logins"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "steam", "warm"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "gpu-preflight"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "run"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "stop-game"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "logs"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "test"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "bisect", "--good", "a", "--bad", "b"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "netem-show"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "netem-reset"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "history"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "snapshot-save", "s1"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "snapshot-restore", "s1"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "snapshot-list"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "snapshot-delete", "s1"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "screenshot"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "visual", "list"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "visual", "capture", "main"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "visual", "record", "main"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "visual", "bless", "main", "--from", "r1"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "visual", "diff", "main", "--from", "r1"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "visual", "report"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "watch"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "doctor"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "compositor-status"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "status"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "cleanup"]).command.needs_vm_count());
+        // Init doesn't need vm_count
+        assert!(parse(&["--vm-count", "3", "init"]).command.needs_vm_count());
+        assert!(parse(&["--vm-count", "3", "yh-config"]).command.needs_vm_count());
+    }
+
+    // ── Global flag interactions ───────────────────────────────────────
+
+    #[test]
+    fn global_project_root_flag_parses() {
+        let cli = parse(&["--project-root", "/proj", "--vm-count", "3", "status"]);
+        assert_eq!(cli.project_root, Some(std::path::PathBuf::from("/proj")));
+    }
+
+    #[test]
+    fn global_ssh_key_flag_parses() {
+        let cli = parse(&["--ssh-key", "/my/key", "--vm-count", "3", "status"]);
+        assert_eq!(cli.ssh_key, Some(std::path::PathBuf::from("/my/key")));
+    }
+
+    #[test]
+    fn global_state_dir_flag_parses() {
+        let cli = parse(&["--state-dir", "/tmp/state", "--vm-count", "3", "status"]);
+        assert_eq!(cli.state_dir, Some(std::path::PathBuf::from("/tmp/state")));
+    }
+
+    #[test]
+    fn global_lock_dir_flag_parses() {
+        let cli = parse(&["--lock-dir", "/tmp/locks", "--vm-count", "3", "status"]);
+        assert_eq!(cli.lock_dir, Some(std::path::PathBuf::from("/tmp/locks")));
+    }
+
+    #[test]
+    fn global_credentials_flag_parses() {
+        let cli = parse(&["--credentials", "/tmp/creds.toml", "--vm-count", "3", "status"]);
+        assert_eq!(cli.credentials, Some(std::path::PathBuf::from("/tmp/creds.toml")));
+    }
+
+    #[test]
+    fn global_non_interactive_flag_parses() {
+        let cli = parse(&["--non-interactive", "--vm-count", "3", "status"]);
+        assert!(cli.non_interactive);
+    }
+
+    #[test]
+    fn global_no_gui_flag_parses() {
+        let cli = parse(&["--no-gui", "--vm-count", "3", "status"]);
+        assert!(cli.no_gui);
+    }
+
+    #[test]
+    fn global_backend_flag_parses() {
+        let cli = parse(&["--backend", "docker", "--vm-count", "3", "status"]);
+        assert_eq!(cli.backend, Some(crate::config::BackendKind::Docker));
+    }
+
+    #[test]
+    fn global_flags_work_across_commands() {
+        // Verify global flags parse correctly with different subcommands
+        for cmd in &["status", "down", "logs", "stop-game"] {
+            let cli = parse(&["--project-root", "/p", "--state-dir", "/s", "--lock-dir", "/l", "--vm-count", "3", cmd]);
+            assert_eq!(cli.project_root, Some(std::path::PathBuf::from("/p")), "cmd={cmd}");
+            assert_eq!(cli.state_dir, Some(std::path::PathBuf::from("/s")), "cmd={cmd}");
+            assert_eq!(cli.lock_dir, Some(std::path::PathBuf::from("/l")), "cmd={cmd}");
+        }
     }
 }
