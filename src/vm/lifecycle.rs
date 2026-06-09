@@ -1,11 +1,14 @@
 //! VM lifecycle management: start, stop, restart cluster instances.
 
 use std::path::Path;
+use std::time::Duration;
 
+use crate::core::backend::Backend;
 use crate::core::config::{BridgeReady, ClusterConfig, VmDef, par_each_vm};
 use crate::core::state;
 use crate::vm::lease;
 use crate::vm::resources::{self, RamRequirements};
+use crate::vm::shutdown;
 
 /// Wait for connectivity on a set of instances in parallel and print results.
 async fn wait_and_report(config: &ClusterConfig<BridgeReady>, vms: &[VmDef]) {
@@ -122,20 +125,12 @@ pub async fn up(
     Ok(started)
 }
 
-/// Run the `down` subcommand: stop all instances and remove claim files.
-pub fn down<S>(config: &ClusterConfig<S>) {
-    let vms = config.claimed_vms();
-    println!("==> Stopping {} VM(s)...", vms.len());
-    for vm in &vms {
-        let had_pid = state::read_pid(&config.state_dir, &vm.name).is_some();
-        config.backend.stop_instance(config, vm);
-        lease::remove_claim(vm.index, &config.lock_dir);
-        if had_pid {
-            println!("  {} stopped", vm.name);
-        }
-    }
-
-    println!("==> Done");
+/// Run the `down` subcommand: gracefully shut down (or force-kill) claimed VMs.
+///
+/// By default, attempts SSH-based `systemctl poweroff` before falling back to
+/// a force-kill. Pass `force: true` to skip the graceful path and kill immediately.
+pub async fn down<S>(config: &ClusterConfig<S>, backend: &Backend, force: bool, timeout: Duration) {
+    shutdown::shutdown_claimed(config, backend, force, timeout).await;
 }
 
 /// Delete a VM's persistent home image after confirming no live lease owns it.
