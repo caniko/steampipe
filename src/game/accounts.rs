@@ -44,9 +44,9 @@ impl SessionStatus {
     pub(crate) fn login_reason(self) -> &'static str {
         match self {
             Self::Ok => "session is healthy",
-            Self::Stale => "refresh token is stale",
-            Self::Expired => "refresh token expired",
-            Self::NoToken => "no refresh token found",
+            Self::Stale => "Steam GUI session cache is stale",
+            Self::Expired => "Steam GUI session cache expired",
+            Self::NoToken => "no GUI-valid Steam session found",
             Self::Unknown => "session status unknown",
         }
     }
@@ -99,7 +99,7 @@ pub async fn show<S>(
     );
     println!("{}", "-".repeat(94));
 
-    let mut logged_in = 0;
+    let mut gui_valid = 0;
     let mut total = 0;
     for info in &results {
         total += 1;
@@ -120,20 +120,20 @@ pub async fn show<S>(
             format_days(info.expires_in_days),
             info.status.as_str()
         );
-        if info.logged_in {
-            logged_in += 1;
+        if info.status == SessionStatus::Ok {
+            gui_valid += 1;
         }
     }
 
     println!();
-    if logged_in == total {
-        println!("  All {total} VMs have active Steam sessions");
+    let missing_gui_valid = total - gui_valid;
+    if missing_gui_valid == 0 {
+        println!("  All {total} VMs have GUI-valid Steam sessions");
     } else {
-        let missing = total - logged_in;
-        println!("  {logged_in}/{total} VMs logged in ({missing} need login)");
-        if missing > 0 {
-            println!("  Run `cluster-ctl steam login` to fill the gaps automatically");
-        }
+        println!(
+            "  {gui_valid}/{total} VMs have GUI-valid Steam sessions ({missing_gui_valid} need login)"
+        );
+        println!("  Run `cluster-ctl steam login <vm> --force` for each VM that is not GUI-valid");
     }
 
     // Check for duplicate accounts.
@@ -174,8 +174,12 @@ pub async fn show<S>(
             .collect::<Vec<_>>()
             .join(", ");
         anyhow::bail!(
-            "steam accounts: refresh token expiry is within {warn_within_days} day(s): {summary}"
+            "steam accounts: Steam GUI session cache age is within {warn_within_days} day(s): {summary}"
         );
+    }
+
+    if missing_gui_valid > 0 {
+        anyhow::bail!("steam accounts: {missing_gui_valid} VM(s) are not GUI-valid");
     }
 
     Ok(())
@@ -255,7 +259,7 @@ pub(crate) fn read_account_info(
         };
     };
 
-    let Some((token_path, jwt)) = find_refresh_token_file(&login_dir, steam_id_for_token) else {
+    let Some(cache_path) = find_gui_session_cache_file(&login_dir, steam_id_for_token) else {
         return AccountInfo {
             vm_name,
             account,
@@ -269,14 +273,8 @@ pub(crate) fn read_account_info(
     };
 
     let now = chrono::Utc::now().timestamp();
-    let refresh_age_days = modified_unix(&token_path).map(|mtime| (now - mtime) / 86_400);
-    let expires_in_days = jwt_exp_unix(&jwt).map(|exp| (exp - now) / 86_400);
-    let status = match expires_in_days {
-        Some(days) if days < 0 => SessionStatus::Expired,
-        Some(days) if days < warn_within_days => SessionStatus::Stale,
-        Some(_) => SessionStatus::Ok,
-        None => SessionStatus::NoToken,
-    };
+    let refresh_age_days = modified_unix(&cache_path).map(|mtime| (now - mtime) / 86_400);
+    let _ = warn_within_days;
 
     AccountInfo {
         vm_name,
@@ -285,8 +283,8 @@ pub(crate) fn read_account_info(
         steam_id,
         logged_in,
         refresh_age_days,
-        expires_in_days,
-        status,
+        expires_in_days: None,
+        status: SessionStatus::Ok,
     }
 }
 
@@ -329,6 +327,45 @@ fn find_refresh_token_file(login_dir: &Path, steam_id: &str) -> Option<(PathBuf,
 
     let config_vdf = login_dir.join("config").join("config.vdf");
     read_refresh_jwt(&config_vdf).map(|jwt| (config_vdf, jwt))
+}
+
+fn find_gui_session_cache_file(login_dir: &Path, steam_id: &str) -> Option<PathBuf> {
+    let candidates = [
+        login_dir.join("local.vdf"),
+        login_dir.join("config").join("config.vdf"),
+        login_dir.join("config").join(steam_id).join("local.vdf"),
+    ];
+    candidates
+        .into_iter()
+        .find(|path| contains_gui_connect_cache(path))
+}
+
+fn contains_gui_connect_cache(path: &Path) -> bool {
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    if !contents.contains("\"ConnectCache\"") {
+        return false;
+    }
+    extract_connect_cache_values(&contents)
+        .into_iter()
+        .any(is_gui_cache_value)
+}
+
+fn extract_connect_cache_values(contents: &str) -> Vec<&str> {
+    static RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r#""[^"]+"\s+"([^"]+)""#).unwrap());
+    RE.captures_iter(contents)
+        .filter_map(|captures| captures.get(1).map(|match_| match_.as_str()))
+        .collect()
+}
+
+fn is_gui_cache_value(value: &str) -> bool {
+    !value.starts_with("ey")
+        && value.len() >= 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-' || byte == b'_')
 }
 
 fn read_refresh_jwt(path: &Path) -> Option<String> {
@@ -417,6 +454,34 @@ mod tests {
         .expect("write local.vdf");
     }
 
+    fn write_gui_vm_state(root: &Path, vm_name: &str, persona: &str, steam_id: &str) {
+        let login_dir = root.join(vm_name);
+        let config_dir = login_dir.join("config");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        write_loginusers(&config_dir, persona, steam_id);
+        std::fs::write(
+            login_dir.join("local.vdf"),
+            r#""MachineUserConfigStore"
+{
+    "Software"
+    {
+        "Valve"
+        {
+            "Steam"
+            {
+                "ConnectCache"
+                {
+                    "ea8626751" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                }
+            }
+        }
+    }
+}
+"#,
+        )
+        .expect("write local.vdf");
+    }
+
     #[test]
     fn extract_refresh_jwt_picks_jwt_shaped_string() {
         let vdf = r#""RefreshToken_76561198000000001"   "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE3OTUxNzgwMDB9.sig" "#;
@@ -443,43 +508,13 @@ mod tests {
     #[test]
     fn classify_session_status_handles_each_state() {
         let temp = tempfile::tempdir().expect("temp login state dir");
-        let now = chrono::Utc::now().timestamp();
-
-        write_vm_state(
-            temp.path(),
-            "vm-ok",
-            "PersonaOk",
-            "76561198000000001",
-            now + 90 * 86_400,
-        );
-        write_vm_state(
-            temp.path(),
-            "vm-stale",
-            "PersonaStale",
-            "76561198000000002",
-            now + 7 * 86_400,
-        );
-        write_vm_state(
-            temp.path(),
-            "vm-expired",
-            "PersonaExpired",
-            "76561198000000003",
-            now - 86_400,
-        );
+        write_gui_vm_state(temp.path(), "vm-ok", "PersonaOk", "76561198000000001");
         std::fs::create_dir_all(temp.path().join("vm-no-token").join("config"))
             .expect("create no-token dir");
 
         assert_eq!(
             classify_session_status(temp.path(), "vm-ok", DEFAULT_WARN_WITHIN_DAYS),
             SessionStatus::Ok
-        );
-        assert_eq!(
-            classify_session_status(temp.path(), "vm-stale", DEFAULT_WARN_WITHIN_DAYS),
-            SessionStatus::Stale
-        );
-        assert_eq!(
-            classify_session_status(temp.path(), "vm-expired", DEFAULT_WARN_WITHIN_DAYS),
-            SessionStatus::Expired
         );
         assert_eq!(
             classify_session_status(temp.path(), "vm-no-token", DEFAULT_WARN_WITHIN_DAYS),
@@ -492,36 +527,48 @@ mod tests {
     }
 
     #[test]
-    fn classify_session_status_accepts_per_steamid_local_vdf_without_config_vdf() {
+    fn classify_session_status_rejects_jwt_only_artifact() {
         let temp = tempfile::tempdir().expect("temp login state dir");
         let now = chrono::Utc::now().timestamp();
         write_vm_state(
             temp.path(),
-            "vm-local-only",
-            "PersonaLocal",
+            "vm-jwt-only",
+            "PersonaJwt",
             "76561198000000004",
             now + 90 * 86_400,
         );
 
         assert_eq!(
-            classify_session_status(temp.path(), "vm-local-only", DEFAULT_WARN_WITHIN_DAYS),
-            SessionStatus::Ok
+            classify_session_status(temp.path(), "vm-jwt-only", DEFAULT_WARN_WITHIN_DAYS),
+            SessionStatus::NoToken
         );
     }
 
     #[test]
-    fn classify_session_status_accepts_config_vdf_fallback_without_local_vdf() {
+    fn classify_session_status_accepts_gui_config_vdf_cache() {
         let temp = tempfile::tempdir().expect("temp login state dir");
-        let now = chrono::Utc::now().timestamp();
         let steam_id = "76561198000000005";
         let config_dir = temp.path().join("vm-config-only").join("config");
         write_loginusers(&config_dir, "PersonaConfig", steam_id);
         std::fs::write(
             config_dir.join("config.vdf"),
-            format!(
-                r#""RefreshToken_{steam_id}"   "{}""#,
-                test_jwt(now + 90 * 86_400)
-            ),
+            r#""InstallConfigStore"
+{
+    "Software"
+    {
+        "Valve"
+        {
+            "Steam"
+            {
+                "ConnectCache"
+                {
+                    "ea8626751" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                }
+            }
+        }
+    }
+}
+"#,
         )
         .expect("write config.vdf");
 

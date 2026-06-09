@@ -1,9 +1,9 @@
 //! Write a minted Steam session to a VM's login-state share.
 //!
 //! Given a [`MintedSession`], this writes the on-disk artifacts under
-//! `loginStateDir/<vm>/config/` that (a) make the host detector
-//! ([`crate::game::accounts::classify_session_status`]) report `Ok`, and (b)
-//! provide the refresh token the VM's Steam client would auto-login from:
+//! `loginStateDir/<vm>/config/` that preserve the Steam Vent refresh-token
+//! evidence for diagnostics. These artifacts are not considered a GUI-valid
+//! Steam session by [`crate::game::accounts::classify_session_status`]:
 //!
 //! - `config/loginusers.vdf` — the account block (SteamID64 + AccountName +
 //!   PersonaName + RememberPassword/AllowAutoLogin/MostRecent + Timestamp).
@@ -30,8 +30,8 @@ pub(crate) fn write_session(
     std::fs::create_dir_all(&steam_id_dir)
         .with_context(|| format!("creating {}", steam_id_dir.display()))?;
 
-    // Token file first: the session only "appears" complete once loginusers.vdf
-    // (written second) references a SteamID whose token is already present.
+    // Token file first: diagnostic state should still be internally complete if
+    // a caller writes it, even though GUI-valid detection rejects JWT-only state.
     let local_vdf = steam_id_dir.join("local.vdf");
     write_atomic(
         &local_vdf,
@@ -52,9 +52,8 @@ pub(crate) fn write_session(
 }
 
 fn render_loginusers_vdf(steam_id64: &str, account_name: &str, persona_name: &str) -> String {
-    // Two-space-indented Valve VDF; the detector greps for the 17-digit SteamID
-    // key and "PersonaName". RememberPassword/AllowAutoLogin/MostRecent are what
-    // the real client needs to auto-login without prompting.
+    // Two-space-indented Valve VDF with the usual account flags. These are not
+    // sufficient for the real GUI client without its encrypted ConnectCache.
     format!(
         "\"users\"\n{{\n\t\"{id}\"\n\t{{\n\t\t\"AccountName\"\t\t\"{acct}\"\n\t\t\"PersonaName\"\t\t\"{persona}\"\n\t\t\"RememberPassword\"\t\t\"1\"\n\t\t\"WantsOfflineMode\"\t\t\"0\"\n\t\t\"SkipOfflineModeWarning\"\t\t\"0\"\n\t\t\"AllowAutoLogin\"\t\t\"1\"\n\t\t\"MostRecent\"\t\t\"1\"\n\t}}\n}}\n",
         id = steam_id64,
@@ -64,9 +63,8 @@ fn render_loginusers_vdf(steam_id64: &str, account_name: &str, persona_name: &st
 }
 
 fn render_local_vdf(steam_id64: &str, refresh_token: &str) -> String {
-    // Mirror the modern client's per-SteamID store nesting so the GUI can find
-    // the refresh token; the host detector only requires the quoted "eyJ..."
-    // value to be present in this file.
+    // Preserve the minted refresh token for diagnostics. The GUI client does
+    // not accept this plaintext JWT as its cached credential.
     format!(
         "\"MachineUserConfigStore\"\n{{\n\t\"Software\"\n\t{{\n\t\t\"Valve\"\n\t\t{{\n\t\t\t\"Steam\"\n\t\t\t{{\n\t\t\t\t\"ConnectCache\"\n\t\t\t\t{{\n\t\t\t\t\t\"{id}\"\t\t\"{token}\"\n\t\t\t\t}}\n\t\t\t}}\n\t\t}}\n\t}}\n}}\n",
         id = steam_id64,
@@ -131,19 +129,23 @@ mod tests {
     }
 
     #[test]
-    fn written_session_is_classified_ok() {
+    fn written_session_is_not_gui_valid() {
         let dir = tempfile::tempdir().unwrap();
         let steam_id = 76_561_198_727_542_502u64;
         let future = chrono::Utc::now().timestamp() + 200 * 86_400;
         write_session(dir.path(), "vm-1", &sample(steam_id, future)).unwrap();
 
-        // Detector accepts the minted artifacts.
+        // Plaintext JWT artifacts are not a GUI-valid Steam session.
         let status = accounts::classify_session_status(
             dir.path(),
             "vm-1",
             accounts::DEFAULT_WARN_WITHIN_DAYS,
         );
-        assert_eq!(status, SessionStatus::Ok, "minted session must classify Ok");
+        assert_eq!(
+            status,
+            SessionStatus::NoToken,
+            "minted JWT-only sessions must not classify as GUI-valid"
+        );
 
         // Files exist where expected.
         let config = dir.path().join("vm-1").join("config");
