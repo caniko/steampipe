@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::core::config::{LogLineMatches, Scene, SceneSync, VmDef, WindowTarget};
+use crate::core::config::{LogLineMatches, Scene, SceneSync, VmDef, VmName, IpAddr, WindowTarget};
 
 use super::{SceneBackend, shell_quote};
 
@@ -367,7 +367,9 @@ struct SwayWindowProperties {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::backend::CmdOutput;
     use crate::core::config::WaitFor;
+    use std::pin::Pin;
 
     fn tree(json: &str) -> SwayNode {
         serde_json::from_str(json).unwrap()
@@ -496,5 +498,314 @@ mod tests {
         };
         let target = scene_window_target(&scene).unwrap().unwrap();
         assert_eq!(target.app_id.as_deref(), Some("regicide"));
+    }
+
+    // ── Mock backend tests ─────────────────────────────────────────────
+
+    /// A SceneBackend that returns canned responses keyed by command prefix.
+    /// Records invocations for inspection.
+    struct MockBackend {
+        canned: std::collections::HashMap<String, CmdOutput>,
+        calls: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl MockBackend {
+        fn new(canned: std::collections::HashMap<String, CmdOutput>) -> Self {
+            Self {
+                canned,
+                calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn record(&self, ip: &str, cmd: &str) {
+            self.calls.lock().unwrap().push(format!("{ip}:{cmd}"));
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+
+        fn last_call(&self) -> String {
+            self.calls.lock().unwrap().last().cloned().unwrap_or_default()
+        }
+    }
+
+    impl SceneBackend for MockBackend {
+        fn run_cmd<'a>(
+            &'a self,
+            ip: &'a str,
+            cmd: &'a str,
+        ) -> Pin<Box<dyn Future<Output = CmdOutput> + Send + 'a>> {
+            self.record(ip, cmd);
+            let owned = self
+                .canned
+                .iter()
+                .find_map(|(prefix, output)| {
+                    if cmd.starts_with(prefix.as_str()) {
+                        Some(output.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(CmdOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                });
+            Box::pin(std::future::ready(owned))
+        }
+    }
+
+    fn vm() -> VmDef {
+        VmDef {
+            name: VmName("vm-1".into()),
+            ip: IpAddr("10.0.100.1".into()),
+            index: 1,
+        }
+    }
+
+    fn sway_tree_json(app_id: &str, visible: bool) -> String {
+        format!(
+            r#"{{
+                "app_id": "{app_id}",
+                "visible": {visible},
+                "name": "Window",
+                "rect": {{"width": 1280, "height": 720}},
+                "nodes": [],
+                "floating_nodes": []
+            }}"#
+        )
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_file_exists_immediate() {
+        let mut canned = std::collections::HashMap::new();
+        canned.insert(
+            "test -e".into(),
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        let backend = MockBackend::new(canned);
+        let sync = SceneSync {
+            file_exists: Some("/tmp/marker".into()),
+            ..Default::default()
+        };
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_secs(5)).await;
+        assert!(result.is_ok(), "{:?}", result);
+        assert!(backend.call_count() >= 1);
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_file_exists_timeout() {
+        let backend = MockBackend::new(std::collections::HashMap::new());
+        let sync = SceneSync {
+            file_exists: Some("/tmp/never-appears".into()),
+            ..Default::default()
+        };
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_millis(100)).await;
+        assert!(result.is_err(), "expected timeout error");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("timed out"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_fixed_ms_immediate() {
+        let backend = MockBackend::new(std::collections::HashMap::new());
+        let sync = SceneSync {
+            fixed_ms: Some(1),
+            ..Default::default()
+        };
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_secs(5)).await;
+        assert!(result.is_ok(), "{:?}", result);
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_fixed_ms_timeout() {
+        let backend = MockBackend::new(std::collections::HashMap::new());
+        let sync = SceneSync {
+            fixed_ms: Some(10_000), // longer than timeout
+            ..Default::default()
+        };
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_millis(50)).await;
+        assert!(result.is_err(), "expected timeout error");
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_window_visible_immediate() {
+        let mut canned = std::collections::HashMap::new();
+        canned.insert(
+            "swaymsg".into(),
+            CmdOutput {
+                stdout: sway_tree_json("my-app", true),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        let backend = MockBackend::new(canned);
+        let sync = SceneSync {
+            window_visible: Some("my-app".into()),
+            min_age_ms: Some(0),
+            ..Default::default()
+        };
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_secs(5)).await;
+        assert!(result.is_ok(), "{:?}", result);
+        assert!(backend.call_count() >= 1);
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_window_visible_not_found_timeout() {
+        let mut canned = std::collections::HashMap::new();
+        canned.insert(
+            "swaymsg".into(),
+            CmdOutput {
+                stdout: sway_tree_json("other-app", true),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        let backend = MockBackend::new(canned);
+        let sync = SceneSync {
+            window_visible: Some("missing-app".into()),
+            ..Default::default()
+        };
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_millis(100)).await;
+        assert!(result.is_err(), "expected timeout error");
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_sway_node_named_found() {
+        let mut canned = std::collections::HashMap::new();
+        canned.insert(
+            "swaymsg".into(),
+            CmdOutput {
+                stdout: sway_tree_json("my-app", true),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        let backend = MockBackend::new(canned);
+        let sync = SceneSync {
+            sway_node_named: Some("Window".into()),
+            ..Default::default()
+        };
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_secs(5)).await;
+        assert!(result.is_ok(), "{:?}", result);
+    }
+
+    #[tokio::test]
+    async fn wait_for_sync_empty_predicate_errors() {
+        let backend = MockBackend::new(std::collections::HashMap::new());
+        let sync = SceneSync::default();
+        let prepared = PreparedSync {
+            started_at: std::time::Instant::now(),
+            log_offset: None,
+        };
+
+        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_secs(5)).await;
+        assert!(result.is_err(), "expected error for empty predicate");
+    }
+
+    #[tokio::test]
+    async fn prepare_sync_with_log_line_matches_records_offset() {
+        let mut canned = std::collections::HashMap::new();
+        canned.insert(
+            "wc -c".into(),
+            CmdOutput {
+                stdout: "12345\n".into(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        let backend = MockBackend::new(canned);
+        let sync = SceneSync {
+            log_line_matches: Some(LogLineMatches {
+                path: "/var/log/game.log".into(),
+                regex: "ERROR".into(),
+            }),
+            ..Default::default()
+        };
+
+        let prepared = prepare_sync(&backend, &vm(), &sync).await.unwrap();
+        assert_eq!(prepared.log_offset, Some(12345));
+    }
+
+    #[tokio::test]
+    async fn wait_for_window_target_immediate_match() {
+        let mut canned = std::collections::HashMap::new();
+        canned.insert(
+            "swaymsg".into(),
+            CmdOutput {
+                stdout: sway_tree_json("game-app", true),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        let backend = MockBackend::new(canned);
+        let target = WindowTarget {
+            app_id: Some("game-app".into()),
+            title: None,
+            class: None,
+        };
+        let matched = poll_window_target(&backend, &vm(), &target).await.unwrap();
+        assert!(matched);
+    }
+
+    #[tokio::test]
+    async fn wait_for_window_target_no_match() {
+        let mut canned = std::collections::HashMap::new();
+        canned.insert(
+            "swaymsg".into(),
+            CmdOutput {
+                stdout: sway_tree_json("game-app", true),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        let backend = MockBackend::new(canned);
+        let target = WindowTarget {
+            app_id: Some("other-app".into()),
+            title: None,
+            class: None,
+        };
+        let matched = poll_window_target(&backend, &vm(), &target).await.unwrap();
+        assert!(!matched);
     }
 }

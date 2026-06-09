@@ -2923,4 +2923,195 @@ mod tests {
         assert!(proj.heartbeat_stall_secs.is_none());
         assert!(proj.hooks.is_none());
     }
+
+    // ── resolve_project_path ────────────────────────────────────────────
+
+    #[test]
+    fn resolve_project_path_leaves_absolute_alone() {
+        assert_eq!(
+            resolve_project_path(Path::new("/proj"), Path::new("/abs/path")),
+            PathBuf::from("/abs/path")
+        );
+    }
+
+    #[test]
+    fn resolve_project_path_joins_relative() {
+        assert_eq!(
+            resolve_project_path(Path::new("/proj"), Path::new("rel/path")),
+            PathBuf::from("/proj/rel/path")
+        );
+    }
+
+    // ── validate_scene_name ─────────────────────────────────────────────
+
+    #[test]
+    fn validate_scene_name_accepts_alphanumeric() {
+        assert!(validate_scene_name("main-menu_01").is_ok());
+    }
+
+    #[test]
+    fn validate_scene_name_rejects_empty() {
+        let err = validate_scene_name("").unwrap_err();
+        assert!(err.contains("cannot be empty"), "{err}");
+    }
+
+    #[test]
+    fn validate_scene_name_rejects_dot() {
+        let err = validate_scene_name(".").unwrap_err();
+        assert!(err.contains("must match"), "{err}");
+    }
+
+    #[test]
+    fn validate_scene_name_rejects_dot_dot() {
+        let err = validate_scene_name("..").unwrap_err();
+        assert!(err.contains("must match"), "{err}");
+    }
+
+    #[test]
+    fn validate_scene_name_rejects_path_traversal() {
+        let err = validate_scene_name("a/../b").unwrap_err();
+        assert!(err.contains("must match"), "{err}");
+    }
+
+    #[test]
+    fn validate_scene_name_rejects_shell_metacharacters() {
+        let err = validate_scene_name("foo;rm -rf /").unwrap_err();
+        assert!(err.contains("must match"), "{err}");
+    }
+
+    #[test]
+    fn validate_scene_name_rejects_too_long() {
+        let long = "a".repeat(129);
+        let err = validate_scene_name(&long).unwrap_err();
+        assert!(err.contains("too long"), "{err}");
+    }
+
+    #[test]
+    fn validate_scene_name_accepts_max_length() {
+        let max = "a".repeat(128);
+        assert!(validate_scene_name(&max).is_ok());
+    }
+
+    // ── vm_defs_for_ids ─────────────────────────────────────────────────
+
+    #[test]
+    fn vm_defs_for_ids_rejects_zero() {
+        let err = ClusterConfig::<Unchecked>::vm_defs_for_ids("10.0.100", 7, &[0])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside"), "{err}");
+    }
+
+    #[test]
+    fn vm_defs_for_ids_rejects_above_max() {
+        let err = ClusterConfig::<Unchecked>::vm_defs_for_ids("10.0.100", 7, &[8])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("outside"), "{err}");
+    }
+
+    #[test]
+    fn vm_defs_for_ids_accepts_valid_range() {
+        let vms = ClusterConfig::<Unchecked>::vm_defs_for_ids("10.0.100", 7, &[1, 3, 5]).unwrap();
+        assert_eq!(vms.len(), 3);
+        assert_eq!(&*vms[0].name, "vm-1");
+        assert_eq!(&*vms[0].ip, "10.0.100.1");
+        assert_eq!(&*vms[1].ip, "10.0.100.3");
+        assert_eq!(&*vms[2].ip, "10.0.100.5");
+    }
+
+    #[test]
+    fn vm_defs_for_ids_duplicates_are_not_rejected() {
+        // vm_defs_for_ids does not validate uniqueness; duplicates produce
+        // identical VmDef entries. This test documents the current behavior.
+        let vms = ClusterConfig::<Unchecked>::vm_defs_for_ids("10.0.100", 7, &[1, 1]).unwrap();
+        assert_eq!(vms.len(), 2);
+        assert_eq!(vms[0].index, vms[1].index);
+    }
+
+    // ── from_parts clamping ─────────────────────────────────────────────
+
+    #[test]
+    fn from_parts_clamps_requested_vm_count_to_max_vms() {
+        let root = std::env::temp_dir();
+        let proj = Some(ProjectConfig {
+            binary_name: Some("g".into()),
+            cargo_package: Some("g".into()),
+            vm_user: Some("u".into()),
+            remote_dir: Some("/r".into()),
+            max_vms: Some(3),
+            ..Default::default()
+        });
+        // Request 7 VMs but max_vms is 3
+        let config = ClusterConfig::from_parts(&root, proj, 7, None, None, None).unwrap();
+        assert_eq!(config.vms.len(), 3);
+        assert_eq!(config.max_vms, 3);
+    }
+
+    // ── generate_yh_cluster_config ──────────────────────────────────────
+
+    #[test]
+    fn generate_yh_cluster_config_produces_valid_toml() {
+        let tmp = tempfile::tempdir().unwrap();
+        let toml_str = generate_yh_cluster_config(tmp.path(), Some(3), None, None, None, None, None, None);
+        let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed["vm_count"].as_integer(), Some(3));
+        assert!(parsed["project_root"].as_str().unwrap().ends_with(tmp.path().display().to_string().as_str()));
+    }
+
+    #[test]
+    fn generate_yh_cluster_config_with_all_overrides() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state_dir = tmp.path().join("state");
+        let lock_dir = tmp.path().join("locks");
+        let key = tmp.path().join("key");
+        let creds = tmp.path().join("creds.toml");
+        let toml_str = generate_yh_cluster_config(
+            tmp.path(),
+            Some(7),
+            Some("tournament"),
+            Some(BackendKind::Docker),
+            Some(&state_dir),
+            Some(&lock_dir),
+            Some(&key),
+            Some(&creds),
+        );
+        let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
+        assert_eq!(parsed["vm_count"].as_integer(), Some(7));
+        assert_eq!(parsed["cluster"].as_str(), Some("tournament"));
+        assert_eq!(parsed["backend"].as_str(), Some("docker"));
+        assert!(parsed["state_dir"].as_str().unwrap().ends_with("state"));
+        assert!(parsed["lock_dir"].as_str().unwrap().ends_with("locks"));
+        assert!(parsed["ssh_key"].as_str().unwrap().ends_with("key"));
+        assert!(parsed["project_root"].as_str().is_some());
+    }
+
+    // ── Visual config validation ────────────────────────────────────────
+
+    #[test]
+    fn visual_validator_kind_inferred_from_visual_block() {
+        let proj: ProjectConfig = toml::from_str(r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+            [visual]
+            golden_dir = "golden"
+        "#).unwrap();
+        assert_eq!(proj.effective_validator_kind(None), ValidatorKind::Golden);
+    }
+
+    #[test]
+    fn visual_validator_kind_shell_requires_validator() {
+        let proj: ProjectConfig = toml::from_str(r#"
+            binary_name = "g"
+            cargo_package = "g"
+            vm_user = "u"
+            remote_dir = "/r"
+            [profile.p]
+            validator_kind = "shell"
+        "#).unwrap();
+        let profile = proj.profile.as_ref().unwrap().get("p");
+        assert_eq!(proj.effective_validator_kind(profile), ValidatorKind::Shell);
+    }
 }

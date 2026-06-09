@@ -576,4 +576,234 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, VisualError::ResolutionMismatch { .. }));
     }
+
+    // ── Pure unit tests (no I/O) ────────────────────────────────────────
+
+    #[test]
+    fn max_pixel_delta_identical_images() {
+        let img = image(4, 4, [20, 40, 60, 255]);
+        assert_eq!(max_pixel_delta(&img, &img), 0);
+    }
+
+    #[test]
+    fn max_pixel_delta_one_pixel_diff() {
+        let actual = image(4, 4, [20, 40, 60, 255]);
+        let mut golden = image(4, 4, [20, 40, 60, 255]);
+        golden.put_pixel(2, 2, Rgba([21, 40, 60, 255]));
+        assert_eq!(max_pixel_delta(&actual, &golden), 1);
+    }
+
+    #[test]
+    fn max_pixel_delta_large_diff() {
+        let actual = image(4, 4, [0, 0, 0, 255]);
+        let mut golden = image(4, 4, [0, 0, 0, 255]);
+        golden.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        assert_eq!(max_pixel_delta(&actual, &golden), 255);
+    }
+
+    #[test]
+    fn max_pixel_delta_alpha_channel() {
+        let actual = image(2, 2, [0, 0, 0, 0]);
+        let golden = image(2, 2, [0, 0, 0, 255]);
+        assert_eq!(max_pixel_delta(&actual, &golden), 255);
+    }
+
+    #[test]
+    fn max_pixel_delta_empty_no_panic() {
+        let img = image(0, 0, [0, 0, 0, 0]);
+        assert_eq!(max_pixel_delta(&img, &img), 0);
+    }
+
+    #[test]
+    fn delta_ramp_low_delta() {
+        let color = delta_ramp(0);
+        assert_eq!(color[0], 0);   // red = 0
+        assert_eq!(color[2], 255); // blue = 255
+    }
+
+    #[test]
+    fn delta_ramp_high_delta() {
+        let color = delta_ramp(255);
+        assert_eq!(color[0], 255); // red = 255
+        assert_eq!(color[2], 0);   // blue = 0
+    }
+
+    #[test]
+    fn delta_ramp_mid_delta() {
+        let color = delta_ramp(128);
+        // t = 128/255 ≈ 0.502, red ≈ 128, blue ≈ 127
+        assert!(color[0] > 100 && color[0] < 200);
+        assert!(color[2] > 100 && color[2] < 200);
+        assert_eq!(color[1], 48); // green always 48
+        assert_eq!(color[3], 255); // alpha always 255
+    }
+
+    #[test]
+    fn effective_tolerance_scene_overrides_default() {
+        let default_tol = Tolerance {
+            ssim: Some(0.9),
+            max_pixel_delta: Some(10),
+        };
+        let scene = Scene {
+            name: "test".into(),
+            tolerance: Some(Tolerance {
+                ssim: Some(0.99),
+                max_pixel_delta: Some(5),
+            }),
+            ..Default::default()
+        };
+        let tol = effective_tolerance(Some(&default_tol), &scene);
+        assert_eq!(tol.ssim, 0.99);
+        assert_eq!(tol.max_pixel_delta, 5);
+    }
+
+    #[test]
+    fn effective_tolerance_falls_back_to_default() {
+        let default_tol = Tolerance {
+            ssim: Some(0.9),
+            max_pixel_delta: Some(10),
+        };
+        let scene = Scene {
+            name: "test".into(),
+            tolerance: None,
+            ..Default::default()
+        };
+        let tol = effective_tolerance(Some(&default_tol), &scene);
+        assert_eq!(tol.ssim, 0.9);
+        assert_eq!(tol.max_pixel_delta, 10);
+    }
+
+    #[test]
+    fn effective_tolerance_falls_back_to_hardcoded_defaults() {
+        let scene = Scene {
+            name: "test".into(),
+            tolerance: None,
+            ..Default::default()
+        };
+        let tol = effective_tolerance(None, &scene);
+        assert_eq!(tol.ssim, 0.985);
+        assert_eq!(tol.max_pixel_delta, 255);
+    }
+
+    #[test]
+    fn effective_tolerance_partial_scene_tolerance() {
+        let scene = Scene {
+            name: "test".into(),
+            tolerance: Some(Tolerance {
+                ssim: Some(0.95),
+                max_pixel_delta: None,
+            }),
+            ..Default::default()
+        };
+        let tol = effective_tolerance(None, &scene);
+        assert_eq!(tol.ssim, 0.95);
+        assert_eq!(tol.max_pixel_delta, 255);
+    }
+
+    #[test]
+    fn validate_resolution_matching() {
+        let img = image(64, 64, [0, 0, 0, 0]);
+        let path = Path::new("test.png");
+        assert!(validate_resolution("test", path, &img, (64, 64)).is_ok());
+    }
+
+    #[test]
+    fn validate_resolution_width_mismatch() {
+        let img = image(32, 64, [0, 0, 0, 0]);
+        let path = Path::new("test.png");
+        let err = validate_resolution("test", path, &img, (64, 64)).unwrap_err();
+        assert!(matches!(err, VisualError::ResolutionMismatch { .. }));
+    }
+
+    #[test]
+    fn validate_resolution_zero_dimensions() {
+        let img = image(0, 64, [0, 0, 0, 0]);
+        let path = Path::new("test.png");
+        let err = validate_resolution("test", path, &img, (0, 64)).unwrap_err();
+        assert!(matches!(err, VisualError::Config { .. }));
+    }
+
+    #[test]
+    fn expected_resolution_uses_golden_when_neither_set() {
+        let scene = Scene {
+            name: "test".into(),
+            resolution: None,
+            ..Default::default()
+        };
+        let golden = image(128, 128, [0, 0, 0, 0]);
+        let (w, h) = expected_resolution(&scene, &golden).unwrap();
+        assert_eq!(w, 128);
+        assert_eq!(h, 128);
+    }
+
+    #[test]
+    fn expected_resolution_uses_scene_when_both_set() {
+        let scene = Scene {
+            name: "test".into(),
+            resolution: Some(Resolution {
+                width: Some(100),
+                height: Some(200),
+            }),
+            ..Default::default()
+        };
+        let golden = image(128, 128, [0, 0, 0, 0]);
+        let (w, h) = expected_resolution(&scene, &golden).unwrap();
+        assert_eq!(w, 100);
+        assert_eq!(h, 200);
+    }
+
+    #[test]
+    fn expected_resolution_errors_when_one_dimension_set() {
+        let scene = Scene {
+            name: "test".into(),
+            resolution: Some(Resolution {
+                width: Some(100),
+                height: None,
+            }),
+            ..Default::default()
+        };
+        let golden = image(128, 128, [0, 0, 0, 0]);
+        let err = expected_resolution(&scene, &golden).unwrap_err();
+        assert!(matches!(err, VisualError::Config { .. }));
+    }
+
+    #[test]
+    fn comparison_result_sidecar_maps_all_fields() {
+        let diff = image(4, 4, [0, 0, 0, 0]);
+        let result = ComparisonResult {
+            scene: "main".into(),
+            passed: true,
+            ssim: 0.995,
+            max_delta: 3,
+            threshold: 0.99,
+            max_pixel_delta_threshold: 10,
+            mask_area_percent: 0.5,
+            masked_pixels: 100,
+            total_pixels: 1000,
+            diff_image: diff,
+        };
+        let sidecar = result.sidecar();
+        assert_eq!(sidecar.passed, true);
+        assert_eq!(sidecar.ssim, 0.995);
+        assert_eq!(sidecar.mask_area_percent, 0.5);
+        assert_eq!(sidecar.masked_pixels, 100);
+    }
+
+    #[test]
+    fn render_diff_detects_changed_area() {
+        let width = 8;
+        let height = 8;
+        let mut actual = image(width, height, [20, 40, 60, 255]);
+        let golden = image(width, height, [20, 40, 60, 255]);
+        // Change top-left pixel
+        actual.put_pixel(0, 0, Rgba([255, 0, 0, 255]));
+        let diff = render_diff(&actual, &golden, &[]);
+        // Top-left pixel should be different (not grey)
+        let tl = diff.get_pixel(0, 0);
+        assert!(tl[0] > 0 || tl[1] > 0 || tl[2] > 0);
+        assert_ne!(tl[0], tl[1]); // not grey if color diff
+        // Bottom-right pixel should be grey (unchanged)
+        let br = diff.get_pixel(width - 1, height - 1);
+        assert_eq!(br[3], 77); // alpha = 77 for identical pixels
+    }
 }

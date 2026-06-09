@@ -816,3 +816,128 @@ pub async fn serve() -> anyhow::Result<()> {
     service.waiting().await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── strip_ansi ──────────────────────────────────────────────────────
+
+    #[test]
+    fn strip_ansi_no_escapes() {
+        let input = "hello world";
+        assert_eq!(strip_ansi(input), "hello world");
+    }
+
+    #[test]
+    fn strip_ansi_single_escape() {
+        let input = "\x1b[31mred\x1b[0m";
+        assert_eq!(strip_ansi(input), "red");
+    }
+
+    #[test]
+    fn strip_ansi_multiple_escapes() {
+        let input = "\x1b[1m\x1b[32mbold green\x1b[0m";
+        assert_eq!(strip_ansi(input), "bold green");
+    }
+
+    #[test]
+    fn strip_ansi_empty_string() {
+        assert_eq!(strip_ansi(""), "");
+    }
+
+    #[test]
+    fn strip_ansi_no_escape_just_text() {
+        let input = "plain text with [brackets] and normal chars";
+        assert_eq!(strip_ansi(input), input);
+    }
+
+    #[test]
+    fn strip_ansi_lone_escape_is_removed() {
+        // ESC without '[' is silently dropped (the CSI starter)
+        let input = "a\x1bb";
+        assert_eq!(strip_ansi(input), "ab");
+    }
+
+    #[test]
+    fn strip_ansi_partial_escape() {
+        // "ab\x1b[12c": ESC, '[', '1', '2', 'c'(terminator) → "ab"
+        let input = "ab\x1b[12c";
+        assert_eq!(strip_ansi(input), "ab");
+    }
+
+    #[test]
+    fn strip_ansi_complex_csi() {
+        let input = "\x1b[38;2;255;0;0mcolored\x1b[0m done";
+        assert_eq!(strip_ansi(input), "colored done");
+    }
+
+    // ── default_cluster ─────────────────────────────────────────────────
+
+    #[test]
+    fn default_cluster_is_1v1() {
+        assert_eq!(default_cluster(), "1v1");
+    }
+
+    // ── require_vm_capacity ─────────────────────────────────────────────
+
+    #[test]
+    fn require_vm_capacity_sufficient() {
+        let config = ClusterConfig::for_test(3);
+        assert!(require_vm_capacity(&config, 4).is_ok());
+    }
+
+    #[test]
+    fn require_vm_capacity_insufficient() {
+        let config = ClusterConfig::for_test(1);
+        let err = require_vm_capacity(&config, 4).unwrap_err();
+        assert!(err.message.contains("Cannot run test"), "{}", err.message);
+    }
+
+    #[test]
+    fn require_vm_capacity_exact_match() {
+        let config = ClusterConfig::for_test(2);
+        // 2 players require 1 VM (host + 1 VM)
+        assert!(require_vm_capacity(&config, 2).is_ok());
+    }
+
+    #[test]
+    fn require_vm_capacity_zero_players_is_ok() {
+        let config = ClusterConfig::for_test(0);
+        // 0 players: saturating_sub gives 0 VMs needed
+        assert!(require_vm_capacity(&config, 0).is_ok());
+    }
+
+    // ── require_claimed_vms ─────────────────────────────────────────────
+
+    #[test]
+    fn require_claimed_vms_ok_when_present() {
+        let config = ClusterConfig::for_test(2);
+        assert!(require_claimed_vms(&config, "test").is_ok());
+    }
+
+    #[test]
+    fn require_claimed_vms_errors_when_empty() {
+        let config = ClusterConfig::for_test(0);
+        let err = require_claimed_vms(&config, "deploy").unwrap_err();
+        assert!(err.message.contains("deploy"), "{}", err.message);
+    }
+
+    // ── ClusterParams ───────────────────────────────────────────────────
+
+    #[test]
+    fn cluster_params_default_vm_count_1v1() {
+        let params = ClusterParams {
+            cluster: "1v1".into(),
+            vm_count: None,
+        };
+        assert_eq!(params.cluster, "1v1");
+    }
+
+    #[test]
+    fn cluster_params_default_vm_count_tournament() {
+        let params: ClusterParams = serde_json::from_str(r#"{"cluster": "tournament"}"#).unwrap();
+        assert_eq!(params.cluster, "tournament");
+        assert_eq!(params.vm_count, None);
+    }
+}

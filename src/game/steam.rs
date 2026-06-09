@@ -78,6 +78,7 @@ if ! pgrep -x sway >/dev/null; then
     exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
+export DISPLAY=:0
 for socket in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
     if [ -S "$socket" ]; then
         export SWAYSOCK="$socket"
@@ -156,6 +157,7 @@ if ! pgrep -x sway >/dev/null; then
     exit 1
 fi
 export WAYLAND_DISPLAY=wayland-1
+export DISPLAY=:0
 for socket in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
     if [ -S "$socket" ]; then
         export SWAYSOCK="$socket"
@@ -1234,13 +1236,26 @@ fn spawn_guard_dialog(
         .stderr(Stdio::inherit())
         .kill_on_drop(true);
 
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            eprintln!(
-                "  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}"
-            );
-            return None;
+    let mut text_busy_retries = 0;
+    let mut child = 'spawn: loop {
+        match command.spawn() {
+            Ok(child) => break 'spawn child,
+            Err(error) if error.raw_os_error() == Some(26) => {
+                text_busy_retries += 1;
+                if text_busy_retries > 20 {
+                    eprintln!(
+                        "  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}"
+                    );
+                    return None;
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => {
+                eprintln!(
+                    "  Could not launch the Steam Guard dialog ({GUARD_PROMPT_BIN_NAME}): {error}"
+                );
+                return None;
+            }
         }
     };
     let stdin = child.stdin.take()?;
@@ -1301,46 +1316,7 @@ pub(crate) async fn login(
         }
     };
 
-    if creds.is_some() {
-        let config = config.clone();
-        let login_runners_dir = login_runners_dir.to_path_buf();
-        let creds = creds.cloned();
-        let login_state_dir = login_state_dir.map(Path::to_path_buf);
-        let guard_data_path = guard_data_path.map(Path::to_path_buf);
-        let guard_provider = guard_provider.clone();
-        let results = par_each_vm(&targets, move |vm| {
-            let config = config.clone();
-            let login_runners_dir = login_runners_dir.clone();
-            let creds = creds.clone();
-            let login_state_dir = login_state_dir.clone();
-            let guard_data_path = guard_data_path.clone();
-            let guard_provider = guard_provider.clone();
-            async move {
-                let mut log = LoginLog::buffered();
-                let attempt = login_vm_attempt(
-                    &config,
-                    &vm,
-                    &login_runners_dir,
-                    creds.as_ref(),
-                    login_state_dir.as_deref(),
-                    guard_data_path.as_deref(),
-                    force,
-                    &guard_provider,
-                    &mut log,
-                )
-                .await;
-                LoginReport {
-                    vm_index: vm.index,
-                    vm_name: vm.name.to_string(),
-                    output: log.into_output(),
-                    attempt,
-                }
-            }
-        })
-        .await?;
-
-        return finish_login_reports(results, targets.len());
-    }
+    let _ = guard_data_path;
 
     let mut failed = 0usize;
     let mut logged_in = 0usize;
@@ -1735,115 +1711,18 @@ async fn login_single_vm_automated(
 /// startup. Existing valid login-state artifacts are left untouched unless
 /// `force` is set.
 pub(crate) async fn refresh<S>(
-    config: &ClusterConfig<S>,
-    target: Option<&str>,
-    continue_from: bool,
-    creds: Option<&CredentialsMap>,
-    force: bool,
-    login_state_dir: Option<&Path>,
-    guard_data_path: Option<&Path>,
-    guard_provider: &GuardProvider,
+    _config: &ClusterConfig<S>,
+    _target: Option<&str>,
+    _continue_from: bool,
+    _creds: Option<&CredentialsMap>,
+    _force: bool,
+    _login_state_dir: Option<&Path>,
+    _guard_data_path: Option<&Path>,
+    _guard_provider: &GuardProvider,
 ) -> anyhow::Result<LoginOutcome> {
-    let Some(creds) = creds else {
-        anyhow::bail!("steam refresh requires configured Steam credentials");
-    };
-    let Some(login_state_dir) = login_state_dir else {
-        anyhow::bail!("steam refresh requires loginStateDir from the steampipe host config");
-    };
-
-    let targets = config.resolve_targets(target, continue_from)?;
-    let login_state_dir = login_state_dir.to_path_buf();
-    let guard_data_path = guard_data_path.map(Path::to_path_buf);
-    let creds = creds.clone();
-    let guard_provider = guard_provider.clone();
-
-    let results = par_each_vm(&targets, move |vm| {
-        let creds = creds.clone();
-        let login_state_dir = login_state_dir.clone();
-        let guard_data_path = guard_data_path.clone();
-        let guard_provider = guard_provider.clone();
-        async move {
-            let mut log = LoginLog::buffered();
-            let Some(vm_creds) = creds.get::<str>(&vm.name) else {
-                return LoginReport {
-                    vm_index: vm.index,
-                    vm_name: vm.name.to_string(),
-                    output: log.into_output(),
-                    attempt: LoginAttempt::Skipped(format!(
-                        "  {}: no credentials configured, skipping",
-                        vm.name
-                    )),
-                };
-            };
-
-            let vm_name = vm.name.to_string();
-            if !force {
-                let status = accounts::classify_session_status(
-                    &login_state_dir,
-                    &vm_name,
-                    accounts::DEFAULT_WARN_WITHIN_DAYS,
-                );
-                if status == SessionStatus::Ok {
-                    let info = accounts::read_account_info(
-                        &login_state_dir,
-                        vm_name,
-                        None,
-                        accounts::DEFAULT_WARN_WITHIN_DAYS,
-                    );
-                    let persona = info.persona.as_deref().unwrap_or("unknown");
-                    return LoginReport {
-                        vm_index: vm.index,
-                        vm_name: vm.name.to_string(),
-                        output: log.into_output(),
-                        attempt: LoginAttempt::Skipped(format!(
-                            "  {}: already fresh ({persona}), skipping (use --force to re-mint)",
-                            vm.name
-                        )),
-                    };
-                }
-            }
-
-            let reason = if force {
-                "forced refresh".to_string()
-            } else {
-                accounts::classify_session_status(
-                    &login_state_dir,
-                    &vm_name,
-                    accounts::DEFAULT_WARN_WITHIN_DAYS,
-                )
-                .login_reason()
-                .to_string()
-            };
-            log.line(format!("  {}: {reason}, refreshing", vm.name));
-            let attempt = match mint_and_write_session(
-                vm_creds,
-                &vm_name,
-                &reason,
-                &guard_provider,
-                Some(&login_state_dir),
-                guard_data_path.as_deref(),
-                &mut log,
-            )
-            .await
-            {
-                Ok(LoginOutcome::Completed) => LoginAttempt::LoggedIn,
-                Ok(LoginOutcome::GuardCodeNeeded(needed)) => LoginAttempt::GuardCodeNeeded(needed),
-                Ok(LoginOutcome::ManualCompletionNeeded) => LoginAttempt::Failed(anyhow::anyhow!(
-                    "manual completion is not supported by steam refresh"
-                )),
-                Err(err) => LoginAttempt::Failed(err),
-            };
-            LoginReport {
-                vm_index: vm.index,
-                vm_name: vm.name.to_string(),
-                output: log.into_output(),
-                attempt,
-            }
-        }
-    })
-    .await?;
-
-    finish_login_reports(results, targets.len())
+    anyhow::bail!(
+        "steam refresh cannot satisfy the Steam GUI client. Run `cluster-ctl steam login <vm> --force` to create a GUI-valid Steam session."
+    )
 }
 
 /// Mint a SteamClient session headlessly and persist it to the VM's login-state
@@ -2094,20 +1973,17 @@ pub async fn auto_login<S>(
     }
 
     println!("==> Auto-login Steam on {} VM(s)...", with_creds.len());
-    let guard_provider = GuardProvider::select(None, LoginContext::force_non_interactive(), true);
     let login_state_dir = login_state_dir.map(Path::to_path_buf);
-    let guard_data_path = guard_data_path.map(Path::to_path_buf);
+    let _ = guard_data_path;
 
     let results = par_each_vm(vms, |vm| {
         let creds = creds.clone();
-        let guard_provider = guard_provider.clone();
         let login_state_dir = login_state_dir.clone();
-        let guard_data_path = guard_data_path.clone();
         async move {
             let Some(vm_creds) = creds.get::<str>(&vm.name) else {
                 return AutoLoginReport::no_credentials(vm.name);
             };
-            let mut log = LoginLog::silent();
+            let _ = vm_creds;
             let vm_name = vm.name.to_string();
             match auto_login_action(login_state_dir.as_deref(), &vm_name) {
                 AutoLoginAction::UseExisting => {
@@ -2116,33 +1992,14 @@ pub async fn auto_login<S>(
                         "existing Steam session OK".to_string(),
                     );
                 }
-                AutoLoginAction::MintSession { status } => {
-                    let reason = status.login_reason();
-                    match mint_and_write_session(
-                        vm_creds,
-                        &vm_name,
-                        reason,
-                        &guard_provider,
-                        login_state_dir.as_deref(),
-                        guard_data_path.as_deref(),
-                        &mut log,
-                    )
-                    .await
-                    {
-                        Ok(LoginOutcome::Completed) => AutoLoginReport::ok(
-                            vm.name,
-                            format!("refreshed Steam session ({reason})"),
-                        ),
-                        Ok(LoginOutcome::GuardCodeNeeded(needed)) => {
-                            eprintln!("  {needed}");
-                            AutoLoginReport::failed(vm.name)
-                        }
-                        Ok(LoginOutcome::ManualCompletionNeeded) => AutoLoginReport::failed(vm.name),
-                        Err(e) => {
-                            eprintln!("  {}: login failed: {e}", vm.name);
-                            AutoLoginReport::failed(vm.name)
-                        }
-                    }
+                AutoLoginAction::LoginRequired { status } => {
+                    eprintln!(
+                        "  {}: {}. Run `cluster-ctl steam login {} --force` to create a GUI-valid Steam session.",
+                        vm.name,
+                        status.login_reason(),
+                        vm.name
+                    );
+                    AutoLoginReport::failed(vm.name)
                 }
                 AutoLoginAction::MissingLoginStateDir => {
                     eprintln!(
@@ -2210,7 +2067,7 @@ impl AutoLoginReport {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AutoLoginAction {
     UseExisting,
-    MintSession { status: SessionStatus },
+    LoginRequired { status: SessionStatus },
     MissingLoginStateDir,
 }
 
@@ -2226,7 +2083,7 @@ fn auto_login_action(login_state_dir: Option<&Path>, vm_name: &str) -> AutoLogin
     if status == SessionStatus::Ok {
         AutoLoginAction::UseExisting
     } else {
-        AutoLoginAction::MintSession { status }
+        AutoLoginAction::LoginRequired { status }
     }
 }
 
@@ -2237,8 +2094,8 @@ pub enum LoginOutcome {
     ManualCompletionNeeded,
 }
 
-/// Automated login: bootstraps account state with SteamCMD, starts Steam GUI,
-/// waits for GUI-side session evidence, and optionally activates a game key.
+/// Automated login: starts Steam GUI, types credentials, drives Steam Guard via
+/// the host prompt helper, and waits for real GUI-side session evidence.
 async fn automated_login(
     backend: &Backend,
     vm: &VmDef,
@@ -2250,65 +2107,212 @@ async fn automated_login(
     log: &mut LoginLog,
 ) -> anyhow::Result<LoginOutcome> {
     log.line(format!("  Logging in as {}...", creds.steam_user));
-    log.line("  Starting SteamCMD bootstrap session...");
+    log.line("  Starting Steam GUI and submitting credentials...");
 
-    let steamcmd = steamcmd_bootstrap_command(vm_user, &creds.steam_user, &creds.steam_pass);
-    let started = backend.run_cmd(&vm.ip, &steamcmd).await;
-    if !started.success || !steamcmd_started(&started.stdout) {
-        let stdout = redact_sensitive(&started.stdout, &[&creds.steam_pass]);
-        let stderr = redact_sensitive(&started.stderr, &[&creds.steam_pass]);
+    let password_secrets = [&creds.steam_pass as &str];
+    let started = backend
+        .run_cmd(
+            &vm.ip,
+            &steam_gui_submit_credentials_script(vm_user, &creds.steam_user, &creds.steam_pass),
+        )
+        .await;
+    let stdout = redact_sensitive(&started.stdout, &password_secrets);
+    let stderr = redact_sensitive(&started.stderr, &password_secrets);
+    if !started.success || !steam_gui_credentials_submitted(&stdout) {
         if stdout.trim().is_empty() && stderr.trim().is_empty() {
             let tail = vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
             anyhow::bail!(
-                "{}: SteamCMD bootstrap produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+                "{}: Steam GUI credential entry produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
                 vm.name
             );
         }
         anyhow::bail!(
-            "{}: SteamCMD bootstrap failed to start. stdout: {} stderr: {}",
+            "{}: Steam GUI credential entry failed. stdout: {} stderr: {}",
             vm.name,
             stdout,
             stderr
         );
     }
 
-    let wait =
-        wait_for_steamcmd_bootstrap(backend, vm, vm_user, state_dir, &[&creds.steam_pass]).await?;
-    if wait == SteamCmdWait::GuardRequired {
-        match complete_guard_login_with_provider(
-            backend,
-            vm,
-            creds,
-            vm_user,
-            state_dir,
-            login_reason,
-            guard_provider,
-            log,
-        )
-        .await?
-        {
-            SteamCmdWait::Complete => {}
-            SteamCmdWait::GuardRequired => {
+    let mut guard_session = guard_provider
+        .open_retry_session(&vm.name, &creds.steam_user, login_reason)
+        .await;
+    let mut previous_error: Option<String> = None;
+    for attempt in 0..8 {
+        match wait_for_steam_gui_login(backend, vm, vm_user, state_dir, &password_secrets).await? {
+            SteamGuiWait::LoggedIn => {
+                guard_session.confirm_success().await;
+                finish_steam_gui_login(backend, vm, creds, log).await?;
+                return Ok(LoginOutcome::Completed);
+            }
+            SteamGuiWait::GuardRequired if attempt < 7 => {
+                log.line(format!("  Steam Guard required for {}.", creds.steam_user));
+                let mut code = match guard_session.next_code(previous_error.as_deref()).await {
+                    GuardRetryNext::Code(code) => code,
+                    GuardRetryNext::Cancelled | GuardRetryNext::Unavailable => {
+                        return Ok(LoginOutcome::GuardCodeNeeded(GuardCodeNeeded::new(
+                            vm,
+                            &creds.steam_user,
+                            login_reason,
+                        )));
+                    }
+                };
+                if code.trim().is_empty() {
+                    code.zeroize();
+                    return Ok(LoginOutcome::GuardCodeNeeded(GuardCodeNeeded::new(
+                        vm,
+                        &creds.steam_user,
+                        login_reason,
+                    )));
+                }
+                log.line("  Typing Steam Guard code into Steam GUI...");
+                let typed = backend
+                    .run_cmd(&vm.ip, &steam_gui_submit_guard_code_script(vm_user, &code))
+                    .await;
+                let secrets = [&creds.steam_pass as &str, code.as_str()];
+                let stdout = redact_sensitive(&typed.stdout, &secrets);
+                let stderr = redact_sensitive(&typed.stderr, &secrets);
+                code.zeroize();
+                if !typed.success || !steam_gui_guard_submitted(&stdout) {
+                    anyhow::bail!(
+                        "{}: Steam Guard GUI entry failed. stdout: {} stderr: {}",
+                        vm.name,
+                        stdout,
+                        stderr
+                    );
+                }
+                match wait_for_steam_gui_login_with_timeout(
+                    backend,
+                    vm,
+                    vm_user,
+                    state_dir,
+                    &password_secrets,
+                    45,
+                    false,
+                )
+                .await?
+                {
+                    SteamGuiWait::LoggedIn => {
+                        guard_session.confirm_success().await;
+                        finish_steam_gui_login(backend, vm, creds, log).await?;
+                        return Ok(LoginOutcome::Completed);
+                    }
+                    SteamGuiWait::BadCredentials => {
+                        anyhow::bail!(
+                            "{}: Steam rejected the configured credentials for {}",
+                            vm.name,
+                            creds.steam_user
+                        );
+                    }
+                    SteamGuiWait::GuardRequired | SteamGuiWait::Timeout => {
+                        previous_error = Some(
+                            "Steam Guard code was rejected or did not complete login; enter the latest code."
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            SteamGuiWait::GuardRequired => {
                 return Ok(LoginOutcome::GuardCodeNeeded(GuardCodeNeeded::new(
                     vm,
                     &creds.steam_user,
                     login_reason,
                 )));
             }
+            SteamGuiWait::BadCredentials => {
+                anyhow::bail!(
+                    "{}: Steam rejected the configured credentials for {}",
+                    vm.name,
+                    creds.steam_user
+                );
+            }
+            SteamGuiWait::Timeout => {
+                anyhow::bail!(
+                    "{}: timed out waiting for Steam GUI login success, rejected credentials, or Steam Guard UI evidence",
+                    vm.name
+                );
+            }
         }
     }
 
-    finish_steam_login(
-        backend,
-        vm,
-        creds,
-        vm_user,
-        state_dir,
-        &[&creds.steam_pass],
-        log,
+    anyhow::bail!(
+        "{}: Steam Guard was not accepted after repeated GUI attempts",
+        vm.name
     )
-    .await?;
-    Ok(LoginOutcome::Completed)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SteamGuiWait {
+    LoggedIn,
+    GuardRequired,
+    BadCredentials,
+    Timeout,
+}
+
+async fn wait_for_steam_gui_login(
+    backend: &Backend,
+    vm: &VmDef,
+    vm_user: &str,
+    state_dir: &Path,
+    secrets: &[&str],
+) -> anyhow::Result<SteamGuiWait> {
+    wait_for_steam_gui_login_with_timeout(backend, vm, vm_user, state_dir, secrets, 90, true).await
+}
+
+async fn wait_for_steam_gui_login_with_timeout(
+    backend: &Backend,
+    vm: &VmDef,
+    vm_user: &str,
+    state_dir: &Path,
+    secrets: &[&str],
+    timeout_secs: u64,
+    guard_candidate_fallback: bool,
+) -> anyhow::Result<SteamGuiWait> {
+    let wait = backend
+        .run_cmd(
+            &vm.ip,
+            &steam_gui_wait_script(vm_user, timeout_secs, guard_candidate_fallback),
+        )
+        .await;
+    let stdout = redact_sensitive(&wait.stdout, secrets);
+    let stderr = redact_sensitive(&wait.stderr, secrets);
+    if stdout
+        .lines()
+        .any(|line| line.trim() == "STEAM_GUI_LOGIN_OK")
+    {
+        return Ok(SteamGuiWait::LoggedIn);
+    }
+    if stdout
+        .lines()
+        .any(|line| line.trim() == "STEAM_GUI_GUARD_REQUIRED")
+    {
+        return Ok(SteamGuiWait::GuardRequired);
+    }
+    if stdout
+        .lines()
+        .any(|line| line.trim() == "STEAM_GUI_BAD_CREDENTIALS")
+    {
+        return Ok(SteamGuiWait::BadCredentials);
+    }
+    if stdout
+        .lines()
+        .any(|line| line.trim() == "STEAM_GUI_WAIT_TIMEOUT")
+    {
+        return Ok(SteamGuiWait::Timeout);
+    }
+    if stdout.trim().is_empty() && stderr.trim().is_empty() {
+        let tail = vm_log_tail(state_dir, vm).unwrap_or_else(|| "(vm.log unavailable)".into());
+        anyhow::bail!(
+            "{}: Steam GUI wait produced no output; the VM likely crashed during the call. vm.log tail:\n{tail}",
+            vm.name
+        );
+    }
+    anyhow::bail!(
+        "{}: Steam GUI wait failed. stdout: {} stderr: {}",
+        vm.name,
+        stdout,
+        stderr
+    )
 }
 
 async fn complete_guard_login_with_provider(
@@ -2611,6 +2615,246 @@ echo STEAMCMD_WAIT_TIMEOUT
 echo "--- steamcmd log tail ---"
 tail -n 80 "$LOG" 2>/dev/null || true
 exit 1"#
+    )
+}
+
+async fn finish_steam_gui_login(
+    backend: &Backend,
+    vm: &VmDef,
+    creds: &VmCredentials,
+    log: &mut LoginLog,
+) -> anyhow::Result<()> {
+    log.line("  Login successful");
+
+    if let Some(key) = &creds.game_key {
+        log.line("  Activating game key...");
+        let escaped_key = shell_escape(key);
+        let activate_cmd = format!(
+            r#"steam steam://registerkey/{escaped_key} &
+sleep 10
+echo KEY_SUBMITTED"#,
+        );
+        let key_result = backend.run_cmd(&vm.ip, &activate_cmd).await;
+        log.line(format!(
+            "  Game key activation submitted ({})",
+            key_result.stdout.trim()
+        ));
+    }
+
+    Ok(())
+}
+
+fn steam_gui_submit_credentials_script(
+    vm_user: &str,
+    steam_user: &str,
+    steam_pass: &str,
+) -> String {
+    let log_dir = format!("/home/{vm_user}/.local/share/Steam/logs");
+    let stdout_log = format!("{log_dir}/steampipe_gui_login_stdout.log");
+    let user = shell_escape(steam_user);
+    let pass = shell_escape(steam_pass);
+    let compositor = sway_setup(vm_user);
+    format!(
+        r#"{compositor}
+mkdir -p {log_dir}
+: > {stdout_log} 2>/dev/null
+pkill -TERM -x steam 2>/dev/null || true
+pkill -TERM -x steamwebhelper 2>/dev/null || true
+sleep 2
+pkill -KILL -x steam 2>/dev/null || true
+pkill -KILL -x steamwebhelper 2>/dev/null || true
+rm -f /home/{vm_user}/.local/share/Steam/config/loginusers.vdf
+if [ -f /home/{vm_user}/.steam/registry.vdf ]; then
+    sed -i '/"AutoLoginUser"/d' /home/{vm_user}/.steam/registry.vdf 2>/dev/null || true
+fi
+launch_steam() {{
+    steam -cef-disable-gpu >>{stdout_log} 2>&1 &
+    echo "STEAM_GUI_START_PID=$!"
+}}
+steam_alive() {{
+    pgrep -u "$(id -u)" -x steam >/dev/null 2>&1 || \
+    pgrep -u "$(id -u)" -x steamwebhelper >/dev/null 2>&1 || \
+    pgrep -u "$(id -u)" -f '[/]steamwebhelper|[/]ubuntu12_32[/]steam' >/dev/null 2>&1
+}}
+launch_steam
+find_swaysock() {{
+    for socket in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
+        if [ -S "$socket" ]; then
+            export SWAYSOCK="$socket"
+            return 0
+        fi
+    done
+    return 1
+}}
+focus_login_window() {{
+    find_swaysock || return 1
+    swaymsg '[title="Sign in to Steam"] focus' >/dev/null 2>&1 && return 0
+    return 1
+}}
+find_login_xwindow() {{
+    command -v xdotool >/dev/null 2>&1 || return 1
+    DISPLAY=:0 xdotool getwindowfocus 2>/dev/null
+}}
+type_credentials() {{
+    window="$1"
+    [ -n "$window" ] || return 1
+    DISPLAY=:0 xdotool windowactivate --sync "$window" windowfocus "$window" >/dev/null 2>&1 || return 1
+    DISPLAY=:0 xdotool key --clearmodifiers ctrl+a BackSpace
+    DISPLAY=:0 xdotool type --clearmodifiers --delay 20 -- '{user}'
+    DISPLAY=:0 xdotool key --clearmodifiers Tab
+    sleep 0.2
+    DISPLAY=:0 xdotool key --clearmodifiers ctrl+a BackSpace
+    DISPLAY=:0 xdotool type --clearmodifiers --delay 20 -- '{pass}'
+    DISPLAY=:0 xdotool key --clearmodifiers Return
+}}
+for i in $(seq 1 240); do
+    if focus_login_window; then
+        sleep 3
+        window="$(find_login_xwindow || true)"
+        if [ -n "$window" ] && type_credentials "$window"; then
+            echo STEAM_GUI_CREDENTIALS_SUBMITTED
+            exit 0
+        fi
+        if ! command -v xdotool >/dev/null 2>&1; then
+            echo STEAM_GUI_XDOTOOL_MISSING
+            exit 1
+        fi
+    fi
+    if [ "$i" -gt 20 ] && ! steam_alive; then
+        echo STEAM_GUI_RELAUNCH_AFTER_EARLY_EXIT
+        launch_steam
+    fi
+    sleep 1
+done
+echo STEAM_GUI_SIGNIN_TIMEOUT
+echo "--- sway tree ---"
+find_swaysock && swaymsg -t get_tree 2>/dev/null || true
+echo "--- steam stdout/stderr tail ---"
+tail -n 80 {stdout_log} 2>/dev/null || true
+exit 1"#,
+    )
+}
+
+fn steam_gui_submit_guard_code_script(vm_user: &str, code: &str) -> String {
+    let code = shell_escape(code);
+    format!(
+        r#"export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
+export WAYLAND_DISPLAY=wayland-1
+export DISPLAY=:0
+for socket in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
+    if [ -S "$socket" ]; then
+        export SWAYSOCK="$socket"
+        break
+    fi
+done
+if [ -n "${{SWAYSOCK:-}}" ]; then
+    swaymsg '[title="Sign in to Steam"] focus' >/dev/null 2>&1 || true
+    swaymsg '[class="steam"] focus' >/dev/null 2>&1 || true
+fi
+if ! command -v xdotool >/dev/null 2>&1; then
+    echo STEAM_GUI_XDOTOOL_MISSING
+    exit 1
+fi
+window="$(DISPLAY=:0 xdotool getwindowfocus 2>/dev/null)"
+if [ -z "$window" ]; then
+    window="$(DISPLAY=:0 xdotool search --class steam 2>/dev/null | tail -n1)"
+fi
+[ -n "$window" ] || exit 1
+DISPLAY=:0 xdotool windowactivate --sync "$window" windowfocus "$window" >/dev/null 2>&1
+DISPLAY=:0 xdotool key --clearmodifiers ctrl+a BackSpace
+DISPLAY=:0 xdotool type --clearmodifiers --delay 20 -- '{code}'
+DISPLAY=:0 xdotool key --clearmodifiers Return
+echo STEAM_GUI_GUARD_SUBMITTED"#,
+    )
+}
+
+fn steam_gui_wait_script(
+    vm_user: &str,
+    timeout_secs: u64,
+    guard_candidate_fallback: bool,
+) -> String {
+    let steam_dir = format!("/home/{vm_user}/.local/share/Steam");
+    let log_dir = format!("{steam_dir}/logs");
+    let connection_log = format!("{log_dir}/connection_log.txt");
+    let webhelper_log = format!("{log_dir}/webhelper_js.txt");
+    let steamui_login_log = format!("{log_dir}/steamui_login.txt");
+    let guard_candidate_check = if guard_candidate_fallback {
+        r#"    if [ "$i" -gt 8 ] && guard_ui_candidate; then
+        echo STEAM_GUI_GUARD_REQUIRED
+        exit 0
+    fi
+"#
+    } else {
+        ""
+    };
+    format!(
+        r#"export XDG_RUNTIME_DIR=/tmp/runtime-{vm_user}
+export WAYLAND_DISPLAY=wayland-1
+export DISPLAY=:0
+LOGIN_FILE="{steam_dir}/config/loginusers.vdf"
+CONNECTION_LOG="{connection_log}"
+WEBHELPER_LOG="{webhelper_log}"
+STEAMUI_LOGIN_LOG="{steamui_login_log}"
+find_swaysock() {{
+    for socket in "$XDG_RUNTIME_DIR"/sway-ipc.*.sock; do
+        if [ -S "$socket" ]; then
+            export SWAYSOCK="$socket"
+            return 0
+        fi
+    done
+    return 1
+}}
+valid_login_file() {{
+    [ -s "$LOGIN_FILE" ] || return 1
+    grep -Eq '"[0-9]{{17}}"' "$LOGIN_FILE" || return 1
+    grep -Eq '"(PersonaName|AccountName)"' "$LOGIN_FILE" || return 1
+}}
+gui_cache_present() {{
+    grep -Eq '"ConnectCache"' "{steam_dir}/local.vdf" 2>/dev/null || \
+    grep -Eq '"ConnectCache"' "{steam_dir}/config/config.vdf" 2>/dev/null
+}}
+logged_on() {{
+    grep -Eq '{STEAM_READY_LOG_PATTERN}' "$CONNECTION_LOG" 2>/dev/null || \
+    grep -Eq "RecvMsgClientLogOnResponse\(\) : \[U:1:[0-9]+\] 'OK'" "$CONNECTION_LOG" 2>/dev/null
+}}
+guard_required() {{
+    if find_swaysock; then
+        swaymsg -t get_tree 2>/dev/null | grep -Eiq 'Steam Guard|verification code|Enter code|Enter the code|authenticator|email code' && return 0
+    fi
+    grep -Eiq 'Steam Guard|verification code|Enter code|Enter the code|authenticator|email code' "$WEBHELPER_LOG" "$STEAMUI_LOGIN_LOG" 2>/dev/null
+}}
+guard_ui_candidate() {{
+    command -v xdotool >/dev/null 2>&1 || return 1
+    DISPLAY=:0 xdotool getwindowfocus getwindowname 2>/dev/null | grep -Eq '^Sign in to Steam$'
+}}
+bad_credentials() {{
+    grep -Eiq 'incorrect password|invalid password|InvalidPassword|account name or password' "$WEBHELPER_LOG" "$STEAMUI_LOGIN_LOG" "$CONNECTION_LOG" 2>/dev/null
+}}
+for i in $(seq 1 {timeout_secs}); do
+    if valid_login_file && gui_cache_present && logged_on; then
+        echo STEAM_GUI_LOGIN_OK
+        exit 0
+    fi
+    if bad_credentials; then
+        echo STEAM_GUI_BAD_CREDENTIALS
+        exit 0
+    fi
+    if guard_required; then
+        echo STEAM_GUI_GUARD_REQUIRED
+        exit 0
+    fi
+{guard_candidate_check}\
+    sleep 1
+done
+echo STEAM_GUI_WAIT_TIMEOUT
+echo "--- connection_log.txt tail ---"
+tail -n 80 "$CONNECTION_LOG" 2>/dev/null || true
+echo "--- webhelper_js.txt tail ---"
+tail -n 80 "$WEBHELPER_LOG" 2>/dev/null || true
+echo "--- steamui_login.txt tail ---"
+tail -n 80 "$STEAMUI_LOGIN_LOG" 2>/dev/null || true
+echo "--- sway tree ---"
+find_swaysock && swaymsg -t get_tree 2>/dev/null || true"#,
     )
 }
 
@@ -2955,6 +3199,18 @@ fn steam_login_succeeded(output: &str) -> bool {
     output.lines().any(|line| line.trim() == "STEAM_LOGIN_OK")
 }
 
+fn steam_gui_credentials_submitted(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim() == "STEAM_GUI_CREDENTIALS_SUBMITTED")
+}
+
+fn steam_gui_guard_submitted(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim() == "STEAM_GUI_GUARD_SUBMITTED")
+}
+
 fn steamcmd_started(output: &str) -> bool {
     output.lines().any(|line| line.trim() == "STEAMCMD_STARTED")
 }
@@ -3266,11 +3522,51 @@ mod tests {
         .expect("write local.vdf");
     }
 
+    fn write_gui_login_state(root: &Path, vm_name: &str, steam_id: &str) {
+        let login_dir = root.join(vm_name);
+        let config_dir = login_dir.join("config");
+        std::fs::create_dir_all(&config_dir).expect("create config dir");
+        std::fs::write(
+            config_dir.join("loginusers.vdf"),
+            format!(
+                r#""users"
+{{
+    "{steam_id}"
+    {{
+        "PersonaName"    "{vm_name}"
+    }}
+}}
+"#
+            ),
+        )
+        .expect("write loginusers.vdf");
+        std::fs::write(
+            login_dir.join("local.vdf"),
+            r#""MachineUserConfigStore"
+{
+    "Software"
+    {
+        "Valve"
+        {
+            "Steam"
+            {
+                "ConnectCache"
+                {
+                    "ea8626751" "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                }
+            }
+        }
+    }
+}
+"#,
+        )
+        .expect("write local.vdf");
+    }
+
     #[test]
     fn auto_login_action_skips_healthy_persisted_session() {
         let temp = tempfile::tempdir().expect("temp login state dir");
-        let now = chrono::Utc::now().timestamp();
-        write_login_state(temp.path(), "vm-1", "76561198000000001", now + 90 * 86_400);
+        write_gui_login_state(temp.path(), "vm-1", "76561198000000001");
 
         assert_eq!(
             auto_login_action(Some(temp.path()), "vm-1"),
@@ -3279,7 +3575,7 @@ mod tests {
     }
 
     #[test]
-    fn auto_login_action_mints_for_unhealthy_persisted_sessions() {
+    fn auto_login_action_requires_gui_login_for_unhealthy_persisted_sessions() {
         let temp = tempfile::tempdir().expect("temp login state dir");
         let now = chrono::Utc::now().timestamp();
         write_login_state(
@@ -3294,25 +3590,25 @@ mod tests {
 
         assert_eq!(
             auto_login_action(Some(temp.path()), "vm-stale"),
-            AutoLoginAction::MintSession {
-                status: SessionStatus::Stale
+            AutoLoginAction::LoginRequired {
+                status: SessionStatus::NoToken
             }
         );
         assert_eq!(
             auto_login_action(Some(temp.path()), "vm-expired"),
-            AutoLoginAction::MintSession {
-                status: SessionStatus::Expired
+            AutoLoginAction::LoginRequired {
+                status: SessionStatus::NoToken
             }
         );
         assert_eq!(
             auto_login_action(Some(temp.path()), "vm-no-token"),
-            AutoLoginAction::MintSession {
+            AutoLoginAction::LoginRequired {
                 status: SessionStatus::NoToken
             }
         );
         assert_eq!(
             auto_login_action(Some(temp.path()), "vm-missing"),
-            AutoLoginAction::MintSession {
+            AutoLoginAction::LoginRequired {
                 status: SessionStatus::Unknown
             }
         );
@@ -3582,34 +3878,93 @@ mod tests {
     }
 
     #[test]
-    fn steam_gui_validation_requires_gui_loginusers_evidence() {
-        let script = steam_gui_validation_script("chessbender", "account", "pa'ss");
+    fn steam_gui_submit_credentials_drives_sway_and_xdotool() {
+        let script = steam_gui_submit_credentials_script("chessbender", "account", "pa'ss");
+        assert!(script.contains("steam -cef-disable-gpu"));
+        assert!(
+            script.contains("rm -f /home/chessbender/.local/share/Steam/config/loginusers.vdf")
+        );
+        assert!(script.contains("AutoLoginUser"));
+        assert!(script.contains("swaymsg '[title=\"Sign in to Steam\"] focus'"));
+        assert!(script.contains("sleep 3"));
+        assert!(script.contains("command -v xdotool"));
+        assert!(script.contains("DISPLAY=:0 xdotool getwindowfocus"));
+        assert!(script.contains(
+            "DISPLAY=:0 xdotool windowactivate --sync \"$window\" windowfocus \"$window\""
+        ));
+        assert!(script.contains("DISPLAY=:0 xdotool key --clearmodifiers ctrl+a BackSpace"));
+        assert!(
+            script.contains("DISPLAY=:0 xdotool type --clearmodifiers --delay 20 -- 'account'")
+        );
+        assert!(script.contains("DISPLAY=:0 xdotool key --clearmodifiers Tab"));
+        assert!(
+            script.contains("DISPLAY=:0 xdotool type --clearmodifiers --delay 20 -- 'pa'\\''ss'")
+        );
+        assert!(script.contains("DISPLAY=:0 xdotool key --clearmodifiers Return"));
+        assert!(script.contains("STEAM_GUI_XDOTOOL_MISSING"));
+        assert!(script.contains("STEAM_GUI_CREDENTIALS_SUBMITTED"));
+        assert!(script.contains("STEAM_GUI_RELAUNCH_AFTER_EARLY_EXIT"));
+        assert!(script.contains("steam_alive"));
+        assert!(script.contains("swaymsg -t get_tree"));
+        assert!(!script.contains("wtype -- 'account'"));
+        assert!(!script.contains("steam -silent -login"));
+    }
+
+    #[test]
+    fn steam_gui_wait_requires_login_file_gui_cache_and_logged_on_evidence() {
+        let script = steam_gui_wait_script("chessbender", 7, true);
+        let post_guard_script = steam_gui_wait_script("chessbender", 7, false);
         assert!(
             script.contains(
                 "LOGIN_FILE=\"/home/chessbender/.local/share/Steam/config/loginusers.vdf\""
             )
         );
         assert!(script.contains("valid_login_file"));
-        assert!(script.contains("grep -Eq '\"[0-9]{17}\"'"));
-        assert!(script.contains("grep -Eq '\"(PersonaName|AccountName)\"'"));
-        assert!(script.contains("steam -silent -login 'account' 'pa'\\''ss' -cef-disable-gpu"));
-    }
-
-    #[test]
-    fn steam_gui_validation_accepts_refresh_token_evidence() {
-        let script = steam_gui_validation_script("chessbender", "account", "password");
-        assert!(script.contains("valid_gui_session_evidence"));
-        assert!(script.contains("PollAuthSessionStatus succeeded and has refresh token"));
+        assert!(script.contains("gui_cache_present"));
+        assert!(script.contains("logged_on"));
+        assert!(script.contains("guard_required"));
+        assert!(script.contains("guard_ui_candidate"));
+        assert!(script.contains("DISPLAY=:0 xdotool getwindowfocus getwindowname"));
+        assert!(script.contains("[ \"$i\" -gt 8 ] && guard_ui_candidate"));
+        assert!(!post_guard_script.contains("[ \"$i\" -gt 8 ] && guard_ui_candidate"));
+        assert!(script.contains("Enter the code"));
+        assert!(script.contains("bad_credentials"));
+        assert!(script.contains("STEAM_GUI_LOGIN_OK"));
+        assert!(script.contains("STEAM_GUI_GUARD_REQUIRED"));
+        assert!(script.contains("STEAM_GUI_BAD_CREDENTIALS"));
+        assert!(script.contains("STEAM_GUI_WAIT_TIMEOUT"));
+        assert!(script.contains("swaymsg -t get_tree"));
+        assert!(script.contains("webhelper_js.txt"));
+        assert!(script.contains("steamui_login.txt"));
         assert!(script.contains("RecvMsgClientLogOnResponse\\(\\) : \\[U:1:[0-9]+\\] 'OK'"));
     }
 
     #[test]
-    fn steam_gui_validation_no_longer_synthesizes_loginusers() {
-        let script = steam_gui_validation_script("chessbender", "account", "password");
-        let heredoc_marker = ["STEAMPIPE", "_LOGINUSERS"].concat();
-        let synthesis_function = ["write_login_file", "_from_connection_log"].concat();
-        assert!(!script.contains(&heredoc_marker));
-        assert!(!script.contains(&synthesis_function));
+    fn steam_gui_marker_parsers_require_exact_marker_lines() {
+        assert!(steam_gui_credentials_submitted(
+            "noise\nSTEAM_GUI_CREDENTIALS_SUBMITTED\n"
+        ));
+        assert!(!steam_gui_credentials_submitted(
+            "STEAM_GUI_CREDENTIALS_SUBMITTED_EXTRA\n"
+        ));
+        assert!(steam_gui_guard_submitted(
+            "noise\nSTEAM_GUI_GUARD_SUBMITTED\n"
+        ));
+        assert!(!steam_gui_guard_submitted(
+            "prefix STEAM_GUI_GUARD_SUBMITTED\n"
+        ));
+    }
+
+    #[test]
+    fn steam_gui_guard_submission_uses_focused_gui_window() {
+        let script = steam_gui_submit_guard_code_script("chessbender", "6KPPX");
+        assert!(script.contains("swaymsg '[title=\"Sign in to Steam\"] focus'"));
+        assert!(script.contains("swaymsg '[class=\"steam\"] focus'"));
+        assert!(script.contains("command -v xdotool"));
+        assert!(script.contains("DISPLAY=:0 xdotool getwindowfocus"));
+        assert!(script.contains("DISPLAY=:0 xdotool type --clearmodifiers --delay 20 -- '6KPPX'"));
+        assert!(script.contains("DISPLAY=:0 xdotool key --clearmodifiers Return"));
+        assert!(script.contains("STEAM_GUI_GUARD_SUBMITTED"));
     }
 
     #[test]
@@ -3665,7 +4020,14 @@ mod tests {
     }
 
     fn write_helper_script(path: &Path, body: &str) {
-        std::fs::write(path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        let staging = path.with_extension(format!("tmp-{}", std::process::id()));
+        {
+            let mut file = std::fs::File::create(&staging).unwrap();
+            std::io::Write::write_all(&mut file, format!("#!/bin/sh\n{body}\n").as_bytes())
+                .unwrap();
+            file.sync_all().unwrap();
+        }
+        std::fs::rename(&staging, path).unwrap();
         let mut permissions = std::fs::metadata(path).unwrap().permissions();
         permissions.set_mode(0o755);
         std::fs::set_permissions(path, permissions).unwrap();
@@ -4029,6 +4391,7 @@ echo ABCDE"#,
         assert!(script.contains("swaymsg -t get_outputs"));
         assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
 
@@ -4049,6 +4412,7 @@ echo ABCDE"#,
         assert!(script.contains("sway"));
         assert!(script.contains("unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("DISPLAY=:0"));
         assert!(script.contains("XDG_RUNTIME_DIR=/tmp/runtime-testuser"));
     }
 
@@ -4065,6 +4429,7 @@ echo ABCDE"#,
         assert!(script.contains("sway"));
         assert!(script.contains("SWAYSOCK"));
         assert!(script.contains("WAYLAND_DISPLAY=wayland-1"));
+        assert!(script.contains("DISPLAY=:0"));
     }
 
     #[test]
@@ -4132,5 +4497,168 @@ echo ABCDE"#,
                 "{mode} setup must check for existing process"
             );
         }
+    }
+
+    // ── GuardProvider ──────────────────────────────────────────────────
+
+    #[test]
+    fn guard_provider_pre_supplied_returns_code_then_unavailable() {
+        let provider = GuardProvider::pre_supplied("ABC123".into());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cx = GuardPromptContext {
+            vm_name: "vm-1",
+            steam_user: "player1",
+            reason: "test",
+            invalid_retry: false,
+        };
+        let outcome1 = rt.block_on(provider.request(&cx)).unwrap();
+        assert_eq!(outcome1, GuardCodeOutcome::Code("ABC123".into()));
+
+        let outcome2 = rt.block_on(provider.request(&cx)).unwrap();
+        assert_eq!(outcome2, GuardCodeOutcome::Unavailable);
+    }
+
+    #[test]
+    fn guard_provider_fail_fast_returns_unavailable() {
+        let provider = GuardProvider::fail_fast();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let cx = GuardPromptContext {
+            vm_name: "vm-1",
+            steam_user: "player1",
+            reason: "test",
+            invalid_retry: false,
+        };
+        let outcome = rt.block_on(provider.request(&cx)).unwrap();
+        assert_eq!(outcome, GuardCodeOutcome::Unavailable);
+    }
+
+    #[test]
+    fn guard_provider_select_supplied_code_uses_pre_supplied() {
+        let context = LoginContext::synthetic(true, true, false);
+        let provider = GuardProvider::select(Some("CODE".into()), context, false);
+        assert_eq!(provider.kind(), GuardProviderKind::PreSupplied);
+    }
+
+    #[test]
+    fn guard_provider_select_non_interactive_uses_fail_fast() {
+        let context = LoginContext::synthetic(true, true, true);
+        let provider = GuardProvider::select(None, context, false);
+        assert_eq!(provider.kind(), GuardProviderKind::FailFast);
+    }
+
+    #[test]
+    fn guard_provider_select_display_no_gui_uses_stdin() {
+        let context = LoginContext::synthetic(true, true, false);
+        let provider = GuardProvider::select(None, context, true);
+        assert_eq!(provider.kind(), GuardProviderKind::Stdin);
+    }
+
+    #[test]
+    fn guard_provider_select_no_display_no_tty_uses_fail_fast() {
+        let context = LoginContext::synthetic(false, false, false);
+        let provider = GuardProvider::select(None, context, false);
+        assert_eq!(provider.kind(), GuardProviderKind::FailFast);
+    }
+
+    #[test]
+    fn guard_provider_select_no_display_with_tty_uses_stdin() {
+        let context = LoginContext::synthetic(false, true, false);
+        let provider = GuardProvider::select(None, context, false);
+        assert_eq!(provider.kind(), GuardProviderKind::Stdin);
+    }
+
+    #[test]
+    fn guard_provider_select_display_without_no_gui_uses_helper_gui() {
+        let context = LoginContext::synthetic(true, false, false);
+        let provider = GuardProvider::select(None, context, false);
+        assert_eq!(provider.kind(), GuardProviderKind::HelperGui);
+    }
+
+    // ── display_env_present ────────────────────────────────────────────
+
+    #[test]
+    fn display_env_present_detects_wayland() {
+        assert!(display_env_present(Some(std::ffi::OsStr::new("wayland-1")), None));
+    }
+
+    #[test]
+    fn display_env_present_detects_x11() {
+        assert!(display_env_present(None, Some(std::ffi::OsStr::new(":0"))));
+    }
+
+    #[test]
+    fn display_env_present_prefers_wayland_over_x11() {
+        assert!(display_env_present(
+            Some(std::ffi::OsStr::new("wayland-1")),
+            Some(std::ffi::OsStr::new(":0")),
+        ));
+    }
+
+    #[test]
+    fn display_env_present_rejects_empty_wayland() {
+        assert!(!display_env_present(
+            Some(std::ffi::OsStr::new("")),
+            None,
+        ));
+    }
+
+    #[test]
+    fn display_env_present_returns_false_when_both_missing() {
+        assert!(!display_env_present(None, None));
+    }
+
+    // ── parse_steam_identity ────────────────────────────────────────────
+
+    #[test]
+    fn parse_steam_identity_login_with_persona() {
+        let (persona, logged_in) = parse_steam_identity("LOGIN:player1:76561197960287930\n");
+        assert_eq!(persona.as_deref(), Some("player1"));
+        assert!(logged_in);
+    }
+
+    #[test]
+    fn parse_steam_identity_login_unknown_persona() {
+        let (persona, logged_in) = parse_steam_identity("LOGIN:unknown:76561197960287930\n");
+        assert_eq!(persona, None);
+        assert!(logged_in);
+    }
+
+    #[test]
+    fn parse_steam_identity_no_login() {
+        let (persona, logged_in) = parse_steam_identity("NO_LOGIN\n");
+        assert_eq!(persona, None);
+        assert!(!logged_in);
+    }
+
+    #[test]
+    fn parse_steam_identity_empty_string() {
+        let (persona, logged_in) = parse_steam_identity("");
+        assert_eq!(persona, None);
+        assert!(!logged_in);
+    }
+
+    #[test]
+    fn parse_steam_identity_malformed() {
+        let (persona, logged_in) = parse_steam_identity("LOGIN:\n");
+        // "LOGIN:" prefix strips, then split on ':' gives ["\n"]
+        // "\n" is not empty and not "unknown", so it becomes the persona
+        assert_eq!(persona.as_deref(), Some("\n"));
+        assert!(logged_in);
+    }
+
+    // ── LoginContext ───────────────────────────────────────────────────
+
+    #[test]
+    fn login_context_force_non_interactive() {
+        let ctx = LoginContext::force_non_interactive();
+        assert!(ctx.non_interactive);
+    }
+
+    #[test]
+    fn login_context_synthetic_round_trip() {
+        let ctx = LoginContext::synthetic(true, false, true);
+        assert!(ctx.display);
+        assert!(!ctx.stdin_tty);
+        assert!(ctx.non_interactive);
     }
 }

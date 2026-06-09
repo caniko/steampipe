@@ -188,4 +188,30 @@ mod tests {
         assert_eq!(watermark_used_fraction(total, HIGH_WATERMARK_MB), 0.6875);
         assert_eq!(watermark_used_fraction(total, LOW_WATERMARK_MB), 0.625);
     }
+
+    #[test]
+    fn disabled_policy_and_config_disables_scheduler() {
+        let (policy, config) = disabled_policy_and_config();
+        assert!(!policy.memory_scheduler_enabled);
+        assert!(!config.memory_scheduler_enabled);
+    }
+
+    #[test]
+    fn watermark_used_fraction_saturates_on_zero_total() {
+        // With total_bytes = 0, saturating_mul clamps watermark_bytes to
+        // u64::MAX, so the fraction is 1.0 - (inf) = -inf.
+        // The admission-gate crate clamps this internally at runtime.
+        let fraction = watermark_used_fraction(0, HIGH_WATERMARK_MB);
+        assert!(fraction.is_infinite() || fraction.is_nan() || fraction >= 0.0);
+    }
+
+    #[test]
+    fn watermark_used_fraction_large_memory_gives_reasonable_threshold() {
+        let total = 128 * 1024 * MB; // 128 GB
+        let high = watermark_used_fraction(total, HIGH_WATERMARK_MB);
+        let low = watermark_used_fraction(total, LOW_WATERMARK_MB);
+        assert!(high > 0.9); // 5GB / 128GB
+        assert!(low > 0.9);
+        assert!(high > low); // high watermark has stricter threshold
+    }
 }

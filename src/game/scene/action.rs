@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::core::config::VmDef;
-use crate::core::config::{SceneAction, WindowTarget};
+use crate::core::config::{IpAddr, SceneAction, WindowTarget};
 
 use super::{SceneBackend, scene_env_prefix, shell_quote};
 
@@ -143,6 +143,10 @@ async fn run_remote<B: SceneBackend>(backend: &B, vm: &VmDef, cmd: &str) -> anyh
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::backend::CmdOutput;
+    use crate::core::config::VmName;
+    use std::pin::Pin;
+    use std::time::Duration;
 
     #[test]
     fn keys_command_uses_wtype_key_mode() {
@@ -181,5 +185,265 @@ mod tests {
         })
         .unwrap();
         assert!(by_title.contains("title"));
+    }
+
+    #[test]
+    fn selector_for_window_returns_none_with_no_targets() {
+        let result = selector_for_window(&WindowTarget {
+            app_id: None,
+            class: None,
+            title: None,
+        });
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn focus_app_id_command_builds_correctly() {
+        let cmd = focus_app_id_command("user", "my-app");
+        assert!(cmd.contains("swaymsg"));
+        assert!(cmd.contains("app_id"));
+        assert!(cmd.contains("my-app"));
+        assert!(cmd.contains("/tmp/runtime-user"));
+    }
+
+    #[test]
+    fn combo_command_empty_errors() {
+        let err = combo_command("user", "").unwrap_err().to_string();
+        assert!(err.contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn combo_command_whitespace_only_errors() {
+        let err = combo_command("user", "  +  ").unwrap_err().to_string();
+        assert!(err.contains("empty"), "{err}");
+    }
+
+    #[test]
+    fn selector_escape_handles_backslash_and_quote() {
+        let escaped = selector_escape(r#"hello\"world"#);
+        assert_eq!(escaped, r#"hello\\\"world"#);
+    }
+
+    // ── Mock backend tests ─────────────────────────────────────────────
+
+    struct MockActionBackend {
+        canned: std::collections::HashMap<String, CmdOutput>,
+        commands: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl MockActionBackend {
+        fn new() -> Self {
+            Self {
+                canned: std::collections::HashMap::new(),
+                commands: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn add(&mut self, cmd_contains: &str, output: CmdOutput) {
+            self.canned.insert(cmd_contains.into(), output);
+        }
+
+        fn recorded(&self) -> Vec<String> {
+            self.commands.lock().unwrap().clone()
+        }
+    }
+
+    impl SceneBackend for MockActionBackend {
+        fn run_cmd<'a>(
+            &'a self,
+            ip: &'a str,
+            cmd: &'a str,
+        ) -> Pin<Box<dyn Future<Output = CmdOutput> + Send + 'a>> {
+            let _ = ip;
+            self.commands.lock().unwrap().push(cmd.to_string());
+            let owned = self
+                .canned
+                .iter()
+                .find_map(|(prefix, output)| {
+                    if cmd.contains(prefix.as_str()) {
+                        Some(output.clone())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(CmdOutput {
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    success: false,
+                });
+            Box::pin(std::future::ready(owned))
+        }
+    }
+
+    fn vm() -> VmDef {
+        VmDef {
+            name: VmName("vm-1".into()),
+            ip: IpAddr("10.0.100.1".into()),
+            index: 1,
+        }
+    }
+
+    fn window() -> WindowTarget {
+        WindowTarget {
+            app_id: Some("game-app".into()),
+            title: None,
+            class: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn perform_action_keys_sends_command() {
+        let mut backend = MockActionBackend::new();
+        backend.add("wtype", CmdOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        });
+        backend.add("swaymsg", CmdOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        });
+        let action = SceneAction {
+            step: "press".into(),
+            keys: Some("Return".into()),
+            ..Default::default()
+        };
+
+        perform_action(&backend, &vm(), "user", Some(&window()), &action)
+            .await
+            .unwrap();
+        let recorded = backend.recorded();
+        assert!(recorded.iter().any(|c| c.contains("wtype")), "{recorded:?}");
+    }
+
+    #[tokio::test]
+    async fn perform_action_combo_sends_command() {
+        let mut backend = MockActionBackend::new();
+        backend.add("wtype", CmdOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        });
+        backend.add("swaymsg", CmdOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        });
+        let action = SceneAction {
+            step: "combo".into(),
+            combo: Some("Ctrl+Shift+P".into()),
+            ..Default::default()
+        };
+
+        perform_action(&backend, &vm(), "user", Some(&window()), &action)
+            .await
+            .unwrap();
+        let recorded = backend.recorded();
+        assert!(recorded.iter().any(|c| c.contains("wtype")), "{recorded:?}");
+    }
+
+    #[tokio::test]
+    async fn perform_action_focus_sends_command() {
+        let mut backend = MockActionBackend::new();
+        backend.add("swaymsg", CmdOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        });
+        let action = SceneAction {
+            step: "focus".into(),
+            focus: Some("my-app".into()),
+            ..Default::default()
+        };
+
+        perform_action(&backend, &vm(), "user", None, &action)
+            .await
+            .unwrap();
+        let recorded = backend.recorded();
+        assert!(recorded.iter().any(|c| c.contains("swaymsg")), "{recorded:?}");
+        assert!(recorded.iter().any(|c| c.contains("app_id")), "{recorded:?}");
+    }
+
+    #[tokio::test]
+    async fn perform_action_shell_command_runs() {
+        let mut backend = MockActionBackend::new();
+        backend.add("echo", CmdOutput {
+            stdout: "hello\n".into(),
+            stderr: String::new(),
+            success: true,
+        });
+        let action = SceneAction {
+            step: "shell".into(),
+            shell_command: Some("echo hello".into()),
+            ..Default::default()
+        };
+
+        perform_action(&backend, &vm(), "user", None, &action)
+            .await
+            .unwrap();
+        let recorded = backend.recorded();
+        assert!(recorded.iter().any(|c| c.contains("echo")), "{recorded:?}");
+    }
+
+    #[tokio::test]
+    async fn perform_action_delay_ms_waits() {
+        let backend = MockActionBackend::new();
+        let action = SceneAction {
+            step: "wait".into(),
+            delay_ms: Some(10),
+            ..Default::default()
+        };
+        let start = std::time::Instant::now();
+
+        perform_action(&backend, &vm(), "user", None, &action)
+            .await
+            .unwrap();
+
+        let elapsed = start.elapsed();
+        assert!(elapsed >= Duration::from_millis(10));
+    }
+
+    #[tokio::test]
+    async fn perform_action_no_operation_errors() {
+        let backend = MockActionBackend::new();
+        let action = SceneAction {
+            step: "empty".into(),
+            ..Default::default()
+        };
+
+        let err = perform_action(&backend, &vm(), "user", None, &action)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no executable operation"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn perform_action_keys_focus_before_command() {
+        let mut backend = MockActionBackend::new();
+        backend.add("wtype", CmdOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        });
+        backend.add("swaymsg", CmdOutput {
+            stdout: String::new(),
+            stderr: String::new(),
+            success: true,
+        });
+        let action = SceneAction {
+            step: "press".into(),
+            keys: Some("Escape".into()),
+            ..Default::default()
+        };
+
+        perform_action(&backend, &vm(), "user", Some(&window()), &action)
+            .await
+            .unwrap();
+
+        let recorded = backend.recorded();
+        // First call should be swaymsg (focus), second should be wtype (keys)
+        assert!(recorded[0].contains("swaymsg"), "expected focus first: {recorded:?}");
     }
 }
