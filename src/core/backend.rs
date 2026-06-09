@@ -13,7 +13,7 @@ use crate::core::state;
 ///
 /// Returned by `Backend::run_cmd` and `Backend::run_cmd_timeout`. Check `success`
 /// before trusting `stdout`; on failure, `stderr` contains the error details.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CmdOutput {
     pub stdout: String,
     pub stderr: String,
