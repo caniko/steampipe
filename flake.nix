@@ -15,6 +15,11 @@
     crane.follows = "rs-harbor/crane";
     flake-utils.follows = "rs-harbor/flake-utils";
     microvm.url = "github:astro/microvm.nix";
+    plinth = {
+      url = "git+https://codeberg.org/caniko/plinth.git?ref=refs/heads/trunk";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
   };
 
   outputs = {
@@ -24,6 +29,7 @@
     rust-overlay,
     flake-utils,
     microvm,
+    plinth,
     ...
   }:
     # Steampipe is x86_64-linux only: the cluster targets QEMU/KVM,
@@ -49,10 +55,14 @@
       };
 
       packages = import ./nix/flake/packages.nix {
-        inherit craneLib lib pkgs root;
+        inherit craneLib lib pkgs plinth root system;
       };
     in {
       inherit packages;
+
+      apps.deploy-pages = plinth.lib.${system}.mkDeployPagesApp {
+        domain = "cluster-ctl.tartanoglu.com";
+      };
 
       checks = import ./nix/flake/checks.nix {
         inherit lib microvm nixpkgs pkgs self system;

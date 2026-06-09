@@ -2,6 +2,21 @@
   "nodes": {
     "crane": {
       "locked": {
+        "lastModified": 1772080396,
+        "narHash": "sha256-84W9UNtSk9DNMh43WBkOjpkbfODlmg+RDi854PnNgLE=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "8525580bc0316c39dbfa18bd09a1331e98c9e463",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "crane_2": {
+      "locked": {
         "lastModified": 1777335812,
         "narHash": "sha256-bEg5xoAxAwsyfnGhkEX7RJViTIBIYPd8ISg4O1c0HFc=",
         "owner": "ipetkov",
@@ -125,6 +140,32 @@
         "type": "github"
       }
     },
+    "plinth": {
+      "inputs": {
+        "crane": "crane",
+        "flake-utils": [
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay"
+      },
+      "locked": {
+        "lastModified": 1780921919,
+        "narHash": "sha256-qWNGqKWmGecXS7PaDHS3TS++XX3IdWnf4HRscDYfD0E=",
+        "ref": "refs/heads/trunk",
+        "rev": "8c4855f9ee40543277b15d1dbf0298f0a90c34d7",
+        "revCount": 43,
+        "type": "git",
+        "url": "https://codeberg.org/caniko/plinth.git"
+      },
+      "original": {
+        "ref": "refs/heads/trunk",
+        "type": "git",
+        "url": "https://codeberg.org/caniko/plinth.git"
+      }
+    },
     "root": {
       "inputs": {
         "crane": [
@@ -140,6 +181,7 @@
           "rs-harbor",
           "nixpkgs"
         ],
+        "plinth": "plinth",
         "rs-harbor": "rs-harbor",
         "rust-overlay": [
           "rs-harbor",
@@ -149,11 +191,11 @@
     },
     "rs-harbor": {
       "inputs": {
-        "crane": "crane",
+        "crane": "crane_2",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs_2",
         "osxcross": "osxcross",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": "rust-overlay_2"
       },
       "locked": {
         "lastModified": 1779859344,
@@ -170,6 +212,27 @@
       }
     },
     "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "plinth",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1772247314,
+        "narHash": "sha256-x6IFQ9bL7YYfW2m2z8D3Em2YtAA3HE8kiCFwai2fwrw=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "a1ab5e89ab12e1a37c0b264af6386a7472d68a15",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_2": {
       "inputs": {
         "nixpkgs": [
           "rs-harbor",

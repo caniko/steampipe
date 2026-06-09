@@ -2,7 +2,9 @@
   craneLib,
   lib,
   pkgs,
+  plinth,
   root,
+  system,
 }: let
   docs = pkgs.stdenv.mkDerivation {
     pname = "steampipe-docs";
@@ -25,7 +27,14 @@
     '';
   };
 
-  site = docs;
+  website = plinth.lib.${system}.mkProjectSite {
+    pname = "cluster-ctl-website";
+    domain = "cluster-ctl.tartanoglu.com";
+    configPath = root + /website/plinth-project.toml;
+    docsPackage = docs;
+  };
+
+  site = website;
 
   # steam-vent is a cargo git dependency (our patched fork's `integration`
   # branch); crane vendors it from Cargo.lock, so the build source is just
@@ -100,5 +109,5 @@
     });
 in {
   default = cluster-ctl;
-  inherit cluster-ctl cluster-guard-prompt docs site;
+  inherit cluster-ctl cluster-guard-prompt docs site website;
 }

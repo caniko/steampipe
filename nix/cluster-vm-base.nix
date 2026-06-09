@@ -123,6 +123,7 @@ in {
           wayvnc
           wl-clipboard
           wtype
+          xdotool
         ])
         ++ lib.optionals cfg.enableSteam (with pkgs; [
           steamcmd

@@ -4,22 +4,27 @@ on:
   push:
     branches: [trunk]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   publish:
-    runs-on: codeberg-small
+    runs-on: atlas-nix-trusted
+    env:
+      NIX_CONFIG: |
+        experimental-features = nix-command flakes
+        substituters = https://attic.candee.baby/canix https://cache.nixos.org
+        trusted-public-keys = canix:uqr0nD3I0mfj9BYfZgTZHMaDKfI2yCTtSA5JGTWKUeg= cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: https://github.com/cachix/install-nix-action@v31
+        uses: https://code.forgejo.org/actions/checkout@v4
 
       - name: Build site
         run: nix build .#site
 
-      - name: Publish to Codeberg Pages
-        uses: https://codeberg.org/git-pages/action@v2
-        with:
-          site: "https://${{ forge.repository_owner }}.codeberg.page/steampipe/"
-          token: ${{ forge.token }}
-          source: result/
+      - name: Verify custom domain
+        run: grep -qx 'cluster-ctl.tartanoglu.com' result/.domains
+
+      - name: Deploy Codeberg Pages
+        run: nix run .#deploy-pages

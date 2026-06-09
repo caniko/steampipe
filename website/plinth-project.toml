@@ -1,0 +1,45 @@
+[site]
+title = "cluster-ctl"
+description = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
+base_url = "/"
+footer_note = "Generated from repository metadata by the plinth-project FOSS sweep."
+
+[[nav]]
+label = "Overview"
+href = "#overview"
+
+[[nav]]
+label = "Source"
+href = "ssh://git@codeberg.org/caniko/steampipe.git"
+
+[[footer_links]]
+label = "Source"
+href = "ssh://git@codeberg.org/caniko/steampipe.git"
+
+[[pages]]
+slug = "index"
+title = "cluster-ctl"
+description = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
+
+[[pages.sections]]
+type = "hero"
+title = "cluster-ctl"
+tagline = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
+subtitle = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
+
+[[pages.sections.ctas]]
+label = "View source"
+href = "ssh://git@codeberg.org/caniko/steampipe.git"
+primary = true
+
+[[pages.sections]]
+type = "feature_grid"
+id = "overview"
+
+[[pages.sections.features]]
+title = "Rust"
+description = "Project technology detected from repository manifests."
+
+[[pages.sections.features]]
+title = "Nix"
+description = "Project technology detected from repository manifests."
