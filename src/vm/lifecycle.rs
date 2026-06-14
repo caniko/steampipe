@@ -133,6 +133,87 @@ pub async fn down<S>(config: &ClusterConfig<S>, backend: &Backend, force: bool, 
     shutdown::shutdown_claimed(config, backend, force, timeout).await;
 }
 
+/// Explicitly reclaim one VM from a verified foreign live holder.
+///
+/// This is intentionally separate from `up`: default reservation remains
+/// non-destructive, while reclaim requires the operator to name the expected
+/// owning cluster.
+pub async fn reclaim<S>(
+    config: &ClusterConfig<S>,
+    target: &str,
+    from_cluster: &str,
+) -> anyhow::Result<()> {
+    let vm = config
+        .find_vm(target)
+        .ok_or_else(|| anyhow::anyhow!("Unknown VM: {target}"))?;
+    let diagnosis = lease::diagnose_holder(vm.index, &config.lock_dir, &config.cluster_name)
+        .ok_or_else(|| anyhow::anyhow!("{} has no live verified lease holder", vm.name))?;
+
+    if diagnosis.owner_cluster != from_cluster {
+        anyhow::bail!(
+            "{} is held by cluster '{}' (pid {}), not requested --from-cluster '{}'. Refusing reclaim.",
+            vm.name,
+            diagnosis.owner_cluster,
+            diagnosis.owner_pid,
+            from_cluster
+        );
+    }
+
+    println!(
+        "==> Reclaiming {} for cluster '{}' from cluster '{}' (pid {}, cmdline_match={}, startup_grace={})",
+        vm.name,
+        config.cluster_name,
+        diagnosis.owner_cluster,
+        diagnosis.owner_pid,
+        diagnosis.cmdline_matches,
+        diagnosis.within_startup_grace
+    );
+    let removed_heartbeats_before = clear_remote_heartbeat_files(config, vm).await;
+    config.backend.stop_instance(config, vm);
+    lease::remove_claim(vm.index, &config.lock_dir);
+    let removed_heartbeats_after = clear_remote_heartbeat_files(config, vm).await;
+    println!(
+        "[AUDIT] reclaimed {} from cluster '{}' pid {} for cluster '{}' (removed_heartbeats_before={}, removed_heartbeats_after={})",
+        vm.name,
+        diagnosis.owner_cluster,
+        diagnosis.owner_pid,
+        config.cluster_name,
+        removed_heartbeats_before.unwrap_or(0),
+        removed_heartbeats_after.unwrap_or(0)
+    );
+    Ok(())
+}
+
+async fn clear_remote_heartbeat_files<S>(config: &ClusterConfig<S>, vm: &VmDef) -> Option<u32> {
+    let cmd = build_remote_heartbeat_cleanup_cmd(&config.remote_dir, &config.cluster_name);
+    let result = config
+        .backend
+        .run_cmd_timeout(&vm.ip, &cmd, std::time::Duration::from_secs(3))
+        .await;
+    if !result.success {
+        return None;
+    }
+    result.stdout.trim().parse().ok()
+}
+
+fn build_remote_heartbeat_cleanup_cmd(remote_dir: &str, cluster_name: &str) -> String {
+    let scoped_dir = format!(
+        "{remote_dir}/.steampipe-runtime/{}/heartbeats",
+        cluster_name
+    );
+    format!(
+        "files=$(find {scoped} {root} -maxdepth 1 -type f \\( -name 'game_progress_*.json' -o -name 'game_progress_*.tmp' \\) -print 2>/dev/null) && \
+         if [ -n \"$files\" ]; then printf '%s\\n' \"$files\" | xargs -r rm -f; fi && \
+         if [ -n \"$files\" ]; then printf '%s\\n' \"$files\" | sed '/^$/d' | wc -l; else printf '0\\n'; fi",
+        scoped = shell_quote(&scoped_dir),
+        root = shell_quote(remote_dir),
+    )
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 /// Delete a VM's persistent home image after confirming no live lease owns it.
 pub fn reset_vm_home<S>(config: &ClusterConfig<S>, target: &str) -> anyhow::Result<()> {
     let vm = config
@@ -245,5 +326,36 @@ mod tests {
         reset_vm_home(&config, "vm-1").unwrap();
 
         assert!(!home.exists());
+    }
+
+    #[tokio::test]
+    async fn reclaim_refuses_mismatched_from_cluster() {
+        let tmp = tempdir().unwrap();
+        let lock = tempdir().unwrap();
+        let config = test_config(tmp.path(), lock.path());
+        lease::write_claim(1, lock.path(), "one-v-one", std::process::id()).unwrap();
+
+        let err = reclaim(&config, "vm-1", "tournament").await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("not requested --from-cluster 'tournament'"),
+            "{msg}"
+        );
+        assert_eq!(
+            lease::probe_holder(1, lock.path()).map(|holder| holder.cluster),
+            Some("one-v-one".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn reclaim_removes_intended_claim() {
+        let tmp = tempdir().unwrap();
+        let lock = tempdir().unwrap();
+        let config = test_config(tmp.path(), lock.path());
+        lease::write_claim(1, lock.path(), "one-v-one", std::process::id()).unwrap();
+
+        reclaim(&config, "vm-1", "one-v-one").await.unwrap();
+
+        assert!(lease::probe_holder(1, lock.path()).is_none());
     }
 }

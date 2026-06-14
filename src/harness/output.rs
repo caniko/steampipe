@@ -40,6 +40,7 @@ pub struct RunResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutKind {
     HeartbeatStall,
+    VmLaunchNoHeartbeat,
     NoProgressTimeout,
     HardTimeout,
 }
@@ -48,6 +49,7 @@ impl TimeoutKind {
     pub fn label(self) -> &'static str {
         match self {
             Self::HeartbeatStall => "HEARTBEAT_STALL",
+            Self::VmLaunchNoHeartbeat => "VM_LAUNCH_NO_HEARTBEAT",
             Self::NoProgressTimeout => "NO_PROGRESS_TIMEOUT",
             Self::HardTimeout => "HARD_TIMEOUT",
         }
@@ -56,6 +58,7 @@ impl TimeoutKind {
     fn json_status(self) -> &'static str {
         match self {
             Self::HeartbeatStall => "heartbeat_stall",
+            Self::VmLaunchNoHeartbeat => "vm_launch_no_heartbeat",
             Self::NoProgressTimeout => "no_progress_timeout",
             Self::HardTimeout => "hard_timeout",
         }

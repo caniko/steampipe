@@ -38,9 +38,22 @@ use crate::core::state;
 const STARTUP_GRACE: Duration = Duration::from_secs(5);
 
 /// Information about who holds a VM claim.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaseInfo {
     pub pid: u32,
     pub cluster: String,
+}
+
+/// Operator-facing diagnosis for a live claim that blocks another cluster.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseDiagnosis {
+    pub vm_id: u8,
+    pub owner_cluster: String,
+    pub owner_pid: u32,
+    pub cmdline_substring: String,
+    pub cmdline_matches: bool,
+    pub within_startup_grace: bool,
+    pub recovery_command: String,
 }
 
 fn claim_path(vm_id: u8, lock_dir: &Path) -> PathBuf {
@@ -112,6 +125,7 @@ pub fn reserve_n(
 ) -> anyhow::Result<Vec<u8>> {
     let mut ids = Vec::with_capacity(count as usize);
     let mut held_count = 0u8;
+    let mut foreign_holders = Vec::new();
 
     for id in 1..=max_vms {
         if ids.len() == count as usize {
@@ -120,10 +134,15 @@ pub fn reserve_n(
         if try_reserve(id, lock_dir, cluster)? {
             ids.push(id);
         } else {
-            if let Some(info) = probe_holder(id, lock_dir) {
+            if let Some(diagnosis) = diagnose_holder(id, lock_dir, cluster) {
+                foreign_holders.push(diagnosis.recovery_command.clone());
                 eprintln!(
-                    "  vm-{id} held by '{}' (pid {}), skipping",
-                    info.cluster, info.pid
+                    "  vm-{id} held by '{}' (pid {}, cmdline_match={}, startup_grace={}), skipping. Recovery: {}",
+                    diagnosis.owner_cluster,
+                    diagnosis.owner_pid,
+                    diagnosis.cmdline_matches,
+                    diagnosis.within_startup_grace,
+                    diagnosis.recovery_command
                 );
             } else {
                 eprintln!("  vm-{id} locked (unknown holder), skipping");
@@ -134,11 +153,17 @@ pub fn reserve_n(
 
     if ids.len() < count as usize {
         let available = max_vms - held_count;
+        let recovery = if foreign_holders.is_empty() {
+            "no live holder details available".to_string()
+        } else {
+            format!("recovery commands: {}", foreign_holders.join("; "))
+        };
         anyhow::bail!(
-            "only {} of {} requested VMs available ({} held by other processes)",
+            "only {} of {} requested VMs available ({} held by other processes); {}",
             available,
             count,
-            held_count
+            held_count,
+            recovery
         );
     }
 
@@ -199,6 +224,62 @@ pub fn probe_holder(vm_id: u8, lock_dir: &Path) -> Option<LeaseInfo> {
     }
 
     Some(LeaseInfo { pid, cluster })
+}
+
+/// Diagnose a live claim without reclaiming it.
+///
+/// Returns `None` when the slot is free or the claim was stale enough for
+/// [`probe_holder`] to reclaim.
+pub fn diagnose_holder(
+    vm_id: u8,
+    lock_dir: &Path,
+    requesting_cluster: &str,
+) -> Option<LeaseDiagnosis> {
+    let path = claim_path(vm_id, lock_dir);
+    let contents = fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    let pid = v.get("pid")?.as_u64()? as u32;
+    let owner_cluster = v.get("cluster")?.as_str()?.to_string();
+    let since = v
+        .get("since")
+        .and_then(|s| s.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+    let within_startup_grace = since
+        .and_then(|s| chrono::Local::now().signed_duration_since(s).to_std().ok())
+        .is_some_and(|age| age < STARTUP_GRACE);
+
+    if !state::is_pid_alive(pid) {
+        return None;
+    }
+
+    let cmdline_substring = v
+        .get("cmdline_substring")
+        .and_then(|s| s.as_str())
+        .map(str::to_owned)
+        .unwrap_or_else(|| expected_cmdline_substring(vm_id));
+    let cmdline_matches = read_proc_cmdline(pid)
+        .map(|cmd| cmd.contains(&cmdline_substring))
+        .unwrap_or(false);
+
+    if !within_startup_grace && !cmdline_matches {
+        return None;
+    }
+
+    Some(LeaseDiagnosis {
+        vm_id,
+        owner_cluster: owner_cluster.clone(),
+        owner_pid: pid,
+        cmdline_substring,
+        cmdline_matches,
+        within_startup_grace,
+        recovery_command: format_reclaim_command(requesting_cluster, &owner_cluster, vm_id),
+    })
+}
+
+pub fn format_reclaim_command(requesting_cluster: &str, owner_cluster: &str, vm_id: u8) -> String {
+    format!(
+        "cluster-ctl --cluster {requesting_cluster} reclaim --vm vm-{vm_id} --from-cluster {owner_cluster}"
+    )
 }
 
 /// Read `/proc/{pid}/cmdline` and join the NUL-separated args into a single
@@ -361,6 +442,27 @@ mod tests {
     }
 
     #[test]
+    fn diagnose_holder_reports_foreign_live_owner_and_recovery_command() {
+        let dir = unique_lock_dir("diagnose-foreign");
+        let our_cmdline = read_proc_cmdline(live_pid()).expect("self cmdline readable");
+        let needle = our_cmdline
+            .split_whitespace()
+            .next()
+            .expect("cmdline non-empty");
+        write_claim_with_substring(2, &dir, "one-v-one", live_pid(), needle, 10);
+
+        let diagnosis = diagnose_holder(2, &dir, "tournament").expect("live holder diagnosis");
+        assert_eq!(diagnosis.vm_id, 2);
+        assert_eq!(diagnosis.owner_cluster, "one-v-one");
+        assert_eq!(diagnosis.owner_pid, live_pid());
+        assert!(diagnosis.cmdline_matches);
+        assert_eq!(
+            diagnosis.recovery_command,
+            "cluster-ctl --cluster tournament reclaim --vm vm-2 --from-cluster one-v-one"
+        );
+    }
+
+    #[test]
     fn probe_holder_handles_missing_cmdline_substring_field() {
         // Simulate a legacy claim file written before the cmdline_substring
         // field existed. probe_holder falls back to the default substring
@@ -442,6 +544,24 @@ mod tests {
         let dir = unique_lock_dir("other");
         write_claim(1, &dir, "alpha", live_pid()).unwrap();
         assert!(!try_reserve(1, &dir, "beta").unwrap());
+    }
+
+    #[test]
+    fn default_reserve_refuses_to_steal_foreign_live_claim() {
+        let dir = unique_lock_dir("reserve-nonstealing");
+        write_claim(1, &dir, "one-v-one", live_pid()).unwrap();
+
+        let err = reserve_n(1, 1, &dir, "tournament").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("only 0 of 1 requested VMs available"), "{msg}");
+        assert!(
+            msg.contains(
+                "cluster-ctl --cluster tournament reclaim --vm vm-1 --from-cluster one-v-one"
+            ),
+            "{msg}"
+        );
+        let holder = probe_holder(1, &dir).expect("foreign claim must remain");
+        assert_eq!(holder.cluster, "one-v-one");
     }
 
     #[test]

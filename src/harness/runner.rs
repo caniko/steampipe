@@ -78,6 +78,7 @@ const CAPTURE_WARN_BYTES: u64 = 500 * 1024 * 1024;
 const CORE_DUMP_BASE_DIR: &str = "/tmp/cluster-cores";
 const ARTIFACT_COPY_TIMEOUT: Duration = Duration::from_secs(20);
 const RETAINED_CORE_RUNS: usize = 3;
+const VM_HEARTBEAT_READINESS_SECS: u64 = 30;
 
 pub fn resolve_hard_timeout(timeout: Duration, explicit: Option<Duration>) -> Duration {
     explicit.unwrap_or_else(|| {
@@ -127,6 +128,28 @@ struct VmHeartbeat<'a> {
     vms: &'a [(VmName, IpAddr)],
     remote_dir: &'a str,
     heartbeat_subdir: &'a str,
+}
+
+#[derive(Debug, Clone)]
+struct VmHeartbeatSnapshotSet {
+    vm_name: VmName,
+    snapshots: Vec<HeartbeatSnapshot>,
+}
+
+#[derive(Debug, Clone)]
+struct VmLaunchEvidence {
+    vm_name: VmName,
+    summary: String,
+}
+
+#[derive(Debug, Clone)]
+struct VmReadinessEvidence {
+    vm_name: VmName,
+    ssh_reachable: bool,
+    launch_summary: String,
+    heartbeat_summary: String,
+    heartbeat_listing: String,
+    log_tail: String,
 }
 
 struct LocalDisplay {
@@ -280,6 +303,8 @@ fn fatal_output_marker(output: &str) -> Option<&'static str> {
 struct HeartbeatSnapshot {
     timestamp_ms: u64,
     #[serde(default)]
+    run_id: Option<String>,
+    #[serde(default)]
     phase: String,
     #[serde(default)]
     round: u32,
@@ -360,6 +385,29 @@ impl MonitorFailure {
         }
     }
 
+    fn vm_launch_no_heartbeat(evidence: Vec<VmReadinessEvidence>, readiness_secs: u64) -> Self {
+        let mut banner = format!(
+            "--- VM_LAUNCH_NO_HEARTBEAT (no current-run VM heartbeat within {readiness_secs}s) ---"
+        );
+        for item in evidence {
+            banner.push('\n');
+            banner.push_str(&format!(
+                "  {}: ssh_reachable={}, launch={}, heartbeats={}, files={}, log_tail={}",
+                item.vm_name,
+                item.ssh_reachable,
+                one_line(&item.launch_summary),
+                one_line(&item.heartbeat_summary),
+                one_line(&item.heartbeat_listing),
+                one_line(&item.log_tail),
+            ));
+        }
+
+        Self {
+            kind: TimeoutKind::VmLaunchNoHeartbeat,
+            banner,
+        }
+    }
+
     fn hard_timeout(
         runtime_secs: u64,
         hard_timeout_secs: u64,
@@ -405,24 +453,40 @@ impl HeartbeatSource for LocalHeartbeat<'_> {
 
 impl HeartbeatSource for VmHeartbeat<'_> {
     fn snapshots(&self) -> Vec<HeartbeatSnapshot> {
+        self.snapshots_by_vm()
+            .into_iter()
+            .flat_map(|set| set.snapshots)
+            .collect()
+    }
+}
+
+impl VmHeartbeat<'_> {
+    fn heartbeat_cat_cmd(&self) -> String {
         // Reads both the per-cluster subdir (current layout) and the legacy
         // remote-dir root (for older deployed binaries that don't honor
         // STEAMPIPE_HEARTBEAT_DIR). The legacy fallback can be removed once
         // all deployed games are recent enough.
-        let cmd = format!(
+        format!(
             "cat {0}/{1}/game_progress_*.json {0}/game_progress_*.json 2>/dev/null || true",
             self.remote_dir, self.heartbeat_subdir
-        );
-        let mut snapshots = Vec::new();
-        for (_, ip) in self.vms {
+        )
+    }
+
+    fn snapshots_by_vm(&self) -> Vec<VmHeartbeatSnapshotSet> {
+        let cmd = self.heartbeat_cat_cmd();
+        let mut sets = Vec::new();
+        for (vm_name, ip) in self.vms {
             let result = self.rt.block_on(self.backend.run_cmd_timeout(
                 ip,
                 &cmd,
                 std::time::Duration::from_secs(5),
             ));
-            snapshots.extend(parse_heartbeats(&result.stdout));
+            sets.push(VmHeartbeatSnapshotSet {
+                vm_name: vm_name.clone(),
+                snapshots: parse_heartbeats(&result.stdout),
+            });
         }
-        snapshots
+        sets
     }
 }
 
@@ -433,8 +497,45 @@ fn parse_heartbeats(content: &str) -> Vec<HeartbeatSnapshot> {
         .collect()
 }
 
-fn observe_heartbeat_source(source: &impl HeartbeatSource) -> Option<HeartbeatObservation> {
-    let snapshots = source.snapshots();
+fn heartbeat_matches_run(snapshot: &HeartbeatSnapshot, expected_run_id: &str) -> bool {
+    // Legacy-soft policy: current Chessbender builds include `run_id`, so
+    // non-matching ids are prior-run files and must be ignored. Missing ids are
+    // accepted until every deployed build writes `STEAMPIPE_RUN_ID`; VM launch
+    // cleanup removes legacy root/scoped files before normal monitoring starts.
+    snapshot
+        .run_id
+        .as_deref()
+        .is_none_or(|run_id| run_id == expected_run_id)
+}
+
+fn heartbeat_is_current_run(snapshot: &HeartbeatSnapshot, expected_run_id: &str) -> bool {
+    snapshot.run_id.as_deref() == Some(expected_run_id)
+}
+
+fn missing_vm_heartbeat_readiness(
+    snapshots_by_vm: &[VmHeartbeatSnapshotSet],
+    expected_run_id: &str,
+) -> Vec<VmName> {
+    snapshots_by_vm
+        .iter()
+        .filter(|set| {
+            !set.snapshots
+                .iter()
+                .any(|snapshot| heartbeat_is_current_run(snapshot, expected_run_id))
+        })
+        .map(|set| set.vm_name.clone())
+        .collect()
+}
+
+fn observe_heartbeat_source(
+    source: &impl HeartbeatSource,
+    expected_run_id: &str,
+) -> Option<HeartbeatObservation> {
+    let snapshots: Vec<_> = source
+        .snapshots()
+        .into_iter()
+        .filter(|snapshot| heartbeat_matches_run(snapshot, expected_run_id))
+        .collect();
     let oldest_timestamp = snapshots.iter().min_by_key(|hb| hb.timestamp_ms)?.clone();
     let slowest_progress = snapshots
         .iter()
@@ -451,11 +552,12 @@ fn check_heartbeat_source(
     source_name: &'static str,
     source: &impl HeartbeatSource,
     state: &mut HeartbeatMonitorState,
+    expected_run_id: &str,
     heartbeat_stall_secs: u64,
     no_progress_timeout: Duration,
     now_ms: u64,
 ) -> Option<MonitorFailure> {
-    let observation = observe_heartbeat_source(source)?;
+    let observation = observe_heartbeat_source(source, expected_run_id)?;
 
     let oldest = observation.oldest_timestamp.clone();
     if let Some(prev) = state.last_timestamp_ms
@@ -522,10 +624,148 @@ fn heartbeat_context(snapshot: &HeartbeatSnapshot) -> String {
     } else {
         snapshot.phase.as_str()
     };
+    let run_id = snapshot.run_id.as_deref().unwrap_or("legacy-missing");
     format!(
-        "phase={phase}, round={}, turn={}, progress_seq={}",
+        "run_id={run_id}, phase={phase}, round={}, turn={}, progress_seq={}",
         snapshot.round, snapshot.turn, snapshot.progress_seq
     )
+}
+
+fn one_line(value: &str) -> String {
+    let collapsed = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string();
+    if collapsed.is_empty() {
+        "(empty)".into()
+    } else if collapsed.len() > 500 {
+        format!("{}...", collapsed.chars().take(500).collect::<String>())
+    } else {
+        collapsed
+    }
+}
+
+fn command_result_summary(success: bool, stdout: &str, stderr: &str) -> String {
+    format!(
+        "success={success}, stdout={}, stderr={}",
+        one_line(stdout),
+        one_line(stderr)
+    )
+}
+
+fn heartbeat_snapshot_summary(snapshots: &[HeartbeatSnapshot], expected_run_id: &str) -> String {
+    if snapshots.is_empty() {
+        return "no parsed heartbeat snapshots".into();
+    }
+
+    snapshots
+        .iter()
+        .take(8)
+        .map(|snapshot| {
+            format!(
+                "ts={}, run_id={}, current_run={}, phase={}, round={}, turn={}, progress_seq={}",
+                snapshot.timestamp_ms,
+                snapshot.run_id.as_deref().unwrap_or("legacy-missing"),
+                heartbeat_is_current_run(snapshot, expected_run_id),
+                if snapshot.phase.is_empty() {
+                    "unknown"
+                } else {
+                    snapshot.phase.as_str()
+                },
+                snapshot.round,
+                snapshot.turn,
+                snapshot.progress_seq,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn build_vm_readiness_evidence_cmd(
+    remote_dir: &str,
+    heartbeat_dir: &str,
+    log_file: &str,
+) -> String {
+    let scoped_dir = format!("{remote_dir}/{heartbeat_dir}");
+    let log_path = format!("{remote_dir}/{log_file}");
+    format!(
+        "printf '__HEARTBEAT_JSON__\\n'; \
+         cat {scoped}/game_progress_*.json {root}/game_progress_*.json 2>/dev/null || true; \
+         printf '\\n__HEARTBEAT_FILES__\\n'; \
+         find {scoped_dir} {root_dir} -maxdepth 1 -type f \\( -name 'game_progress_*.json' -o -name 'game_progress_*.tmp' \\) -printf '%p %s bytes\\n' 2>/dev/null || true; \
+         printf '__VM_LOG_TAIL__\\n'; \
+         tail -n 80 {log} 2>/dev/null || printf '(no log)\\n'",
+        scoped = shell_quote(&scoped_dir),
+        root = shell_quote(remote_dir),
+        scoped_dir = shell_quote(&scoped_dir),
+        root_dir = shell_quote(remote_dir),
+        log = shell_quote(&log_path),
+    )
+}
+
+fn section_between<'a>(content: &'a str, start: &str, end: &str) -> &'a str {
+    let Some((_, rest)) = content.split_once(start) else {
+        return "";
+    };
+    rest.split_once(end)
+        .map_or(rest, |(section, _)| section)
+        .trim()
+}
+
+fn section_after<'a>(content: &'a str, start: &str) -> &'a str {
+    content
+        .split_once(start)
+        .map_or("", |(_, section)| section.trim())
+}
+
+fn launch_summary_for(vm_name: &VmName, launch_evidence: &[VmLaunchEvidence]) -> String {
+    launch_evidence
+        .iter()
+        .find(|evidence| evidence.vm_name == *vm_name)
+        .map(|evidence| evidence.summary.clone())
+        .unwrap_or_else(|| "launch evidence unavailable".into())
+}
+
+fn collect_vm_readiness_evidence(
+    rt: &tokio::runtime::Handle,
+    backend: &Backend,
+    vm_ips: &[(VmName, IpAddr)],
+    remote_dir: &str,
+    heartbeat_subdir: &str,
+    log_file: &str,
+    artifact_run_id: &str,
+    launch_evidence: &[VmLaunchEvidence],
+) -> Vec<VmReadinessEvidence> {
+    let cmd = build_vm_readiness_evidence_cmd(remote_dir, heartbeat_subdir, log_file);
+    vm_ips
+        .iter()
+        .map(|(vm_name, ip)| {
+            let result =
+                rt.block_on(backend.run_cmd_timeout(ip, &cmd, std::time::Duration::from_secs(5)));
+            let heartbeat_json =
+                section_between(&result.stdout, "__HEARTBEAT_JSON__", "__HEARTBEAT_FILES__");
+            let snapshots = parse_heartbeats(heartbeat_json);
+            VmReadinessEvidence {
+                vm_name: vm_name.clone(),
+                ssh_reachable: result.success,
+                launch_summary: launch_summary_for(vm_name, launch_evidence),
+                heartbeat_summary: heartbeat_snapshot_summary(&snapshots, artifact_run_id),
+                heartbeat_listing: section_between(
+                    &result.stdout,
+                    "__HEARTBEAT_FILES__",
+                    "__VM_LOG_TAIL__",
+                )
+                .to_string(),
+                log_tail: if result.success {
+                    section_after(&result.stdout, "__VM_LOG_TAIL__").to_string()
+                } else {
+                    format!("ssh command failed: {}", one_line(&result.stderr))
+                },
+            }
+        })
+        .collect()
 }
 
 async fn run_configured_scenes<S>(
@@ -1100,6 +1340,7 @@ pub async fn run<S>(
         local_cmd.current_dir(project_root);
         local_cmd.env("BEVY_ASSET_ROOT", project_root);
         local_cmd.env("STEAMPIPE_HEARTBEAT_DIR", &local_heartbeat_dir);
+        local_cmd.env("STEAMPIPE_RUN_ID", &artifact_run_id);
         if let Some(display) = &local_display {
             display.apply_to(&mut local_cmd);
         }
@@ -1146,9 +1387,35 @@ pub async fn run<S>(
         // Launch game on VMs (joiners)
         eprintln!("[cluster-ctl] Launching game on VMs...");
         let mut vm_launch_ok = true;
+        let mut vm_launch_evidence = Vec::new();
         for vm in target_vms {
             eprintln!("[cluster-ctl]   launching on {}...", vm.name);
-            if let Err(e) = launch_game(
+            match cleanup_vm_heartbeat_files(
+                backend,
+                &vm.ip,
+                &config.remote_dir,
+                &vm_heartbeat_subdir,
+            )
+            .await
+            {
+                Ok(removed) => {
+                    print_and_push(
+                        &mut output,
+                        &format!("  {}: removed {removed} stale heartbeat file(s)", vm.name),
+                        verbose,
+                    );
+                }
+                Err(error) => {
+                    print_and_push(
+                        &mut output,
+                        &format!("  {}: heartbeat cleanup FAILED: {error}", vm.name),
+                        verbose,
+                    );
+                    vm_launch_ok = false;
+                    continue;
+                }
+            }
+            match launch_game(
                 backend,
                 &vm.ip,
                 &config.remote_dir,
@@ -1164,12 +1431,15 @@ pub async fn run<S>(
             )
             .await
             {
-                print_and_push(
-                    &mut output,
-                    &format!("  {}: launch FAILED: {e}", vm.name),
-                    verbose,
-                );
-                vm_launch_ok = false;
+                Ok(evidence) => vm_launch_evidence.push(evidence),
+                Err(e) => {
+                    print_and_push(
+                        &mut output,
+                        &format!("  {}: launch FAILED: {e}", vm.name),
+                        verbose,
+                    );
+                    vm_launch_ok = false;
+                }
             }
         }
 
@@ -1267,6 +1537,9 @@ pub async fn run<S>(
         let backend_for_monitor = backend.clone();
         let remote_dir_owned = config.remote_dir.clone();
         let vm_heartbeat_subdir_owned = vm_heartbeat_subdir.clone();
+        let artifact_run_id_owned = artifact_run_id.clone();
+        let log_file_owned = config.log_file.clone();
+        let vm_launch_evidence_owned = vm_launch_evidence.clone();
 
         let hb_stall = test_config.heartbeat_stall_secs;
         let hard_timeout = test_config.hard_timeout;
@@ -1282,6 +1555,9 @@ pub async fn run<S>(
                 &backend_for_monitor,
                 &remote_dir_owned,
                 &vm_heartbeat_subdir_owned,
+                &artifact_run_id_owned,
+                &log_file_owned,
+                &vm_launch_evidence_owned,
                 hb_stall,
                 if test_config.capture_mode == CaptureMode::FailureAndStall
                     || test_config.capture_mode == CaptureMode::Timelapse
@@ -1833,6 +2109,7 @@ fn build_vm_launch_cmd(
 ) -> String {
     let extra_exports = format_inline_exports(extra_env);
     let core_setup = build_vm_core_setup_cmd(cluster_name, artifact_run_id, vm_name);
+    let quoted_run_id = shell_quote(artifact_run_id);
     format!(
         "mkdir -p {remote_dir}/{heartbeat_dir} && \
          (find {remote_dir}/{heartbeat_dir} -type f -name panic.log -delete 2>/dev/null || true) && \
@@ -1843,10 +2120,45 @@ fn build_vm_launch_cmd(
          XDG_RUNTIME_DIR=/tmp/runtime-{vm_user} \
          WAYLAND_DISPLAY=wayland-1 \
          WGPU_BACKEND=vulkan \
-         STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir}{extra_exports} && \
+         STEAMPIPE_HEARTBEAT_DIR={remote_dir}/{heartbeat_dir} \
+         STEAMPIPE_RUN_ID={quoted_run_id}{extra_exports} && \
          ulimit -c unlimited && \
          nohup ./{binary_name} {args} > {log_file} 2>&1 < /dev/null & disown"
     )
+}
+
+fn build_vm_heartbeat_cleanup_cmd(remote_dir: &str, heartbeat_dir: &str) -> String {
+    let scoped_dir = format!("{remote_dir}/{heartbeat_dir}");
+    let quoted_scoped_dir = shell_quote(&scoped_dir);
+    let quoted_remote_dir = shell_quote(remote_dir);
+    format!(
+        "mkdir -p {scoped} && \
+         files=$(find {scoped} {root} -maxdepth 1 -type f \\( -name 'game_progress_*.json' -o -name 'game_progress_*.tmp' \\) -print 2>/dev/null) && \
+         if [ -n \"$files\" ]; then printf '%s\\n' \"$files\" | xargs -r rm -f; fi && \
+         if [ -n \"$files\" ]; then printf '%s\\n' \"$files\" | sed '/^$/d' | wc -l; else printf '0\\n'; fi",
+        scoped = quoted_scoped_dir,
+        root = quoted_remote_dir,
+    )
+}
+
+async fn cleanup_vm_heartbeat_files(
+    backend: &Backend,
+    ip: &str,
+    remote_dir: &str,
+    heartbeat_dir: &str,
+) -> anyhow::Result<u32> {
+    let cmd = build_vm_heartbeat_cleanup_cmd(remote_dir, heartbeat_dir);
+    let result = backend
+        .run_cmd_timeout(ip, &cmd, Duration::from_secs(5))
+        .await;
+    if !result.success {
+        anyhow::bail!("{}", result.stderr);
+    }
+    result
+        .stdout
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| anyhow::anyhow!("failed to parse heartbeat cleanup count: {error}"))
 }
 
 async fn launch_game(
@@ -1862,7 +2174,7 @@ async fn launch_game(
     cluster_name: &str,
     artifact_run_id: &str,
     vm_name: &VmName,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<VmLaunchEvidence> {
     // Per-cluster heartbeat dir on the VM (`<remote_dir>/<heartbeat_dir>`)
     // mirrors the host-side scoping. Lease partitioning already guarantees one
     // game per VM at a time, but scoping per cluster name means a prior owner's
@@ -1889,14 +2201,21 @@ async fn launch_game(
     let result = backend
         .run_cmd_timeout(ip, &cmd, Duration::from_secs(5))
         .await;
+    let summary = command_result_summary(result.success, &result.stdout, &result.stderr);
     if !result.success {
         // Timeout is OK here — the command backgrounds successfully but SSH may not close the channel
         if result.stderr.contains("timed out") {
-            return Ok(());
+            return Ok(VmLaunchEvidence {
+                vm_name: vm_name.clone(),
+                summary,
+            });
         }
         anyhow::bail!("{}", result.stderr);
     }
-    Ok(())
+    Ok(VmLaunchEvidence {
+        vm_name: vm_name.clone(),
+        summary,
+    })
 }
 
 async fn harvest_failure_artifacts(
@@ -2103,6 +2422,7 @@ fn timeout_failure_code(kind: TimeoutKind) -> i32 {
         TimeoutKind::HeartbeatStall => -1,
         TimeoutKind::NoProgressTimeout => -2,
         TimeoutKind::HardTimeout => -3,
+        TimeoutKind::VmLaunchNoHeartbeat => -4,
     }
 }
 
@@ -2111,6 +2431,7 @@ fn timeout_failure_label(code: i32) -> &'static str {
         -1 => TimeoutKind::HeartbeatStall.label(),
         -2 => TimeoutKind::NoProgressTimeout.label(),
         -3 => TimeoutKind::HardTimeout.label(),
+        -4 => TimeoutKind::VmLaunchNoHeartbeat.label(),
         _ => "TIMEOUT",
     }
 }
@@ -2129,6 +2450,9 @@ fn monitor_local_process(
     backend: &Backend,
     remote_dir: &str,
     vm_heartbeat_subdir: &str,
+    artifact_run_id: &str,
+    log_file: &str,
+    vm_launch_evidence: &[VmLaunchEvidence],
     heartbeat_stall_secs: u64,
     stall_capture: Option<StallCaptureContext>,
 ) -> anyhow::Result<(String, Option<i32>, Option<MonitorFailure>)> {
@@ -2159,6 +2483,8 @@ fn monitor_local_process(
     let mut vm_state = HeartbeatMonitorState::default();
     let mut last_heartbeat_check = Instant::now();
     let mut last_vm_check = Instant::now();
+    let mut vm_heartbeat_ready = vm_ips.is_empty();
+    let vm_readiness_deadline = Instant::now() + Duration::from_secs(VM_HEARTBEAT_READINESS_SECS);
 
     let rt = tokio::runtime::Handle::current();
     let local_hb = LocalHeartbeat {
@@ -2195,12 +2521,42 @@ fn monitor_local_process(
                 break;
             }
             Ok(None) => {
+                if !vm_heartbeat_ready && last_vm_check.elapsed() > Duration::from_secs(2) {
+                    last_vm_check = Instant::now();
+                    let snapshots_by_vm = vm_hb.snapshots_by_vm();
+                    let missing = missing_vm_heartbeat_readiness(&snapshots_by_vm, artifact_run_id);
+                    if missing.is_empty() {
+                        vm_heartbeat_ready = true;
+                    } else if Instant::now() > vm_readiness_deadline {
+                        let evidence = collect_vm_readiness_evidence(
+                            &rt,
+                            backend,
+                            vm_ips,
+                            remote_dir,
+                            vm_heartbeat_subdir,
+                            log_file,
+                            artifact_run_id,
+                            vm_launch_evidence,
+                        )
+                        .into_iter()
+                        .filter(|item| missing.iter().any(|name| *name == item.vm_name))
+                        .collect();
+                        exit_code = kill_and_reap(child, shutdown_timeout);
+                        failure = Some(MonitorFailure::vm_launch_no_heartbeat(
+                            evidence,
+                            VM_HEARTBEAT_READINESS_SECS,
+                        ));
+                        break;
+                    }
+                }
+
                 if last_heartbeat_check.elapsed() > Duration::from_secs(2) {
                     last_heartbeat_check = Instant::now();
                     if let Some(stall) = check_heartbeat_source(
                         "local",
                         &local_hb,
                         &mut local_state,
+                        artifact_run_id,
                         heartbeat_stall_secs,
                         timeout,
                         now_ms() as u64,
@@ -2215,12 +2571,13 @@ fn monitor_local_process(
                     }
                 }
 
-                if last_vm_check.elapsed() > Duration::from_secs(10) {
+                if vm_heartbeat_ready && last_vm_check.elapsed() > Duration::from_secs(10) {
                     last_vm_check = Instant::now();
                     if let Some(stall) = check_heartbeat_source(
                         "vm",
                         &vm_hb,
                         &mut vm_state,
+                        artifact_run_id,
                         heartbeat_stall_secs,
                         timeout,
                         now_ms() as u64,
@@ -2369,16 +2726,15 @@ mod tests {
         ));
     }
 
-    /// Empty env table → empty inline-export string. Production runs that
-    /// don't set any session id must produce a bash `export ...` clause
-    /// byte-identical to the pre-feature path.
+    /// Empty env table -> empty inline-export string. Run identity is added
+    /// separately by the VM launch command.
     #[test]
     fn format_inline_exports_empty() {
         let env = std::collections::BTreeMap::new();
         assert_eq!(format_inline_exports(&env), "");
     }
 
-    /// Populated env table → leading-space-separated `KEY='VALUE'` pairs in
+    /// Populated env table -> leading-space-separated `KEY='VALUE'` pairs in
     /// `BTreeMap` (sorted) order, ready to drop into an `export ...` clause.
     #[test]
     fn format_inline_exports_populates() {
@@ -2402,9 +2758,9 @@ mod tests {
         assert_eq!(format_inline_exports(&env), " WEIRD='a'\\''b'");
     }
 
-    /// Production path: when no env entries are provided, the VM bash -c
-    /// command defaults graphical clients to Vulkan and leaves no stray
-    /// exports or trailing whitespace before the trailing `&&`.
+    /// Production path: when no caller env entries are provided, the VM bash
+    /// command still defaults graphical clients to Vulkan and exports the run
+    /// identity without extra profile variables.
     #[test]
     fn build_vm_launch_cmd_empty_env_unchanged() {
         let env = std::collections::BTreeMap::new();
@@ -2413,11 +2769,13 @@ mod tests {
             cmd.contains("WGPU_BACKEND=vulkan"),
             "expected Vulkan-first default in VM launch env, got: {cmd}",
         );
-        // No caller-supplied KEY='VAL' shows up between
-        // `STEAMPIPE_HEARTBEAT_DIR=...` and the trailing ` &&`.
         assert!(
-            cmd.contains("STEAMPIPE_HEARTBEAT_DIR=/home/u/cb/.steampipe-runtime/1v1/heartbeats &&"),
+            cmd.contains("STEAMPIPE_HEARTBEAT_DIR=/home/u/cb/.steampipe-runtime/1v1/heartbeats"),
             "expected production-shape export tail, got: {cmd}",
+        );
+        assert!(
+            cmd.contains("STEAMPIPE_RUN_ID='1v1-uifull-20260604-120000-run-1' &&"),
+            "expected run id export in VM launch env, got: {cmd}",
         );
         assert!(
             !cmd.contains("THESPAN_SESSION_ID="),
@@ -2441,7 +2799,9 @@ mod tests {
         env.insert("THESPAN_SESSION_ID".into(), "1v1-uifull-12345".into());
         let cmd = test_launch_cmd(".steampipe-runtime/1v1-uifull/heartbeats", &env);
         assert!(
-            cmd.contains("THESPAN_SESSION_ID='1v1-uifull-12345' &&"),
+            cmd.contains(
+                "STEAMPIPE_RUN_ID='1v1-uifull-20260604-120000-run-1' THESPAN_SESSION_ID='1v1-uifull-12345' &&"
+            ),
             "expected session id on the same export line, got: {cmd}",
         );
         // The injected env must precede the `nohup ./chessbender ...` so it
@@ -2555,6 +2915,14 @@ mod tests {
         assert!(parse_heartbeats("not json").is_empty());
     }
 
+    #[test]
+    fn parse_heartbeats_carries_optional_run_id() {
+        let input = r#"{"timestamp_ms":1000,"run_id":"run-1","phase":"Battle","round":1,"turn":2,"progress_seq":3}"#;
+        let parsed = parse_heartbeats(input);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].run_id.as_deref(), Some("run-1"));
+    }
+
     fn heartbeat(
         timestamp_ms: u64,
         phase: &str,
@@ -2564,10 +2932,25 @@ mod tests {
     ) -> HeartbeatSnapshot {
         HeartbeatSnapshot {
             timestamp_ms,
+            run_id: None,
             phase: phase.to_string(),
             round,
             turn,
             progress_seq,
+        }
+    }
+
+    fn heartbeat_for_run(
+        timestamp_ms: u64,
+        run_id: &str,
+        phase: &str,
+        round: u32,
+        turn: u32,
+        progress_seq: u64,
+    ) -> HeartbeatSnapshot {
+        HeartbeatSnapshot {
+            run_id: Some(run_id.to_string()),
+            ..heartbeat(timestamp_ms, phase, round, turn, progress_seq)
         }
     }
 
@@ -2585,18 +2968,103 @@ mod tests {
             heartbeat(1000, "Draft", 1, 1, 2),
             heartbeat(2000, "Battle", 1, 3, 1),
         ]);
-        let observation = observe_heartbeat_source(&hb).expect("heartbeat observation");
+        let observation = observe_heartbeat_source(&hb, "run-1").expect("heartbeat observation");
         assert_eq!(observation.oldest_timestamp.timestamp_ms, 1000);
         assert_eq!(observation.slowest_progress.progress_seq, 1);
         assert_eq!(observation.slowest_progress.turn, 3);
     }
 
     #[test]
+    fn observe_heartbeat_source_ignores_non_matching_run_ids() {
+        let hb = FakeHeartbeat(vec![
+            heartbeat_for_run(1000, "old-run", "Battle", 1, 1, 5),
+            heartbeat_for_run(30_000, "current-run", "Battle", 1, 2, 6),
+        ]);
+        let observation =
+            observe_heartbeat_source(&hb, "current-run").expect("heartbeat observation");
+        assert_eq!(observation.oldest_timestamp.timestamp_ms, 30_000);
+        assert_eq!(
+            observation.oldest_timestamp.run_id.as_deref(),
+            Some("current-run")
+        );
+    }
+
+    #[test]
+    fn observe_heartbeat_source_accepts_missing_run_id_as_legacy_snapshot() {
+        let hb = FakeHeartbeat(vec![heartbeat(1000, "Battle", 1, 1, 5)]);
+        let observation =
+            observe_heartbeat_source(&hb, "current-run").expect("legacy heartbeat observation");
+        assert_eq!(observation.oldest_timestamp.timestamp_ms, 1000);
+        assert_eq!(observation.oldest_timestamp.run_id, None);
+    }
+
+    #[test]
+    fn vm_heartbeat_readiness_accepts_current_run_heartbeats_for_all_vms() {
+        let snapshots = vec![
+            VmHeartbeatSnapshotSet {
+                vm_name: VmName("vm-1".into()),
+                snapshots: vec![heartbeat_for_run(1000, "current-run", "Draft", 1, 1, 0)],
+            },
+            VmHeartbeatSnapshotSet {
+                vm_name: VmName("vm-2".into()),
+                snapshots: vec![heartbeat_for_run(1200, "current-run", "Draft", 1, 1, 0)],
+            },
+        ];
+
+        assert!(missing_vm_heartbeat_readiness(&snapshots, "current-run").is_empty());
+    }
+
+    #[test]
+    fn vm_heartbeat_readiness_reports_vm_without_heartbeat() {
+        let snapshots = vec![
+            VmHeartbeatSnapshotSet {
+                vm_name: VmName("vm-1".into()),
+                snapshots: vec![heartbeat_for_run(1000, "current-run", "Draft", 1, 1, 0)],
+            },
+            VmHeartbeatSnapshotSet {
+                vm_name: VmName("vm-2".into()),
+                snapshots: Vec::new(),
+            },
+        ];
+
+        assert_eq!(
+            missing_vm_heartbeat_readiness(&snapshots, "current-run"),
+            vec![VmName("vm-2".into())]
+        );
+    }
+
+    #[test]
+    fn vm_heartbeat_readiness_rejects_old_run_and_legacy_heartbeats() {
+        let snapshots = vec![
+            VmHeartbeatSnapshotSet {
+                vm_name: VmName("vm-1".into()),
+                snapshots: vec![heartbeat_for_run(1000, "old-run", "Battle", 2, 3, 9)],
+            },
+            VmHeartbeatSnapshotSet {
+                vm_name: VmName("vm-2".into()),
+                snapshots: vec![heartbeat(1200, "Battle", 2, 3, 9)],
+            },
+        ];
+
+        assert_eq!(
+            missing_vm_heartbeat_readiness(&snapshots, "current-run"),
+            vec![VmName("vm-1".into()), VmName("vm-2".into())]
+        );
+    }
+
+    #[test]
     fn check_heartbeat_source_initializes_without_failing() {
         let hb = FakeHeartbeat(vec![heartbeat(1000, "Draft", 1, 1, 0)]);
         let mut state = HeartbeatMonitorState::default();
-        let failure =
-            check_heartbeat_source("local", &hb, &mut state, 30, Duration::from_secs(30), 1000);
+        let failure = check_heartbeat_source(
+            "local",
+            &hb,
+            &mut state,
+            "run-1",
+            30,
+            Duration::from_secs(30),
+            1000,
+        );
         assert!(failure.is_none());
         assert_eq!(state.last_timestamp_ms, Some(1000));
         assert_eq!(state.last_progress_at_ms, Some(1000));
@@ -2607,15 +3075,111 @@ mod tests {
         let hb = FakeHeartbeat(vec![heartbeat(1000, "Battle", 1, 1, 5)]);
         let mut state = HeartbeatMonitorState::default();
         assert!(
-            check_heartbeat_source("vm", &hb, &mut state, 30, Duration::from_secs(60), 1000)
-                .is_none()
+            check_heartbeat_source(
+                "vm",
+                &hb,
+                &mut state,
+                "run-1",
+                30,
+                Duration::from_secs(60),
+                1000
+            )
+            .is_none()
         );
 
-        let failure =
-            check_heartbeat_source("vm", &hb, &mut state, 30, Duration::from_secs(60), 32_000)
-                .expect("heartbeat stall");
+        let failure = check_heartbeat_source(
+            "vm",
+            &hb,
+            &mut state,
+            "run-1",
+            30,
+            Duration::from_secs(60),
+            32_000,
+        )
+        .expect("heartbeat stall");
         assert_eq!(failure.kind, TimeoutKind::HeartbeatStall);
         assert!(failure.banner.contains("HEARTBEAT_STALL"));
+    }
+
+    #[test]
+    fn check_heartbeat_source_ignores_old_run_stale_heartbeat() {
+        let initial = FakeHeartbeat(vec![heartbeat_for_run(
+            30_000,
+            "current-run",
+            "Battle",
+            1,
+            1,
+            5,
+        )]);
+        let mut state = HeartbeatMonitorState::default();
+        assert!(
+            check_heartbeat_source(
+                "vm",
+                &initial,
+                &mut state,
+                "current-run",
+                30,
+                Duration::from_secs(60),
+                30_000,
+            )
+            .is_none()
+        );
+
+        let mixed = FakeHeartbeat(vec![
+            heartbeat_for_run(1000, "old-run", "Battle", 1, 1, 5),
+            heartbeat_for_run(32_000, "current-run", "Battle", 1, 2, 6),
+        ]);
+        assert!(
+            check_heartbeat_source(
+                "vm",
+                &mixed,
+                &mut state,
+                "current-run",
+                30,
+                Duration::from_secs(60),
+                32_000,
+            )
+            .is_none()
+        );
+        assert_eq!(state.last_timestamp_ms, Some(32_000));
+    }
+
+    #[test]
+    fn check_heartbeat_source_current_run_stale_heartbeat_still_stalls() {
+        let hb = FakeHeartbeat(vec![heartbeat_for_run(
+            1000,
+            "current-run",
+            "Battle",
+            1,
+            1,
+            5,
+        )]);
+        let mut state = HeartbeatMonitorState::default();
+        assert!(
+            check_heartbeat_source(
+                "vm",
+                &hb,
+                &mut state,
+                "current-run",
+                30,
+                Duration::from_secs(60),
+                1000,
+            )
+            .is_none()
+        );
+
+        let failure = check_heartbeat_source(
+            "vm",
+            &hb,
+            &mut state,
+            "current-run",
+            30,
+            Duration::from_secs(60),
+            32_000,
+        )
+        .expect("current-run heartbeat stall");
+        assert_eq!(failure.kind, TimeoutKind::HeartbeatStall);
+        assert!(failure.banner.contains("run_id=current-run"));
     }
 
     #[test]
@@ -2623,8 +3187,16 @@ mod tests {
         let hb = FakeHeartbeat(vec![heartbeat(1000, "Battle", 1, 1, 5)]);
         let mut state = HeartbeatMonitorState::default();
         assert!(
-            check_heartbeat_source("local", &hb, &mut state, 45, Duration::from_secs(30), 1000)
-                .is_none()
+            check_heartbeat_source(
+                "local",
+                &hb,
+                &mut state,
+                "run-1",
+                45,
+                Duration::from_secs(30),
+                1000
+            )
+            .is_none()
         );
 
         let updated_timestamp = FakeHeartbeat(vec![heartbeat(20_000, "Battle", 1, 1, 5)]);
@@ -2632,6 +3204,7 @@ mod tests {
             "local",
             &updated_timestamp,
             &mut state,
+            "run-1",
             45,
             Duration::from_secs(30),
             32_000,
@@ -2650,6 +3223,7 @@ mod tests {
                 "local",
                 &initial,
                 &mut state,
+                "run-1",
                 45,
                 Duration::from_secs(30),
                 1000,
@@ -2663,6 +3237,7 @@ mod tests {
                 "local",
                 &phase_changed,
                 &mut state,
+                "run-1",
                 45,
                 Duration::from_secs(30),
                 31_000,
@@ -2670,6 +3245,22 @@ mod tests {
             .is_none()
         );
         assert_eq!(state.last_progress_at_ms, Some(31_000));
+    }
+
+    #[test]
+    fn build_vm_heartbeat_cleanup_cmd_covers_scoped_and_legacy_files() {
+        let cmd = build_vm_heartbeat_cleanup_cmd(
+            "/home/u/cb",
+            ".steampipe-runtime/1v1-uifull/heartbeats",
+        );
+
+        assert!(cmd.contains("mkdir -p '/home/u/cb/.steampipe-runtime/1v1-uifull/heartbeats'"));
+        assert!(
+            cmd.contains("find '/home/u/cb/.steampipe-runtime/1v1-uifull/heartbeats' '/home/u/cb'")
+        );
+        assert!(cmd.contains("-name 'game_progress_*.json'"));
+        assert!(cmd.contains("-name 'game_progress_*.tmp'"));
+        assert!(cmd.contains("wc -l"));
     }
 
     #[tokio::test]
@@ -2700,6 +3291,9 @@ mod tests {
                 &Backend::new_local(std::env::temp_dir()),
                 "/tmp/unused",
                 "unused",
+                "run-1",
+                "game.log",
+                &[],
                 30,
                 None,
             )
@@ -2798,8 +3392,10 @@ mod tests {
         assert_eq!(timeout_failure_code(TimeoutKind::HeartbeatStall), -1);
         assert_eq!(timeout_failure_code(TimeoutKind::NoProgressTimeout), -2);
         assert_eq!(timeout_failure_code(TimeoutKind::HardTimeout), -3);
+        assert_eq!(timeout_failure_code(TimeoutKind::VmLaunchNoHeartbeat), -4);
         assert_eq!(timeout_failure_label(-1), "HEARTBEAT_STALL");
         assert_eq!(timeout_failure_label(-2), "NO_PROGRESS_TIMEOUT");
         assert_eq!(timeout_failure_label(-3), "HARD_TIMEOUT");
+        assert_eq!(timeout_failure_label(-4), "VM_LAUNCH_NO_HEARTBEAT");
     }
 }

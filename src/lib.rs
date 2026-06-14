@@ -974,6 +974,9 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
             }
             lifecycle::reset_vm_home(&config, &vm)?;
         }
+        Commands::Reclaim { vm, from_cluster } => {
+            lifecycle::reclaim(&config, &vm, &from_cluster).await?;
+        }
         Commands::Steam { action } => match action {
             SteamAction::Check {
                 target,

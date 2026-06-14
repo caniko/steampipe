@@ -186,6 +186,16 @@ pub enum Commands {
         timeout: u64,
     },
 
+    /// Reclaim one live VM from another verified cluster lease
+    Reclaim {
+        /// VM name: "3" or "vm-3"
+        #[arg(long)]
+        vm: String,
+        /// Expected current owning cluster. Reclaim fails if the live holder differs.
+        #[arg(long)]
+        from_cluster: String,
+    },
+
     /// Restart VMs (stop then start)
     Restart {
         /// Target VM: "all", "3", "vm-3" (default: all)
@@ -877,6 +887,28 @@ mod tests {
         let mut full = vec!["cluster-ctl"];
         full.extend_from_slice(args);
         Cli::try_parse_from(full).expect("CLI parse failed")
+    }
+
+    #[test]
+    fn reclaim_parses_vm_and_from_cluster() {
+        let cli = parse(&[
+            "--vm-count",
+            "7",
+            "--cluster",
+            "tournament",
+            "reclaim",
+            "--vm",
+            "vm-1",
+            "--from-cluster",
+            "1v1",
+        ]);
+        match cli.command {
+            Commands::Reclaim { vm, from_cluster } => {
+                assert_eq!(vm, "vm-1");
+                assert_eq!(from_cluster, "1v1");
+            }
+            _ => panic!("expected Reclaim command"),
+        }
     }
 
     // ── Logs command ─────────────────────────────────────────────────────
