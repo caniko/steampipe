@@ -22,6 +22,7 @@ pub(crate) struct AccountInfo {
 
 /// Host-side Steam session status derived from persisted login state.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)]
 pub(crate) enum SessionStatus {
     Ok,
     Stale,
@@ -319,6 +320,7 @@ fn parse_steam_id_from_loginusers(contents: &str) -> Option<String> {
         .map(|match_| match_.as_str().to_string())
 }
 
+#[allow(dead_code)]
 fn find_refresh_token_file(login_dir: &Path, steam_id: &str) -> Option<(PathBuf, String)> {
     let local_vdf = login_dir.join("config").join(steam_id).join("local.vdf");
     if let Some(jwt) = read_refresh_jwt(&local_vdf) {
@@ -368,11 +370,13 @@ fn is_gui_cache_value(value: &str) -> bool {
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-' || byte == b'_')
 }
 
+#[allow(dead_code)]
 fn read_refresh_jwt(path: &Path) -> Option<String> {
     let contents = std::fs::read_to_string(path).ok()?;
     extract_refresh_jwt(&contents).map(ToOwned::to_owned)
 }
 
+#[allow(dead_code)]
 fn extract_refresh_jwt(contents: &str) -> Option<&str> {
     // Steam's refresh tokens are JWTs whose header/payload JSON is space-padded
     // (`{ "typ": "JWT", ... }`), so they base64url-encode to an `eyA...` prefix
@@ -387,6 +391,7 @@ fn extract_refresh_jwt(contents: &str) -> Option<&str> {
         .map(|match_| match_.as_str())
 }
 
+#[allow(dead_code)]
 fn jwt_exp_unix(jwt: &str) -> Option<i64> {
     let payload_b64 = jwt.split('.').nth(1)?;
     let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD

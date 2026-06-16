@@ -3053,10 +3053,16 @@ mod tests {
     #[test]
     fn generate_yh_cluster_config_produces_valid_toml() {
         let tmp = tempfile::tempdir().unwrap();
-        let toml_str = generate_yh_cluster_config(tmp.path(), Some(3), None, None, None, None, None, None);
+        let toml_str =
+            generate_yh_cluster_config(tmp.path(), Some(3), None, None, None, None, None, None);
         let parsed: toml::Value = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed["vm_count"].as_integer(), Some(3));
-        assert!(parsed["project_root"].as_str().unwrap().ends_with(tmp.path().display().to_string().as_str()));
+        assert!(
+            parsed["project_root"]
+                .as_str()
+                .unwrap()
+                .ends_with(tmp.path().display().to_string().as_str())
+        );
     }
 
     #[test]
@@ -3090,27 +3096,33 @@ mod tests {
 
     #[test]
     fn visual_validator_kind_inferred_from_visual_block() {
-        let proj: ProjectConfig = toml::from_str(r#"
+        let proj: ProjectConfig = toml::from_str(
+            r#"
             binary_name = "g"
             cargo_package = "g"
             vm_user = "u"
             remote_dir = "/r"
             [visual]
             golden_dir = "golden"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert_eq!(proj.effective_validator_kind(None), ValidatorKind::Golden);
     }
 
     #[test]
     fn visual_validator_kind_shell_requires_validator() {
-        let proj: ProjectConfig = toml::from_str(r#"
+        let proj: ProjectConfig = toml::from_str(
+            r#"
             binary_name = "g"
             cargo_package = "g"
             vm_user = "u"
             remote_dir = "/r"
             [profile.p]
             validator_kind = "shell"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         let profile = proj.profile.as_ref().unwrap().get("p");
         assert_eq!(proj.effective_validator_kind(profile), ValidatorKind::Shell);
     }

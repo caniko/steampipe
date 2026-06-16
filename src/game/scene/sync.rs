@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use crate::core::config::{LogLineMatches, Scene, SceneSync, VmDef, VmName, IpAddr, WindowTarget};
+use crate::core::config::{LogLineMatches, Scene, SceneSync, VmDef, WindowTarget};
 
 use super::{SceneBackend, shell_quote};
 
@@ -368,7 +368,7 @@ struct SwayWindowProperties {
 mod tests {
     use super::*;
     use crate::core::backend::CmdOutput;
-    use crate::core::config::WaitFor;
+    use crate::core::config::{IpAddr, VmName, WaitFor};
     use std::pin::Pin;
 
     fn tree(json: &str) -> SwayNode {
@@ -526,7 +526,12 @@ mod tests {
         }
 
         fn last_call(&self) -> String {
-            self.calls.lock().unwrap().last().cloned().unwrap_or_default()
+            self.calls
+                .lock()
+                .unwrap()
+                .last()
+                .cloned()
+                .unwrap_or_default()
         }
     }
 
@@ -615,7 +620,14 @@ mod tests {
             log_offset: None,
         };
 
-        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_millis(100)).await;
+        let result = wait_for_sync(
+            &backend,
+            &vm(),
+            &sync,
+            &prepared,
+            Duration::from_millis(100),
+        )
+        .await;
         assert!(result.is_err(), "expected timeout error");
         let err = result.unwrap_err().to_string();
         assert!(err.contains("timed out"), "{err}");
@@ -649,7 +661,8 @@ mod tests {
             log_offset: None,
         };
 
-        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_millis(50)).await;
+        let result =
+            wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_millis(50)).await;
         assert!(result.is_err(), "expected timeout error");
     }
 
@@ -701,7 +714,14 @@ mod tests {
             log_offset: None,
         };
 
-        let result = wait_for_sync(&backend, &vm(), &sync, &prepared, Duration::from_millis(100)).await;
+        let result = wait_for_sync(
+            &backend,
+            &vm(),
+            &sync,
+            &prepared,
+            Duration::from_millis(100),
+        )
+        .await;
         assert!(result.is_err(), "expected timeout error");
     }
 

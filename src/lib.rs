@@ -1127,7 +1127,13 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
         Commands::Status => status::run(&config).await?,
         Commands::CompositorStatus => compositor::status_all(&config).await?,
         Commands::Down { force, timeout } => {
-            lifecycle::down(&config, &config.backend, force, Duration::from_secs(timeout)).await
+            lifecycle::down(
+                &config,
+                &config.backend,
+                force,
+                Duration::from_secs(timeout),
+            )
+            .await
         }
         Commands::NetUp { nft } => bridge::up(&config, &nft)?,
         Commands::NetDown { nft } => bridge::down(&config, &nft)?,
@@ -1645,8 +1651,8 @@ async fn run_async(cli: Cli) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use crate::core::config::TestProfile;
+    use std::collections::HashMap;
 
     fn module_config_with_paths(
         runners_dir: Option<PathBuf>,
@@ -1884,19 +1890,33 @@ mod tests {
     #[test]
     fn test_command_requires_claimed_vms() {
         assert!(!command_requires_claimed_vms(&Commands::Status));
-        assert!(!command_requires_claimed_vms(&Commands::Down { force: false, timeout: 30 }));
+        assert!(!command_requires_claimed_vms(&Commands::Down {
+            force: false,
+            timeout: 30
+        }));
         assert!(!command_requires_claimed_vms(&Commands::Init));
-        assert!(!command_requires_claimed_vms(&Commands::NetUp { nft: "nft".into() }));
-        assert!(!command_requires_claimed_vms(&Commands::NetDown { nft: "nft".into() }));
+        assert!(!command_requires_claimed_vms(&Commands::NetUp {
+            nft: "nft".into()
+        }));
+        assert!(!command_requires_claimed_vms(&Commands::NetDown {
+            nft: "nft".into()
+        }));
         assert!(!command_requires_claimed_vms(&Commands::GpuPreflight {
-            target: None, runners_dir: None, json: false,
+            target: None,
+            runners_dir: None,
+            json: false,
         }));
         assert!(!command_requires_claimed_vms(&Commands::Reset {
-            vm: "vm-3".into(), home: true,
+            vm: "vm-3".into(),
+            home: true,
         }));
-        assert!(!command_requires_claimed_vms(&Commands::YhConfig { force: false }));
+        assert!(!command_requires_claimed_vms(&Commands::YhConfig {
+            force: false
+        }));
         assert!(!command_requires_claimed_vms(&Commands::Mcp));
-        assert!(!command_requires_claimed_vms(&Commands::Completions { shell: clap_complete::Shell::Bash }));
+        assert!(!command_requires_claimed_vms(&Commands::Completions {
+            shell: clap_complete::Shell::Bash
+        }));
         assert!(!command_requires_claimed_vms(&Commands::Admission {
             action: AdmissionAction::Status,
         }));
@@ -1905,29 +1925,38 @@ mod tests {
         }));
         assert!(!command_requires_claimed_vms(&Commands::Steam {
             action: SteamAction::Login {
-                target: None, continue_from: false,
-                login_runners_dir: None, force: false, code: None,
+                target: None,
+                continue_from: false,
+                login_runners_dir: None,
+                force: false,
+                code: None,
             },
         }));
         assert!(!command_requires_claimed_vms(&Commands::Steam {
             action: SteamAction::Refresh {
-                target: None, continue_from: false,
-                force: false, code: None,
+                target: None,
+                continue_from: false,
+                force: false,
+                code: None,
             },
         }));
         assert!(!command_requires_claimed_vms(&Commands::Steam {
             action: SteamAction::Guard {
-                target: "vm-1".into(), code: None,
+                target: "vm-1".into(),
+                code: None,
             },
         }));
         assert!(!command_requires_claimed_vms(&Commands::Steam {
             action: SteamAction::Warm {
-                target: None, continue_from: false, runners_dir: None,
+                target: None,
+                continue_from: false,
+                runners_dir: None,
             },
         }));
         assert!(!command_requires_claimed_vms(&Commands::Steam {
             action: SteamAction::CleanLogins {
-                target: None, login_state_dir: None,
+                target: None,
+                login_state_dir: None,
             },
         }));
         assert!(!command_requires_claimed_vms(&Commands::Visual {
@@ -1935,182 +1964,353 @@ mod tests {
         }));
         assert!(!command_requires_claimed_vms(&Commands::Visual {
             action: VisualAction::Bless {
-                scene: "main".into(), from: None, yes: false,
+                scene: "main".into(),
+                from: None,
+                yes: false,
             },
         }));
         assert!(!command_requires_claimed_vms(&Commands::Visual {
             action: VisualAction::Diff {
-                scene: "main".into(), from: None,
+                scene: "main".into(),
+                from: None,
             },
         }));
         assert!(!command_requires_claimed_vms(&Commands::History {
-            action: None, last: None, clear: false,
-            format: None, output: None,
+            action: None,
+            last: None,
+            clear: false,
+            format: None,
+            output: None,
         }));
-        assert!(!command_requires_claimed_vms(&Commands::Doctor { fix: false }));
+        assert!(!command_requires_claimed_vms(&Commands::Doctor {
+            fix: false
+        }));
 
         // Commands that DO require claimed VMs
         assert!(command_requires_claimed_vms(&Commands::Restart {
-            target: None, runners_dir: None,
+            target: None,
+            runners_dir: None,
         }));
         assert!(command_requires_claimed_vms(&Commands::CompositorStatus));
         assert!(command_requires_claimed_vms(&Commands::Deploy {
-            no_build: false, verify: false,
+            no_build: false,
+            verify: false,
         }));
         assert!(command_requires_claimed_vms(&Commands::Logs {
-            target: None, output: None, follow: false,
-            lines: None, head: false, pattern: None,
+            target: None,
+            output: None,
+            follow: false,
+            lines: None,
+            head: false,
+            pattern: None,
         }));
         assert!(command_requires_claimed_vms(&Commands::Steam {
             action: SteamAction::Start {
-                target: None, display: crate::ui::cli::DisplayMode::Sway,
+                target: None,
+                display: crate::ui::cli::DisplayMode::Sway,
             },
         }));
         assert!(command_requires_claimed_vms(&Commands::Steam {
-            action: SteamAction::Accounts { warn_within_days: 30 },
+            action: SteamAction::Accounts {
+                warn_within_days: 30
+            },
         }));
         assert!(command_requires_claimed_vms(&Commands::Run {
             display: crate::ui::cli::DisplayMode::Sway,
             extra_args: vec![],
         }));
-        assert!(command_requires_claimed_vms(&Commands::StopGame { kill_steam: false }));
+        assert!(command_requires_claimed_vms(&Commands::StopGame {
+            kill_steam: false
+        }));
         assert!(command_requires_claimed_vms(&Commands::Test {
-            profile: None, network: None, players: None,
-            vm_args: None, host_args: None, max_runs: None,
-            timeout: None, hard_timeout: None, shutdown_timeout: None,
-            no_stop_on_failure: false, no_deploy: false, no_build: false,
-            filter_pattern: None, output_file: None,
-            capture_on_failure: false, capture_mode: None,
-            capture_interval: None, scenes: Vec::new(), scene_vm: None,
-            display: None, chaos_profile: None,
-            heartbeat_stall_secs: None, output_format: None,
-            on_complete: None, on_failure: None,
-            record_video: false, strace: false,
+            profile: None,
+            network: None,
+            players: None,
+            vm_args: None,
+            host_args: None,
+            max_runs: None,
+            timeout: None,
+            hard_timeout: None,
+            shutdown_timeout: None,
+            no_stop_on_failure: false,
+            no_deploy: false,
+            no_build: false,
+            filter_pattern: None,
+            output_file: None,
+            capture_on_failure: false,
+            capture_mode: None,
+            capture_interval: None,
+            scenes: Vec::new(),
+            scene_vm: None,
+            display: None,
+            chaos_profile: None,
+            heartbeat_stall_secs: None,
+            output_format: None,
+            on_complete: None,
+            on_failure: None,
+            record_video: false,
+            strace: false,
         }));
         assert!(command_requires_claimed_vms(&Commands::Netem {
-            target: String::new(), latency: None, jitter: None,
-            loss: None, rate: None, chaos_profile: None,
+            target: String::new(),
+            latency: None,
+            jitter: None,
+            loss: None,
+            rate: None,
+            chaos_profile: None,
         }));
         assert!(command_requires_claimed_vms(&Commands::NetemShow));
-        assert!(command_requires_claimed_vms(&Commands::NetemReset { target: None }));
-        assert!(command_requires_claimed_vms(&Commands::SnapshotSave { name: "s1".into() }));
-        assert!(command_requires_claimed_vms(&Commands::SnapshotRestore { name: "s1".into() }));
+        assert!(command_requires_claimed_vms(&Commands::NetemReset {
+            target: None
+        }));
+        assert!(command_requires_claimed_vms(&Commands::SnapshotSave {
+            name: "s1".into()
+        }));
+        assert!(command_requires_claimed_vms(&Commands::SnapshotRestore {
+            name: "s1".into()
+        }));
         assert!(command_requires_claimed_vms(&Commands::SnapshotList));
-        assert!(command_requires_claimed_vms(&Commands::SnapshotDelete { name: "s1".into() }));
+        assert!(command_requires_claimed_vms(&Commands::SnapshotDelete {
+            name: "s1".into()
+        }));
         assert!(command_requires_claimed_vms(&Commands::Screenshot {
-            output: None, scene: None, profile: None,
-            screenshot_backend: None, validate: false,
+            output: None,
+            scene: None,
+            profile: None,
+            screenshot_backend: None,
+            validate: false,
         }));
         assert!(command_requires_claimed_vms(&Commands::Visual {
             action: VisualAction::Capture {
-                scene: "main".into(), vm: None, output: None,
+                scene: "main".into(),
+                vm: None,
+                output: None,
             },
         }));
         assert!(command_requires_claimed_vms(&Commands::Visual {
             action: VisualAction::Record {
-                args: vec!["scene".into()], force: false,
+                args: vec!["scene".into()],
+                force: false,
             },
         }));
         assert!(command_requires_claimed_vms(&Commands::Visual {
             action: VisualAction::Report {
-                run_label: None, output: None, single_file: false,
+                run_label: None,
+                output: None,
+                single_file: false,
             },
         }));
-        assert!(command_requires_claimed_vms(&Commands::Watch { interval: 5 }));
+        assert!(command_requires_claimed_vms(&Commands::Watch {
+            interval: 5
+        }));
     }
 
     // ── command_runs_without_project_root_when_module_present ───────────
 
     #[test]
     fn test_command_runs_without_project_root() {
-        assert!(command_runs_without_project_root_when_module_present(&Commands::Steam {
-            action: SteamAction::Info,
-        }));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::Down { force: false, timeout: 30 }));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::Status));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::CompositorStatus));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::Up {
-            runners_dir: None,
-        }));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::Restart {
-            target: None, runners_dir: None,
-        }));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::Reset {
-            vm: "vm-3".into(), home: true,
-        }));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::NetUp { nft: "nft".into() }));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::NetDown { nft: "nft".into() }));
-        assert!(command_runs_without_project_root_when_module_present(&Commands::GpuPreflight {
-            target: None, runners_dir: None, json: false,
-        }));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::Steam {
+                action: SteamAction::Info,
+            }
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::Down {
+                force: false,
+                timeout: 30
+            }
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::Status
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::CompositorStatus
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::Up { runners_dir: None }
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::Restart {
+                target: None,
+                runners_dir: None,
+            }
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::Reset {
+                vm: "vm-3".into(),
+                home: true,
+            }
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::NetUp { nft: "nft".into() }
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::NetDown { nft: "nft".into() }
+        ));
+        assert!(command_runs_without_project_root_when_module_present(
+            &Commands::GpuPreflight {
+                target: None,
+                runners_dir: None,
+                json: false,
+            }
+        ));
 
         // These should NOT run without project root
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Deploy {
-            no_build: false, verify: false,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Test {
-            profile: None, network: None, players: None,
-            vm_args: None, host_args: None, max_runs: None,
-            timeout: None, hard_timeout: None, shutdown_timeout: None,
-            no_stop_on_failure: false, no_deploy: false, no_build: false,
-            filter_pattern: None, output_file: None,
-            capture_on_failure: false, capture_mode: None,
-            capture_interval: None, scenes: Vec::new(), scene_vm: None,
-            display: None, chaos_profile: None,
-            heartbeat_stall_secs: None, output_format: None,
-            on_complete: None, on_failure: None,
-            record_video: false, strace: false,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Bisect {
-            good: "good".into(), bad: "bad".into(),
-            network: crate::ui::cli::NetworkMode::Lan, players: 2, timeout: 300,
-            runs_per_step: 1, pass_threshold: 1.0,
-            display: crate::ui::cli::DisplayMode::Headless, vm_args: None, host_args: None,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Logs {
-            target: None, output: None, follow: false,
-            lines: None, head: false, pattern: None,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Run {
-            display: crate::ui::cli::DisplayMode::Sway,
-            extra_args: vec![],
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::StopGame { kill_steam: false }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::History {
-            action: None, last: None, clear: false,
-            format: None, output: None,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Screenshot {
-            output: None, scene: None, profile: None,
-            screenshot_backend: None, validate: false,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Netem {
-            target: String::new(), latency: None, jitter: None,
-            loss: None, rate: None, chaos_profile: None,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::NetemShow));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::NetemReset { target: None }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::SnapshotSave { name: "s1".into() }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::SnapshotRestore { name: "s1".into() }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::SnapshotList));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::SnapshotDelete { name: "s1".into() }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Visual {
-            action: VisualAction::List,
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Visual {
-            action: VisualAction::Capture {
-                scene: "main".into(), vm: None, output: None,
-            },
-        }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Watch { interval: 5 }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Doctor { fix: false }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Init));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::YhConfig { force: false }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Mcp));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Completions { shell: clap_complete::Shell::Bash }));
-        assert!(!command_runs_without_project_root_when_module_present(&Commands::Admission {
-            action: AdmissionAction::Status,
-        }));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Deploy {
+                no_build: false,
+                verify: false,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Test {
+                profile: None,
+                network: None,
+                players: None,
+                vm_args: None,
+                host_args: None,
+                max_runs: None,
+                timeout: None,
+                hard_timeout: None,
+                shutdown_timeout: None,
+                no_stop_on_failure: false,
+                no_deploy: false,
+                no_build: false,
+                filter_pattern: None,
+                output_file: None,
+                capture_on_failure: false,
+                capture_mode: None,
+                capture_interval: None,
+                scenes: Vec::new(),
+                scene_vm: None,
+                display: None,
+                chaos_profile: None,
+                heartbeat_stall_secs: None,
+                output_format: None,
+                on_complete: None,
+                on_failure: None,
+                record_video: false,
+                strace: false,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Bisect {
+                good: "good".into(),
+                bad: "bad".into(),
+                network: crate::ui::cli::NetworkMode::Lan,
+                players: 2,
+                timeout: 300,
+                runs_per_step: 1,
+                pass_threshold: 1.0,
+                display: crate::ui::cli::DisplayMode::Headless,
+                vm_args: None,
+                host_args: None,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Logs {
+                target: None,
+                output: None,
+                follow: false,
+                lines: None,
+                head: false,
+                pattern: None,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Run {
+                display: crate::ui::cli::DisplayMode::Sway,
+                extra_args: vec![],
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::StopGame { kill_steam: false }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::History {
+                action: None,
+                last: None,
+                clear: false,
+                format: None,
+                output: None,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Screenshot {
+                output: None,
+                scene: None,
+                profile: None,
+                screenshot_backend: None,
+                validate: false,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Netem {
+                target: String::new(),
+                latency: None,
+                jitter: None,
+                loss: None,
+                rate: None,
+                chaos_profile: None,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::NetemShow
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::NetemReset { target: None }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::SnapshotSave { name: "s1".into() }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::SnapshotRestore { name: "s1".into() }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::SnapshotList
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::SnapshotDelete { name: "s1".into() }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Visual {
+                action: VisualAction::List,
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Visual {
+                action: VisualAction::Capture {
+                    scene: "main".into(),
+                    vm: None,
+                    output: None,
+                },
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Watch { interval: 5 }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Doctor { fix: false }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Init
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::YhConfig { force: false }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Mcp
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Completions {
+                shell: clap_complete::Shell::Bash
+            }
+        ));
+        assert!(!command_runs_without_project_root_when_module_present(
+            &Commands::Admission {
+                action: AdmissionAction::Status,
+            }
+        ));
     }
 
     // ── command_uses_credentials ────────────────────────────────────────
@@ -2122,64 +2322,99 @@ mod tests {
         }));
         assert!(command_uses_credentials(&Commands::Steam {
             action: SteamAction::Login {
-                target: None, continue_from: false,
-                login_runners_dir: None, force: false, code: None,
+                target: None,
+                continue_from: false,
+                login_runners_dir: None,
+                force: false,
+                code: None,
             },
         }));
         assert!(command_uses_credentials(&Commands::Steam {
             action: SteamAction::Refresh {
-                target: None, continue_from: false,
-                force: false, code: None,
+                target: None,
+                continue_from: false,
+                force: false,
+                code: None,
             },
         }));
         assert!(command_uses_credentials(&Commands::Steam {
             action: SteamAction::Guard {
-                target: "vm-1".into(), code: None,
+                target: "vm-1".into(),
+                code: None,
             },
         }));
 
         // Commands that do NOT use credentials
-        assert!(!command_uses_credentials(&Commands::Down { force: false, timeout: 30 }));
+        assert!(!command_uses_credentials(&Commands::Down {
+            force: false,
+            timeout: 30
+        }));
         assert!(!command_uses_credentials(&Commands::Status));
         assert!(!command_uses_credentials(&Commands::Deploy {
-            no_build: false, verify: false,
+            no_build: false,
+            verify: false,
         }));
         assert!(!command_uses_credentials(&Commands::Test {
-            profile: None, network: None, players: None,
-            vm_args: None, host_args: None, max_runs: None,
-            timeout: None, hard_timeout: None, shutdown_timeout: None,
-            no_stop_on_failure: false, no_deploy: false, no_build: false,
-            filter_pattern: None, output_file: None,
-            capture_on_failure: false, capture_mode: None,
-            capture_interval: None, scenes: Vec::new(), scene_vm: None,
-            display: None, chaos_profile: None,
-            heartbeat_stall_secs: None, output_format: None,
-            on_complete: None, on_failure: None,
-            record_video: false, strace: false,
+            profile: None,
+            network: None,
+            players: None,
+            vm_args: None,
+            host_args: None,
+            max_runs: None,
+            timeout: None,
+            hard_timeout: None,
+            shutdown_timeout: None,
+            no_stop_on_failure: false,
+            no_deploy: false,
+            no_build: false,
+            filter_pattern: None,
+            output_file: None,
+            capture_on_failure: false,
+            capture_mode: None,
+            capture_interval: None,
+            scenes: Vec::new(),
+            scene_vm: None,
+            display: None,
+            chaos_profile: None,
+            heartbeat_stall_secs: None,
+            output_format: None,
+            on_complete: None,
+            on_failure: None,
+            record_video: false,
+            strace: false,
         }));
-        assert!(!command_uses_credentials(&Commands::Steam { action: SteamAction::Info }));
         assert!(!command_uses_credentials(&Commands::Steam {
-            action: SteamAction::Accounts { warn_within_days: 30 },
+            action: SteamAction::Info
+        }));
+        assert!(!command_uses_credentials(&Commands::Steam {
+            action: SteamAction::Accounts {
+                warn_within_days: 30
+            },
         }));
         assert!(!command_uses_credentials(&Commands::Steam {
             action: SteamAction::Check {
-                target: None, runners_dir: None,
+                target: None,
+                runners_dir: None,
                 display: crate::ui::cli::DisplayMode::Sway,
             },
         }));
         assert!(!command_uses_credentials(&Commands::Steam {
             action: SteamAction::Warm {
-                target: None, continue_from: false, runners_dir: None,
+                target: None,
+                continue_from: false,
+                runners_dir: None,
             },
         }));
         assert!(!command_uses_credentials(&Commands::Steam {
             action: SteamAction::Start {
-                target: None, display: crate::ui::cli::DisplayMode::Sway,
+                target: None,
+                display: crate::ui::cli::DisplayMode::Sway,
             },
         }));
         assert!(!command_uses_credentials(&Commands::Steam {
             action: SteamAction::CleanLogins {
-                target: None, login_state_dir: None,
+                target: None,
+                login_state_dir: None,
             },
         }));
     }
@@ -2263,7 +2498,7 @@ mod tests {
     #[test]
     fn find_vm_accepts_non_digit_after_vm_prefix() {
         // Use a custom VM name that doesn't follow the vm-N pattern
-        with_temp_project(|root, config| {
+        with_temp_project(|_root, config| {
             // We need a config with custom VM names, so use from_parts_with_vm_ids
             // with a config that has a non-standard VM name by directly using VmDef
             // from the config's existing VMs but constructing the test differently

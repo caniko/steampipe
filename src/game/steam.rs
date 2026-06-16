@@ -560,6 +560,7 @@ pub(crate) fn parse_steam_identity(output: &str) -> (Option<String>, bool) {
     }
 }
 
+#[allow(dead_code)]
 enum LoginLogMode {
     Stdout,
     Buffered,
@@ -571,6 +572,7 @@ struct LoginLog {
     lines: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl LoginLog {
     fn stdout() -> Self {
         Self {
@@ -611,6 +613,7 @@ impl LoginLog {
     }
 }
 
+#[allow(dead_code)]
 enum LoginAttempt {
     Skipped(String),
     LoggedIn,
@@ -618,6 +621,7 @@ enum LoginAttempt {
     Failed(anyhow::Error),
 }
 
+#[allow(dead_code)]
 struct LoginReport {
     vm_index: u8,
     vm_name: String,
@@ -1379,6 +1383,7 @@ pub(crate) async fn login(
     Ok(LoginOutcome::Completed)
 }
 
+#[allow(dead_code)]
 async fn login_vm_attempt(
     config: &ClusterConfig<BridgeReady>,
     vm: &VmDef,
@@ -1463,6 +1468,7 @@ fn login_reason_for_vm(login_state_dir: Option<&Path>, vm: &VmDef, force: bool) 
         .unwrap_or_else(|| "first login".to_string())
 }
 
+#[allow(dead_code)]
 fn finish_login_reports(
     mut results: Vec<LoginReport>,
     target_count: usize,
@@ -1675,6 +1681,7 @@ fn read_guard_code_line_from_stdin() -> anyhow::Result<Option<String>> {
     Ok(read_stdin_line(&mut stdin)?.map(|code| code.trim().to_owned()))
 }
 
+#[allow(dead_code)]
 async fn login_single_vm_automated(
     _config: &ClusterConfig<BridgeReady>,
     vm: &VmDef,
@@ -1734,6 +1741,7 @@ pub(crate) async fn refresh<S>(
 /// through `guard_provider`) and written via
 /// [`crate::game::steam_session::write_session`] so the host detector reports
 /// `Ok` and the VM's Steam client can auto-login from it.
+#[allow(dead_code)]
 async fn mint_and_write_session(
     creds: &VmCredentials,
     vm_name: &str,
@@ -1987,10 +1995,10 @@ pub async fn auto_login<S>(
             let vm_name = vm.name.to_string();
             match auto_login_action(login_state_dir.as_deref(), &vm_name) {
                 AutoLoginAction::UseExisting => {
-                    return AutoLoginReport::ok(
+                    AutoLoginReport::ok(
                         vm.name,
                         "existing Steam session OK".to_string(),
-                    );
+                    )
                 }
                 AutoLoginAction::LoginRequired { status } => {
                     eprintln!(
@@ -2315,6 +2323,7 @@ async fn wait_for_steam_gui_login_with_timeout(
     )
 }
 
+#[allow(dead_code)]
 async fn complete_guard_login_with_provider(
     backend: &Backend,
     vm: &VmDef,
@@ -2390,6 +2399,7 @@ async fn complete_guard_login_with_provider(
     }
 }
 
+#[allow(dead_code)]
 async fn kill_steamcmd_login_session(backend: &Backend, vm: &VmDef, vm_user: &str) -> bool {
     backend
         .run_cmd(&vm.ip, &steamcmd_kill_session_script(vm_user))
@@ -2404,6 +2414,7 @@ async fn kill_steamcmd_login_session(backend: &Backend, vm: &VmDef, vm_user: &st
 /// [`steamcmd_guard_submit_script`]. A positional `+login user pass code` would
 /// only ever satisfy the on-demand mobile authenticator and cannot work for a
 /// first-login email challenge, so it is deliberately not offered.
+#[allow(dead_code)]
 fn steamcmd_bootstrap_command(vm_user: &str, steam_user: &str, steam_pass: &str) -> String {
     let home = format!("/home/{vm_user}");
     let user = shell_escape(steam_user);
@@ -2445,6 +2456,7 @@ enum SteamCmdWait {
     GuardRequired,
 }
 
+#[allow(dead_code)]
 fn steamcmd_kill_session_script(vm_user: &str) -> String {
     format!(
         r#"HOME=/home/{vm_user}
@@ -3211,6 +3223,7 @@ fn steam_gui_guard_submitted(output: &str) -> bool {
         .any(|line| line.trim() == "STEAM_GUI_GUARD_SUBMITTED")
 }
 
+#[allow(dead_code)]
 fn steamcmd_started(output: &str) -> bool {
     output.lines().any(|line| line.trim() == "STEAMCMD_STARTED")
 }
@@ -4578,7 +4591,10 @@ echo ABCDE"#,
 
     #[test]
     fn display_env_present_detects_wayland() {
-        assert!(display_env_present(Some(std::ffi::OsStr::new("wayland-1")), None));
+        assert!(display_env_present(
+            Some(std::ffi::OsStr::new("wayland-1")),
+            None
+        ));
     }
 
     #[test]
@@ -4596,10 +4612,7 @@ echo ABCDE"#,
 
     #[test]
     fn display_env_present_rejects_empty_wayland() {
-        assert!(!display_env_present(
-            Some(std::ffi::OsStr::new("")),
-            None,
-        ));
+        assert!(!display_env_present(Some(std::ffi::OsStr::new("")), None,));
     }
 
     #[test]

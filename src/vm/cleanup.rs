@@ -240,8 +240,7 @@ fn check_stale_claim<S>(
         let pid = v.get("pid")?.as_u64()? as u32;
         let cluster = v.get("cluster")?.as_str()?.to_string();
         Some(lease::LeaseInfo { pid, cluster })
-    })()
-    else {
+    })() else {
         return;
     };
 

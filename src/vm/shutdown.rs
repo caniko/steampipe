@@ -11,7 +11,10 @@ pub enum ShutdownResult {
     /// VM shut down cleanly via SSH poweroff.
     Graceful { vm_name: String },
     /// VM was unreachable or graceful shutdown timed out; force-killed.
-    ForceKilled { vm_name: String, reason: &'static str },
+    ForceKilled {
+        vm_name: String,
+        reason: &'static str,
+    },
     /// VM was not running.
     AlreadyDown { vm_name: String },
     /// An unexpected error occurred.
@@ -79,7 +82,9 @@ pub async fn shutdown_claimed<S>(
         .filter(|r| matches!(r, ShutdownResult::Error { .. }))
         .count();
 
-    println!("==> Done ({graceful_count} graceful, {force_count} force-killed, {down_count} already stopped, {error_count} errors)");
+    println!(
+        "==> Done ({graceful_count} graceful, {force_count} force-killed, {down_count} already stopped, {error_count} errors)"
+    );
 }
 
 /// Shut down a single VM, returning the result.
@@ -98,7 +103,7 @@ async fn shutdown_vm<S>(
         _ => {
             return ShutdownResult::AlreadyDown {
                 vm_name: vm_name.clone(),
-            }
+            };
         }
     };
 

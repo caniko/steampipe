@@ -617,7 +617,7 @@ mod tests {
     #[test]
     fn delta_ramp_low_delta() {
         let color = delta_ramp(0);
-        assert_eq!(color[0], 0);   // red = 0
+        assert_eq!(color[0], 0); // red = 0
         assert_eq!(color[2], 255); // blue = 255
     }
 
@@ -625,7 +625,7 @@ mod tests {
     fn delta_ramp_high_delta() {
         let color = delta_ramp(255);
         assert_eq!(color[0], 255); // red = 255
-        assert_eq!(color[2], 0);   // blue = 0
+        assert_eq!(color[2], 0); // blue = 0
     }
 
     #[test]
@@ -783,7 +783,7 @@ mod tests {
             diff_image: diff,
         };
         let sidecar = result.sidecar();
-        assert_eq!(sidecar.passed, true);
+        assert!(sidecar.passed);
         assert_eq!(sidecar.ssim, 0.995);
         assert_eq!(sidecar.mask_area_percent, 0.5);
         assert_eq!(sidecar.masked_pixels, 100);

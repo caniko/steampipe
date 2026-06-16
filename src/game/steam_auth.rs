@@ -16,6 +16,8 @@
 //! mistyped code inline instead of restarting auth (which would mail a fresh
 //! code).
 
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
 use std::io::{Error as IoError, ErrorKind, Write as _};

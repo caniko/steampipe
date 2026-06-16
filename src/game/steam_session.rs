@@ -12,6 +12,8 @@
 //! Writes are atomic (temp file + rename) and the token file lands before
 //! `loginusers.vdf`, so a partial write never leaves a half-valid session.
 
+#![allow(dead_code)]
+
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;

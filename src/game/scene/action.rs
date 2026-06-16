@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-use crate::core::config::VmDef;
-use crate::core::config::{IpAddr, SceneAction, WindowTarget};
+use crate::core::config::{SceneAction, VmDef, WindowTarget};
 
 use super::{SceneBackend, scene_env_prefix, shell_quote};
 
@@ -144,7 +143,7 @@ async fn run_remote<B: SceneBackend>(backend: &B, vm: &VmDef, cmd: &str) -> anyh
 mod tests {
     use super::*;
     use crate::core::backend::CmdOutput;
-    use crate::core::config::VmName;
+    use crate::core::config::{IpAddr, VmName};
     use std::pin::Pin;
     use std::time::Duration;
 
@@ -294,16 +293,22 @@ mod tests {
     #[tokio::test]
     async fn perform_action_keys_sends_command() {
         let mut backend = MockActionBackend::new();
-        backend.add("wtype", CmdOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            success: true,
-        });
-        backend.add("swaymsg", CmdOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            success: true,
-        });
+        backend.add(
+            "wtype",
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        backend.add(
+            "swaymsg",
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
         let action = SceneAction {
             step: "press".into(),
             keys: Some("Return".into()),
@@ -320,16 +325,22 @@ mod tests {
     #[tokio::test]
     async fn perform_action_combo_sends_command() {
         let mut backend = MockActionBackend::new();
-        backend.add("wtype", CmdOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            success: true,
-        });
-        backend.add("swaymsg", CmdOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            success: true,
-        });
+        backend.add(
+            "wtype",
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        backend.add(
+            "swaymsg",
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
         let action = SceneAction {
             step: "combo".into(),
             combo: Some("Ctrl+Shift+P".into()),
@@ -346,11 +357,14 @@ mod tests {
     #[tokio::test]
     async fn perform_action_focus_sends_command() {
         let mut backend = MockActionBackend::new();
-        backend.add("swaymsg", CmdOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            success: true,
-        });
+        backend.add(
+            "swaymsg",
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
         let action = SceneAction {
             step: "focus".into(),
             focus: Some("my-app".into()),
@@ -361,18 +375,27 @@ mod tests {
             .await
             .unwrap();
         let recorded = backend.recorded();
-        assert!(recorded.iter().any(|c| c.contains("swaymsg")), "{recorded:?}");
-        assert!(recorded.iter().any(|c| c.contains("app_id")), "{recorded:?}");
+        assert!(
+            recorded.iter().any(|c| c.contains("swaymsg")),
+            "{recorded:?}"
+        );
+        assert!(
+            recorded.iter().any(|c| c.contains("app_id")),
+            "{recorded:?}"
+        );
     }
 
     #[tokio::test]
     async fn perform_action_shell_command_runs() {
         let mut backend = MockActionBackend::new();
-        backend.add("echo", CmdOutput {
-            stdout: "hello\n".into(),
-            stderr: String::new(),
-            success: true,
-        });
+        backend.add(
+            "echo",
+            CmdOutput {
+                stdout: "hello\n".into(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
         let action = SceneAction {
             step: "shell".into(),
             shell_command: Some("echo hello".into()),
@@ -422,16 +445,22 @@ mod tests {
     #[tokio::test]
     async fn perform_action_keys_focus_before_command() {
         let mut backend = MockActionBackend::new();
-        backend.add("wtype", CmdOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            success: true,
-        });
-        backend.add("swaymsg", CmdOutput {
-            stdout: String::new(),
-            stderr: String::new(),
-            success: true,
-        });
+        backend.add(
+            "wtype",
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
+        backend.add(
+            "swaymsg",
+            CmdOutput {
+                stdout: String::new(),
+                stderr: String::new(),
+                success: true,
+            },
+        );
         let action = SceneAction {
             step: "press".into(),
             keys: Some("Escape".into()),
@@ -444,6 +473,9 @@ mod tests {
 
         let recorded = backend.recorded();
         // First call should be swaymsg (focus), second should be wtype (keys)
-        assert!(recorded[0].contains("swaymsg"), "expected focus first: {recorded:?}");
+        assert!(
+            recorded[0].contains("swaymsg"),
+            "expected focus first: {recorded:?}"
+        );
     }
 }

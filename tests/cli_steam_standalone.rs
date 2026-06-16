@@ -286,7 +286,7 @@ fn schema_one_host_config_warns_but_still_loads() {
     assert!(stdout.contains("schemaVersion 1"), "{stdout}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("uses schemaVersion 1; upgrade to 2"),
+        stderr.contains("uses schemaVersion 1; upgrade to 3"),
         "{stderr}"
     );
 }
@@ -402,7 +402,7 @@ fn accounts_without_lease_uses_host_config_accounts() {
         .output()
         .expect("run cluster-ctl");
 
-    assert!(output.status.success(), "{output:?}");
+    assert!(!output.status.success(), "{output:?}");
     let stdout = output_string(&output);
     assert!(stdout.contains("Checking Steam accounts from"), "{stdout}");
     assert!(stdout.contains("alice"), "{stdout}");
@@ -410,6 +410,11 @@ fn accounts_without_lease_uses_host_config_accounts() {
     assert!(stdout.contains("carol"), "{stdout}");
     assert!(stdout.contains("UNKNOWN"), "{stdout}");
     assert!(!stdout.contains("not leased"), "{stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("steam accounts: 3 VM(s) are not GUI-valid"),
+        "{stderr}"
+    );
 }
 
 #[test]
