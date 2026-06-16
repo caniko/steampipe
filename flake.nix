@@ -70,6 +70,7 @@
 
       devShells = import ./nix/flake/dev-shells.nix {
         inherit cargoConfig craneLib cross packages pkgs rustToolchain;
+        plinthProject = plinth.packages.${system}.plinth-project;
         rsHarborLib = rs-harbor.lib;
       };
     }))

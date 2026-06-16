@@ -4,6 +4,7 @@
   cross,
   packages,
   pkgs,
+  plinthProject,
   rsHarborLib,
   rustToolchain,
 }: let
@@ -27,7 +28,7 @@
     pkgs.libxcb
   ];
 in
-  rsHarborLib.mkDevShells {
+  (rsHarborLib.mkDevShells {
     inherit cargoConfig craneLib cross pkgs;
 
     packages =
@@ -47,4 +48,26 @@ in
       export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath guiRuntimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
       echo "Documentation: cd docs && mdbook serve"
     '';
+  })
+  // {
+    docs = rsHarborLib.mkDocsShell {
+      inherit cargoConfig craneLib cross pkgs;
+      packages =
+        [
+          rustToolchain
+          pkgs.just
+          pkgs.mdbook
+          pkgs.pkg-config
+          plinthProject
+          pkgs.wayland-protocols
+          packages.default
+          (pkgs.python3.withPackages (ps: [ps.pillow]))
+        ]
+        ++ guiRuntimeLibs;
+      extraShellHook = ''
+        export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath guiRuntimeLibs}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        echo "Project site: plinth-project serve --config website/plinth-project.toml"
+        echo "Documentation: mdbook serve docs"
+      '';
+    };
   }
