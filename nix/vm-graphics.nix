@@ -38,13 +38,13 @@
     libGL
     vulkan-loader
     stdenv.cc.cc.lib
-    xorg.libX11
-    xorg.libXcursor
-    xorg.libXext
-    xorg.libXi
-    xorg.libXrandr
-    xorg.libXrender
-    xorg.libxcb
+    libx11
+    libxcursor
+    libxext
+    libxi
+    libxrandr
+    libxrender
+    libxcb
   ];
 
   graphicalRuntimeLibPath = lib.makeLibraryPath graphicalRuntimeLibs;
@@ -108,7 +108,7 @@ in {
         mesa-demos
         vulkan-tools
         wayland-utils
-        xorg.xdpyinfo
+        xdpyinfo
       ];
     })
 

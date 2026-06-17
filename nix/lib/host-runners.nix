@@ -15,7 +15,7 @@
   graphics ? false,
   memory ? 2048,
   linkFarmName ? "steampipe-vm-runners",
-  useSystemdStage1 ? false,
+  useSystemdStage1 ? true,
   loginStateDir ? null,
   extraVmModules ? [],
 }: let
