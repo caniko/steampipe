@@ -1,0 +1,719 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Steam login overhaul (iced + auto-steamcmd) — research - Steampipe Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../css/general-2459343d.css">
+        <link rel="stylesheet" href="../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../";
+            const default_light_theme = "coal";
+            const default_dark_theme = "coal";
+            window.path_to_searchindex_js = "../searchindex-223c68b7.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../toc-58d43805.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Steampipe Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/caniko/steampipe" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="steam-login-overhaul-auto-steamcmd--iced-pinentry-dialog-research-dossier"><a class="header" href="#steam-login-overhaul-auto-steamcmd--iced-pinentry-dialog-research-dossier">Steam Login Overhaul (auto-steamcmd + iced pinentry dialog) Research Dossier</a></h1>
+<h2 id="goal-and-trigger"><a class="header" href="#goal-and-trigger">Goal And Trigger</a></h2>
+<p>The operator wants to overhaul the Steam login system so that:</p>
+<ol>
+<li>Login is performed <strong>automatically</strong> through <code>steamcmd</code> whenever a missing or
+expired login session is detected.</li>
+<li>When a one-time Steam Guard code is requested, a small <strong>iced</strong> GUI dialog
+pops up on the host, <em>pinentry-style</em>; the operator types the code in and the
+in-progress login <strong>continues to completion in the same invocation</strong> — not the
+current two-phase “VM left running, run a separate command later” model.</li>
+<li>The whole flow stays <strong>compatible with AI / headless / non-interactive
+workflows</strong> (this tool ships an MCP server and runs under systemd timers and
+CI where no display exists).</li>
+<li>Surrounding features that are incompatible with this flow are identified and
+redesigned or retired.</li>
+</ol>
+<p><strong>Topology (settled):</strong> the iced dialog renders on the <strong>host</strong> (“our side”),
+never inside a VM. steamcmd runs in the VM and is where the <code>Steam Guard code:</code>
+prompt originates; the host detects it over SSH, the host-side iced dialog
+collects the code, and the host relays it back into the VM’s <strong>live</strong> steamcmd
+session via <code>tmux send-keys</code>. The only path that surfaces Guard <em>inside the guest</em>
+today is the legacy <code>interactive_login()</code> VNC flow, which this dossier marks
+<strong>Retire</strong> for exactly that reason (incompatibility #4). Where the <em>dialog</em>
+renders (host) is independent of where <em>steamcmd</em> runs (in-VM today; moving it
+host-side is Open Decision #1).</p>
+<blockquote>
+<p><strong>Correction (2026-05-29) — code delivery dictates the submit mechanism.</strong> An
+earlier draft of this dossier recommended submitting via a fresh single-shot
+<code>steamcmd +login user pass &lt;code&gt;</code>. That is <strong>wrong for email Steam Guard</strong>, the
+always-available default: Steam <em>issues</em> the one-time code in response to the
+login attempt (it mails the code only when steamcmd tries to log in from an
+unrecognized machine), so there is no code to pass beforehand. The correct,
+always-works mechanism is: run the no-code <code>steamcmd +login user pass</code> bootstrap
+(this triggers the email and parks at the prompt) → obtain the code (dialog /
+stdin / <code>--code</code> / env) → relay it into the <strong>live</strong> session via <code>tmux send-keys</code> → wait/retry → finish, all in one invocation. The single-shot
+positional form only ever fits the on-demand mobile authenticator and is <strong>not</strong>
+the primary path; <code>--code</code>/<code>STEAMPIPE_GUARD_CODE</code> is an authenticator/automation
+convenience fed through the same send-keys path. The “TOTP rotation race”
+concern below is largely moot for the inline flow (the code is entered and
+relayed within seconds); it only bit the old <em>deferred separate-command</em> model.</p>
+</blockquote>
+<p>This dossier collects the evidence so a follow-on implementation plan can act. It
+does <strong>not</strong> itself implement the change. Research combined direct source reading
+with a 14-agent evidence-gathering workflow (8 subsystem readers, 3 external
+research dossiers on iced / pinentry / Steam-Guard mechanics, and 3 cross-cutting
+synthesis passes); the most load-bearing facts were re-verified by hand and are
+cited below.</p>
+<h2 id="current-reality"><a class="header" href="#current-reality">Current Reality</a></h2>
+<h3 id="the-login-flow-today-is-fundamentally-two-phase"><a class="header" href="#the-login-flow-today-is-fundamentally-two-phase">The login flow today is fundamentally two-phase</a></h3>
+<p><code>steamcmd</code> runs <strong>inside the VM</strong> in a tmux session named
+<code>steampipe-steamcmd-login</code>. A runner shell script execs
+<code>steamcmd +login '{user}' '{pass}' +quit</code> with <strong>no positional code argument</strong>
+(<a href="../../../src/game/steam.rs#L1348-L1380">src/game/steam.rs:1348-1380</a>, exact
+command at <a href="../../../src/game/steam.rs#L1369">steam.rs:1369</a>) and writes its exit
+code to a STATUS file. The host polls a wait script that greps the VM-side log for
+the literal string <code>Steam Guard code:</code>
+(<a href="../../../src/game/steam.rs#L1454-L1490">steam.rs:1454-1490</a>, detection at
+<a href="../../../src/game/steam.rs#L1472">steam.rs:1472</a>).</p>
+<p>When a Guard code is required, <code>automated_login</code> returns
+<code>LoginOutcome::LeftRunning</code>, leaves the VM and tmux session running, and prints
+guidance to run a <strong>separate</strong> command later:</p>
+<blockquote>
+<p><code>Complete from another shell with: cluster-ctl steam guard &lt;vm&gt; --code &lt;CODE&gt;</code>
+(<a href="../../../src/game/steam.rs#L1322-L1333">steam.rs:1322-1333</a>, <code>LoginOutcome</code>
+enum at <a href="../../../src/game/steam.rs#L1281-L1285">steam.rs:1281-1285</a>)</p>
+</blockquote>
+<p>The second phase is the public <code>guard()</code> entry point
+(<a href="../../../src/game/steam.rs#L820-L941">steam.rs:820-941</a>): it re-attaches to the
+still-running tmux session in a fresh process, submits the code via
+<code>tmux send-keys</code> (<a href="../../../src/game/steam.rs#L1492-L1506">steam.rs:1492-1506</a>),
+waits for completion with an invalid-code retry marker
+(<a href="../../../src/game/steam.rs#L1508-L1550">steam.rs:1508-1550</a>), runs
+<code>finish_steam_login</code>, and shuts the VM down. Code entry is the synchronous,
+TTY-only, blocking <code>read_guard_code_from_stdin()</code>
+(<a href="../../../src/game/steam.rs#L958-L963">steam.rs:958-963</a>) when <code>--code</code> is omitted.</p>
+<p>This deferred-submit model is <strong>unsafe for mobile-authenticator codes</strong>: TOTP
+codes rotate every ~30 s and each supersedes the last, so by the time a separate
+<code>steam guard --code</code> runs the code is likely stale — a failure mode the code
+already acknowledges
+(<a href="../../../src/game/steam.rs#L919-L924">steam.rs:919-924</a>). The wait loops run
+<code>seq 1 300</code> (~300 s), far exceeding the TOTP window
+(<a href="../../../src/game/steam.rs#L1460">steam.rs:1460</a>,
+<a href="../../../src/game/steam.rs#L1520">steam.rs:1520</a>).</p>
+<h3 id="there-is-a-second-separate-interactive-path-vnc"><a class="header" href="#there-is-a-second-separate-interactive-path-vnc">There is a second, separate interactive path (VNC)</a></h3>
+<p>When no credentials are supplied, <code>login_single_vm</code> dispatches to
+<code>interactive_login()</code> (<a href="../../../src/game/steam.rs#L1113-L1119">steam.rs:1113-1119</a>,
+<a href="../../../src/game/steam.rs#L1787-L1864">steam.rs:1787-1864</a>). It starts
+<code>sway</code> + <code>wayvnc</code> (port 5900) + Steam GUI <strong>inside the VM</strong>, prints
+<code>VNC into &lt;ip&gt;:5900</code>, and drives a blocking stdin REPL on the host
+(<code>[p]</code> paste via <code>wtype</code>, <code>[Enter]</code> done, <code>[Ctrl+C]</code> cancel). The operator
+completes the Steam Guard step inside the guest GUI; there is no programmatic
+completion detection, and a non-blocking stdin dead-ends to <code>LeftRunning</code>.</p>
+<h3 id="session-detection-already-exists-and-is-reusable"><a class="header" href="#session-detection-already-exists-and-is-reusable">Session detection already exists and is reusable</a></h3>
+<p><code>accounts::classify_session_status</code>
+(<a href="../../../src/game/accounts.rs#L313-L319">accounts.rs:313-319</a>) +
+<code>SessionStatus{Ok,Stale,Expired,NoToken,Unknown}</code> +
+<code>DEFAULT_WARN_WITHIN_DAYS=30</code> is a synchronous, pure-filesystem, headless-safe
+check of the host-side login state. It already gates a “fill-the-gaps” skip in
+<code>login()</code> (<a href="../../../src/game/steam.rs#L695-L719">steam.rs:695-719</a>). <strong>The
+redesign changes only the post-detection action, not detection itself.</strong> External
+research confirms a Guard code is needed <em>only</em> on first login on a machine or
+after the cached refresh token (~200-day lifetime) is deleted/expired/revoked, so
+keying auto-login off <code>classify_session_status</code> is correct.</p>
+<h3 id="there-is-no-gui-anywhere-and-no-aimcp-login-surface"><a class="header" href="#there-is-no-gui-anywhere-and-no-aimcp-login-surface">There is no GUI anywhere, and no AI/MCP login surface</a></h3>
+<p><code>iced</code> (and any GUI toolkit) is <strong>absent</strong> from
+<a href="../../../Cargo.toml">Cargo.toml</a> and <code>Cargo.lock</code> — this is a brand-new
+dependency tree (winit/wgpu/Wayland/X11/Vulkan/fontconfig). The crate is
+deliberately headless-friendly today (<code>vnc</code> + <code>ratatui</code>, no GUI crates;
+<a href="../../../nix/flake/packages.nix#L67-L84">packages.nix:67-84</a> builds with
+<code>strictDeps=true</code> and zero <code>buildInputs</code>).</p>
+<p>The MCP server exposes only <code>nix_run</code>, <code>cluster_status</code>, <code>cluster_logs</code>,
+<code>cluster_deploy</code>, <code>cluster_stop</code>, <code>cluster_test</code>, <code>cluster_history</code> — <strong>no login
+or guard tool</strong> (<a href="../../../src/mcp.rs#L289-L761">mcp.rs:289-761</a>). MCP transport
+is stdio, so stdout is reserved for JSON-RPC framing
+(<a href="../../../src/mcp.rs#L805">mcp.rs:805</a>) and the code is careful to keep <code>println</code>
+off it (<code>verbose: false</code> at <a href="../../../src/mcp.rs#L630">mcp.rs:630</a>). The only
+escape hatch, <code>nix_run</code>, spawns children with <strong>no piped stdin</strong>
+(<a href="../../../src/mcp.rs#L312-L313">mcp.rs:312-313</a>), so it can pass a pre-known
+<code>--code</code> arg but cannot answer an interactive prompt. The transparent post-<code>up</code>
+<code>auto_login()</code> (<a href="../../../src/game/steam.rs#L1208-L1279">steam.rs:1208-1279</a>,
+called at <a href="../../../src/lib.rs#L869">lib.rs:869</a>) runs with <code>LoginLog::silent()</code>
+and, on Guard, just prints to stderr and counts the VM as failed
+(<a href="../../../src/game/steam.rs#L1240-L1246">steam.rs:1240-1246</a>). <strong>Today an
+AI/headless caller cannot complete a Guard-required login at all.</strong></p>
+<h3 id="iced-imposes-hard-non-negotiable-constraints-external-research"><a class="header" href="#iced-imposes-hard-non-negotiable-constraints-external-research">iced imposes hard, non-negotiable constraints (external research)</a></h3>
+<ul>
+<li>Current iced is <strong>0.14.0</strong> (released 2025-12-07, MSRV 1.88). A trivial OTP modal
+fits the modern <code>iced::run(update, view)</code> API with <code>text_input</code> + <code>button</code>.</li>
+<li><strong>Main-thread event loop (hard):</strong> iced runs on winit; winit’s <code>EventLoop</code> must
+be created and driven on the OS <strong>main</strong> thread. Calling it from a worker/tokio
+task panics. Only one event loop per process.</li>
+<li><strong>Blocking (hard):</strong> <code>iced::run()</code> blocks the calling thread until the window
+closes; it cannot be <code>.await</code>ed.</li>
+<li><strong>Headless startup is a PANIC, not a Result (hard):</strong> with no
+<code>DISPLAY</code>/<code>WAYLAND_DISPLAY</code> or no client lib, iced <em>panics</em> during event-loop
+creation (winit’s fallible <code>build()</code> is unwrapped). The headless fallback must
+<strong>not</strong> rely on matching <code>iced::Error</code> — it must pre-check env vars and/or
+isolate iced in a child process whose non-zero exit is observable.</li>
+<li>steampipe builds its multi-thread tokio runtime by hand and <code>block_on</code>s on the
+OS main thread (<strong>not</strong> <code>#[tokio::main]</code>)
+(<a href="../../../src/lib.rs#L543-L548">lib.rs:543-548</a>) — the main thread is
+reclaimable, which is the clean integration seam.</li>
+<li>Prefer the <strong>tiny-skia software renderer</strong> over wgpu to avoid a hard GPU
+dependency.</li>
+</ul>
+<h3 id="pinentry-is-a-validated-blueprint-external-research"><a class="header" href="#pinentry-is-a-validated-blueprint-external-research">pinentry is a validated blueprint (external research)</a></h3>
+<p>pinentry is a <em>separate process</em> gpg-agent spawns over a pipe (Assuan protocol);
+the core owns secrets/policy, the helper only renders a prompt. Frontends
+(gtk/qt/curses/tty) are interchangeable and selected by display availability with
+automatic fallback; the caller pushes context over the protocol (not inherited
+env); <code>PINENTRY_USER_DATA</code> forces headless/TTY mode; every prompt has a mandatory
+timeout that collapses cancel/timeout/no-frontend into one denial signal so the
+core never hangs. This maps almost 1:1 onto the desired AI-compatible Guard
+prompt.</p>
+<h2 id="evidence-inventory"><a class="header" href="#evidence-inventory">Evidence Inventory</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Artifact</th><th>What it proves</th></tr>
+</thead>
+<tbody>
+<tr><td><a href="../../../src/game/steam.rs#L1281-L1333">steam.rs:1281-1333</a></td><td><code>LoginOutcome::LeftRunning</code> two-phase model; GuardRequired emits “Complete from another shell with: cluster-ctl steam guard”. The single highest-impact pivot to redesign.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L1369">steam.rs:1369</a></td><td>Bootstrap runs <code>steamcmd +login '{user}' '{pass}' +quit</code> with <strong>no</strong> positional code.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L820-L941">steam.rs:820-941</a></td><td><code>guard()</code> is the entire second-phase entry point (re-attach tmux, send-keys, finish, shutdown).</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L958-L963">steam.rs:958-963</a></td><td><code>read_guard_code_from_stdin()</code> blocking TTY-only code entry.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L1787-L1864">steam.rs:1787-1864</a></td><td><code>interactive_login()</code> VNC + host stdin REPL (no-creds path).</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L919-L924">steam.rs:919-924</a></td><td>Code already acknowledges “rejected or superseded by a newer code” — the TOTP race.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L549-L598">steam.rs:549-598</a></td><td><code>LoginLog{Stdout,Buffered,Silent}</code> — no structured event/result channel for a GUI or MCP.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L656-L689">steam.rs:656-689</a></td><td><code>login()</code> fans out N VMs via <code>par_each_vm</code> with buffered logs — conflicts with a single modal dialog.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L1919-L1936">steam.rs:1919-1936</a></td><td><code>redact_sensitive()</code> secret scrubbing — durable discipline the new channels must keep.</td></tr>
+<tr><td><a href="../../../src/game/accounts.rs#L313-L319">accounts.rs:313-319</a>, <a href="../../../src/game/accounts.rs#L24-L55">accounts.rs:24-55</a></td><td><code>classify_session_status</code> + <code>SessionStatus</code> — reusable auto-login trigger.</td></tr>
+<tr><td><a href="../../../src/game/accounts.rs#L344-L352">accounts.rs:344-352</a></td><td><code>find_refresh_token_file</code> prefers <code>config/&lt;steamID&gt;/local.vdf</code>, falls back to <code>config/config.vdf</code>.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L1628-L1666">steam.rs:1628-1666</a></td><td><code>steamcmd_state_sync_script</code> copies <code>config/loginusers.vdf</code>, <code>config.vdf</code>, <code>registry.vdf</code>, <code>ssfn*</code> — <strong>never</strong> <code>config/&lt;steamID&gt;/local.vdf</code>. (Detection/sync mismatch.)</td></tr>
+<tr><td><a href="../../../src/mcp.rs#L289-L761">mcp.rs:289-761</a></td><td>7 MCP tools, none for login/guard; <code>nix_run</code> pipes no stdin (<a href="../../../src/mcp.rs#L312-L313">mcp.rs:312-313</a>).</td></tr>
+<tr><td><a href="../../../src/lib.rs#L543-L548">lib.rs:543-548</a></td><td>Hand-built multi-thread tokio runtime <code>block_on</code> on the OS main thread (iced integration seam).</td></tr>
+<tr><td><a href="../../../Cargo.toml#L21-L53">Cargo.toml:21-53</a></td><td>No iced/winit/wgpu; <code>vnc = "0.4"</code> present.</td></tr>
+<tr><td><a href="../../../src/game/capture.rs#L66-L150">src/game/capture.rs:66-150</a>, <a href="../../../src/lib.rs#L371-L372">lib.rs:371-372</a></td><td><code>vnc</code> crate is the <strong>screenshot</strong> backend — retiring VNC login does <strong>not</strong> free it.</td></tr>
+<tr><td><a href="../../../nix/flake/packages.nix#L67-L84">packages.nix:67-84</a></td><td>crane build: <code>strictDeps=true</code>, zero <code>buildInputs</code>, <code>makeWrapper</code> only.</td></tr>
+<tr><td><a href="../../../src/ui/cli.rs#L613-L702">cli.rs:613-702</a></td><td><code>SteamAction{Login,Guard,Check,Warm,Start,Accounts,Info,CleanLogins}</code>; Guard <code>target</code>+<code>--code</code>; no <code>--non-interactive</code>/<code>--no-gui</code> global.</td></tr>
+<tr><td><a href="../../../src/harness/runner.rs#L914-L933">runner.rs:914-933</a></td><td>Harness <code>ensure_steam</code> path assumes a logged-in session, bails on failure, no <code>classify_session_status</code>. Reachable from MCP <code>cluster_test</code>.</td></tr>
+<tr><td><a href="../../../src/harness/runner.rs#L982-L983">runner.rs:982-983</a></td><td><code>--steam-target-id</code> uses <code>accounts::local_steam_id()</code> which reads the <strong>host operator’s</strong> <code>~/.local/share/Steam</code>, not a per-VM dir.</td></tr>
+<tr><td><a href="../../../nix/lib/test-cluster.nix#L390-L427">nix/lib/test-cluster.nix:390-427</a></td><td>Five login/guard wrappers: <code>cluster-steam-login</code>, <code>cluster-steam-guard</code>, <code>cluster-1v1-steam-login</code>, <code>cluster-1v1-steam-guard</code>, <code>cluster-steam-login-persist</code>.</td></tr>
+<tr><td><a href="../../../nix/lib/warm-timer.nix#L86-L108">nix/lib/warm-timer.nix:86-108</a></td><td><code>cluster-ctl steam warm</code> one-shot systemd service — a second display-less caller.</td></tr>
+<tr><td><a href="../../../src/game/steam.rs#L444">steam.rs:444</a></td><td><code>check()</code> prints “To fix not-logged-in: run nix run .#cluster-steam-login” — user-facing string tied to the redesigned UX.</td></tr>
+<tr><td><a href="../../../tests/cli_steam_standalone.rs">tests/cli_steam_standalone.rs:388,417,452,498</a></td><td>Integration tests assert <strong>exact stdout</strong> for <code>steam accounts</code>/<code>clean-logins</code>/<code>info</code>. Login/guard have <strong>no</strong> integration coverage.</td></tr>
+</tbody>
+</table>
+</div>
+<p>Commands and tools run during research:</p>
+<pre><code class="language-bash">rg -n "steamcmd|steam guard|wayvnc|vnc|iced|auto_login|read_guard_code" src
+git diff --stat; git diff src/core/state.rs        # working tree = rustfmt-only noise
+git show c061ae4 --stat; git log --oneline -20      # prior login lifecycle commits
+# 14-agent Workflow: 8 subsystem readers + 3 external (iced 0.14, pinentry, steamcmd Guard) + 3 synthesis
+</code></pre>
+<h2 id="existing-plan-status"><a class="header" href="#existing-plan-status">Existing Plan Status</a></h2>
+<p>The prior headless-login lifecycle work is now represented in stable docs under
+<a href="../configuration/steam-credentials.html">Steam Credentials</a> and
+<a href="../configuration/host-config.html">Global host config</a>. It covered the
+<strong>virtiofsd lifecycle and parallel login</strong>; it never covered a GUI, iced, or a
+host Guard dialog. The iced/pinentry angle is genuinely new ground. Audit of
+that work against current state:</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Plan item</th><th>Status</th><th>Evidence</th></tr>
+</thead>
+<tbody>
+<tr><td>Phase 01 — virtiofsd lifecycle (spawn before QEMU, wait for socket, reap on stop)</td><td><strong>Done</strong></td><td>commits <code>69424ad</code>, <code>24d6a0a</code>; <a href="../../../src/core/backend.rs#L260-L284">backend.rs:260-284</a>, <a href="../../../src/core/state.rs">state.rs</a> PID helpers</td></tr>
+<tr><td>Phase 02 — parallelize <code>login()</code> + skip-bounce-when-reachable</td><td><strong>Done</strong></td><td>commit <code>08ea98f</code>; <a href="../../../src/game/steam.rs#L656-L689">steam.rs:656-689</a></td></tr>
+<tr><td>Fill-the-gaps session detection + <code>--force</code></td><td><strong>Done</strong></td><td>commit <code>9cd9f42</code>; <a href="../../../src/game/steam.rs#L695-L719">steam.rs:695-719</a></td></tr>
+<tr><td>Phase 03 — docs refresh (<code>steam-credentials.md</code>)</td><td><strong>Done, but superseded by this overhaul</strong></td><td>the refreshed doc still describes the VNC two-phase model</td></tr>
+<tr><td>Real-host (atlas) verification of any login path</td><td><strong>Not done</strong></td><td><code>.calibration.json</code> marks the set “partial”; no live-account run ever happened</td></tr>
+</tbody>
+</table>
+</div>
+<p><strong>Carry forward:</strong> the shipped work (virtiofsd lifecycle, parallel login,
+fill-the-gaps detection) is durable and must not regress. <strong>Retire/re-scope:</strong> the
+Phase 03 docs and the plan set’s framing of VNC + <code>steam guard</code> as the canonical
+flow are superseded by this overhaul.</p>
+<h2 id="work-that-should-survive"><a class="header" href="#work-that-should-survive">Work That Should Survive</a></h2>
+<ul>
+<li><strong>Session detection is reused verbatim</strong> as the auto-login trigger:
+<code>classify_session_status</code> + <code>SessionStatus</code> + <code>DEFAULT_WARN_WITHIN_DAYS</code>
+(<a href="../../../src/game/accounts.rs#L313-L319">accounts.rs:313-319</a>). Synchronous,
+filesystem-only, headless-safe. The redesign keys auto-login off this and must
+<strong>not</strong> force a fresh password login when a valid token exists (external
+research: that would needlessly demand a new code).</li>
+<li><strong>Parallel login + skip-bounce-when-reachable</strong> (Phase 02) must be preserved for
+VMs that do <strong>not</strong> need a code (<a href="../../../src/game/steam.rs#L656-L689">steam.rs:656-689</a>).</li>
+<li><strong>The in-VM SteamCMD/tmux engine survives as the transport</strong> — bootstrap
+(<a href="../../../src/game/steam.rs#L1348-L1380">steam.rs:1348-1380</a>), guard-prompt
+detection (<a href="../../../src/game/steam.rs#L1472">steam.rs:1472</a>), and submit-with-
+invalid-code-retry (<a href="../../../src/game/steam.rs#L1492-L1550">steam.rs:1492-1550</a>).
+The redesign drives these in <strong>one</strong> invocation instead of across two processes;
+the low-level scripts barely change.</li>
+<li><strong>Host-side state persistence via the writable virtiofs <code>steam-state</code> share</strong> —
+<code>loginStateDir/&lt;vm&gt;/</code> <em>is</em> the VM’s <code>~/.local/share/Steam</code>, so steamcmd/Steam
+writes land where <code>accounts.rs</code> reads. No new host-write path is needed; the
+inline flow must keep the VM up long enough to flush before teardown
+(<a href="../../../docs/src/configuration/steam-credentials.html#L58-L63">steam-credentials.md:58-63</a>).</li>
+<li><strong><code>redact_sensitive()</code> discipline</strong> (<a href="../../../src/game/steam.rs#L1919-L1936">steam.rs:1919-1936</a>)
+must extend to the new dialog/IPC/MCP/event channels; the Guard code is a secret
+to redact and zeroize.</li>
+<li><strong>Credentials plumbing unchanged</strong> — <code>CredentialsMap</code> from TOML/age via
+ssh-agent (<a href="../../../src/core/credentials.rs#L7-L97">credentials.rs:7-97</a>),
+gated by <code>command_uses_credentials</code> (Up | steam login | steam guard) at
+<a href="../../../src/lib.rs#L259-L267">lib.rs:259-267</a>. The Guard code is the <em>only</em>
+value not in this map.</li>
+<li><strong><code>vnc</code> crate stays</strong> — it is the screenshot/visual-regression backend
+(<a href="../../../src/game/capture.rs">capture.rs:66-405</a>), not login infrastructure.
+<code>sway</code>/<code>grim</code>/<code>compositor.rs</code> readiness also stay (game-run + capture).</li>
+<li><strong>The reclaimable OS main thread</strong> (<a href="../../../src/lib.rs#L543-L548">lib.rs:543-548</a>)
+is the clean iced integration seam (favoring a separate helper binary).</li>
+</ul>
+<h2 id="blockers-and-missing-artifacts"><a class="header" href="#blockers-and-missing-artifacts">Blockers And Missing Artifacts</a></h2>
+<ul>
+<li><strong>State-sync vs detection mismatch — must verify on a real host (highest-risk
+blocker for the “auto-login on missing session” goal).</strong> <code>find_refresh_token_file</code>
+prefers <code>config/&lt;steamID&gt;/local.vdf</code>
+(<a href="../../../src/game/accounts.rs#L344-L352">accounts.rs:344-352</a>) but
+<code>steamcmd_state_sync_script</code> never copies that per-SteamID file — only
+<code>config.vdf</code>/<code>loginusers.vdf</code>/<code>registry.vdf</code>
+(<a href="../../../src/game/steam.rs#L1628-L1666">steam.rs:1628-1666</a>). If a steamcmd-only
+login writes the modern refresh-token JWT into <code>local.vdf</code> rather than
+<code>config.vdf</code>, detection reads <code>NoToken</code>/<code>Expired</code> <strong>forever</strong> and an auto-login
+loop never converges.
+<ul>
+<li><strong>Producer:</strong> <code>steamcmd_state_sync_script</code> and/or <code>find_refresh_token_file</code>.</li>
+<li><strong>Regenerate/validate:</strong> on the atlas host, run a real steamcmd-only login for
+one account, then inspect which file under <code>~/.local/share/Steam/config/</code>
+holds the <code>eyJ…</code> JWT; confirm <code>classify_session_status</code> returns <code>Ok</code>. If the
+JWT lives in <code>local.vdf</code>, extend the sync to copy <code>config/&lt;steamID&gt;/local.vdf</code>.</li>
+</ul>
+</li>
+<li><strong>No real-host (atlas) verification of login timing exists.</strong> Every claim about
+steamcmd Guard-prompt timing, tmux-session liveness across a dialog wait, and
+whether <code>finish_steam_login</code>’s artifacts satisfy <code>classify_session_status</code> is
+unverified against a live Steam account (<code>.calibration.json</code> = “partial”). The
+single-invocation timing assumption (TOTP ~30 s vs dialog dwell vs steamcmd’s
+own prompt timeout) has <strong>zero empirical grounding</strong> in this repo.</li>
+<li><strong>No host display/TTY/non-interactive detection in the login path.</strong> There is no
+<code>--non-interactive</code>/<code>--no-gui</code> global flag and no <code>$DISPLAY</code>/<code>$WAYLAND_DISPLAY</code>
+probe; the only headless heuristic is the brittle EAGAIN-on-stdin check
+(<a href="../../../src/game/steam.rs#L1876-L1882">steam.rs:1876-1882</a>), which does not
+detect absence of a display. This gate is a <strong>prerequisite</strong> for safely
+attempting the iced modal (which panics, not errors, when headless).</li>
+<li><strong>No login/guard surface in MCP</strong> (<a href="../../../src/mcp.rs#L289-L761">mcp.rs:289-761</a>).
+If AI-driven login is in scope, a non-GUI code-submission channel must be built.</li>
+</ul>
+<h2 id="risks-and-constraints"><a class="header" href="#risks-and-constraints">Risks And Constraints</a></h2>
+<ul>
+<li><strong>Authenticator code freshness (minor for the inline flow).</strong> A mobile
+authenticator (TOTP) code rotates ~30 s; an email code is valid much longer but
+single-use. The inline flow enters the code and relays it via <code>send-keys</code> within
+seconds, so freshness is not a real concern. The hazard only existed in the old
+<em>deferred separate-command</em> model, where minutes could pass before submit
+(<a href="../../../src/game/steam.rs#L919-L924">steam.rs:919-924</a>). Do <strong>not</strong> “fix” this
+with a positional <code>+login user pass code</code>: for email Guard the code does not
+exist until the no-code attempt triggers it, so the attempt-then-relay model is
+mandatory, not optional.</li>
+<li><strong>Parallel login vs a single modal.</strong> <code>login()</code> and <code>auto_login()</code> run N VMs
+concurrently (<a href="../../../src/game/steam.rs#L656-L689">steam.rs:656-689</a>,
+<a href="../../../src/game/steam.rs#L1228-L1254">steam.rs:1228-1254</a>); only one iced
+event loop/dialog can be active per process. Concurrent Guard prompts must be
+serialized/queued, or interactive Guard restricted to single-target login.</li>
+<li><strong>iced headless = panic, and main-thread/blocking.</strong> A robust display pre-check
+and process isolation are mandatory (see external constraints above); otherwise
+CI/MCP/timer runs crash or hang.</li>
+<li><strong>Post-login state persistence.</strong> <code>finish_steam_login</code> must run <em>after</em> the code
+is accepted so <code>loginusers.vdf</code> + the JWT land in the host share; “completing” on
+steamcmd success alone risks the detection loop above
+(<a href="../../../src/game/steam.rs#L1552-L1626">steam.rs:1552-1626</a>).</li>
+<li><strong>Secret leakage across the new boundary.</strong> The OTP (and password) must route
+through <code>redact_sensitive</code>, transit any helper pipe without logging, and be
+zeroized. The live steamcmd LOG tail surfaced on failure can contain the
+just-typed code.</li>
+<li><strong>MCP completion lifetime vs tool timeout.</strong> A held login awaiting an
+out-of-band code can outlive the <code>nix_run</code>/MCP 300 s timeout
+(<a href="../../../src/mcp.rs#L300">mcp.rs:300</a>) and collide with the 300-iteration
+in-VM waits; a two-call MCP protocol needs an explicit token TTL.</li>
+<li><strong>Dependency/closure growth.</strong> iced adds a winit/wgpu/Wayland/Vulkan/fontconfig
+tree the current zero-<code>buildInputs</code> crane build and the rs-harbor dev shell do
+not provide (<a href="../../../nix/flake/packages.nix#L67-L84">packages.nix:67-84</a>). A
+headless MCP/CI/timer binary should not be forced to link it.</li>
+<li><strong>Downstream breakage.</strong> Five Nix wrappers reference <code>steam login</code>/<code>steam guard</code>
+(<a href="../../../nix/lib/test-cluster.nix#L390-L427">test-cluster.nix:390-427</a>),
+including <code>cluster-steam-login-persist</code>; consumer flakes (e.g. regicide) and CLI
+parse tests (<a href="../../../src/ui/cli.rs#L962-L999">cli.rs:962-999</a>) depend on
+<code>guard</code>. Demote, do not delete.</li>
+<li><strong>Uncovered dependents</strong> the plan must account for: the harness <code>ensure_steam</code>
+path (no session check, reachable from MCP <code>cluster_test</code>,
+<a href="../../../src/harness/runner.rs#L914-L933">runner.rs:914-933</a>); <code>--steam-target-id</code>
+reading the host operator’s own Steam install
+(<a href="../../../src/harness/runner.rs#L982-L983">runner.rs:982-983</a>); the <code>warm</code>
+systemd timer as a second display-less caller
+(<a href="../../../nix/lib/warm-timer.nix#L86-L108">warm-timer.nix:86-108</a>); teardown
+<code>graceful_stop_steam</code> that flushes session tokens
+(<a href="../../../src/game/run.rs#L36">run.rs:36</a>, <a href="../../../src/mcp.rs#L526">mcp.rs:526</a>);
+and the exact-stdout integration tests with <strong>no</strong> login/guard coverage
+(<a href="../../../tests/cli_steam_standalone.rs">tests/cli_steam_standalone.rs</a>).</li>
+</ul>
+<h2 id="surrounding-features-incompatible-with-the-new-flow"><a class="header" href="#surrounding-features-incompatible-with-the-new-flow">Surrounding Features Incompatible With The New Flow</a></h2>
+<p>Consolidated and de-duplicated across all subsystems. Disposition is a
+recommendation for the follow-on plan, not a commitment.</p>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>#</th><th>Feature</th><th>Subsystem</th><th>Why incompatible</th><th>Disposition</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td><code>LoginOutcome::LeftRunning</code> two-phase model</td><td>login core</td><td>Bails on Guard, leaves VM running, defers to a separate command; <code>Ok(LeftRunning)</code> makes “guard pending” indistinguishable from success in the exit code (<a href="../../../src/game/steam.rs#L1281-L1333">steam.rs:1281-1333</a>)</td><td><strong>Redesign</strong> → inline pause + typed outcome <code>Completed | GuardRequired | Failed</code></td></tr>
+<tr><td>2</td><td>Standalone <code>steam guard</code> subcommand + <code>guard()</code></td><td>login core + CLI</td><td>Exists only as phase two; runtime “exactly one VM” conflicts with parallel login (<a href="../../../src/game/steam.rs#L820-L941">steam.rs:820-941</a>, <a href="../../../src/ui/cli.rs#L636-L643">cli.rs:636-643</a>)</td><td><strong>Keep as fallback</strong> → fold logic into unified path; keep <code>--code</code> as headless escape hatch</td></tr>
+<tr><td>3</td><td><code>read_guard_code_from_stdin()</code></td><td>login core</td><td>Synchronous, TTY-only, blocks; unusable under MCP/headless; would block a GUI loop (<a href="../../../src/game/steam.rs#L958-L963">steam.rs:958-963</a>)</td><td><strong>Keep as fallback</strong> behind explicit TTY gating</td></tr>
+<tr><td>4</td><td><code>interactive_login()</code> VNC + host stdin REPL</td><td>login core + VNC infra</td><td>Needs a human vncviewer into the guest GUI, no programmatic completion, dead-ends to <code>LeftRunning</code> (<a href="../../../src/game/steam.rs#L1787-L1864">steam.rs:1787-1864</a>)</td><td><strong>Retire</strong> (keep only as deep opt-in fallback if steamcmd alone can’t establish machine trust — open question)</td></tr>
+<tr><td>5</td><td>steamcmd Guard submit deferred to a <em>separate</em> <code>steam guard</code> process</td><td>login core</td><td>The no-code bootstrap correctly triggers the email/prompt, but the code is submitted later from another invocation, so a parked session lingers and the outcome is ambiguous (<a href="../../../src/game/steam.rs#L1369">steam.rs:1369</a>, <a href="../../../src/game/steam.rs#L1492-L1506">steam.rs:1492-1506</a>)</td><td><strong>Redesign</strong> → keep the no-code bootstrap + <code>tmux send-keys</code> submit, but drive it <strong>inline</strong> in one invocation (not positional — email codes are issued by the attempt)</td></tr>
+<tr><td>6</td><td>Blocking single-shot SSH wait scripts (~300 s; GUI validation 2×240 s)</td><td>login core</td><td>A GUI event loop can’t drive these inline; MCP gets no progress until return (<a href="../../../src/game/steam.rs#L1388-L1452">steam.rs:1388-1452</a>, <a href="../../../src/game/steam.rs#L1668-L1785">steam.rs:1668-1785</a>)</td><td><strong>Redesign</strong> → run cascade on a background task, surface status via channel</td></tr>
+<tr><td>7</td><td><code>LoginLog{Stdout,Buffered,Silent}</code> (no structured channel)</td><td>login core</td><td>A GUI needs an event stream to know when to raise the dialog; MCP needs a machine-readable outcome; Silent swallows the Guard signal; stdout is MCP’s JSON-RPC channel (<a href="../../../src/game/steam.rs#L549-L598">steam.rs:549-598</a>)</td><td><strong>Redesign</strong> → typed login-event/result type routed through <code>redact_sensitive</code></td></tr>
+<tr><td>8</td><td>No login/guard MCP tool</td><td>MCP surface</td><td>AI caller cannot initiate a Guard-aware login or supply a code; <code>nix_run</code> pipes no stdin (<a href="../../../src/mcp.rs#L289-L761">mcp.rs:289-761</a>)</td><td><strong>Redesign</strong> → <code>cluster_login</code> + <code>cluster_submit_guard{token,code}</code> two-call protocol, never pops a window</td></tr>
+<tr><td>9</td><td>Parallel buffered/silent login vs single modal</td><td>login core + CLI</td><td>One dialog can’t map onto N simultaneous prompts (<a href="../../../src/game/steam.rs#L656-L689">steam.rs:656-689</a>, <a href="../../../src/game/steam.rs#L1228-L1254">steam.rs:1228-1254</a>)</td><td><strong>Redesign</strong> → serialize/queue dialogs or restrict GUI prompt to single-target</td></tr>
+<tr><td>10</td><td>No display/TTY/non-interactive detection; no <code>--non-interactive</code>/<code>--no-gui</code></td><td>CLI + login core</td><td>Needed to gate the modal; iced <em>panics</em> when headless (<a href="../../../src/ui/cli.rs#L104-L145">cli.rs:104-145</a>, <a href="../../../src/game/steam.rs#L1876-L1882">steam.rs:1876-1882</a>)</td><td><strong>Redesign</strong> → explicit flag + <code>$WAYLAND_DISPLAY</code>/<code>$DISPLAY</code>/TTY probe; helper-process isolation</td></tr>
+<tr><td>11</td><td>Login/guard dispatch inlined in <code>lib.rs</code>, signalled via printed text + <code>Ok(())</code></td><td>CLI dispatch + bin</td><td>Can’t drive login from both CLI (iced) and a new MCP tool; “guard pending” surfaces as text + Ok (<a href="../../../src/lib.rs#L892-L989">lib.rs:892-989</a>, <a href="../../../src/bin/cluster-ctl.rs#L5-L11">cluster-ctl.rs:5-11</a>)</td><td><strong>Redesign</strong> → shared callable returning a typed outcome; distinct exit code for headless “guard needed”</td></tr>
+<tr><td>12</td><td>In-VM GUI login packages (wayvnc, wl-clipboard, wtype, in-VM Steam GUI) + 4 GiB login-runner sizing + per-login <code>pkill wayvnc/sway</code></td><td>Nix VM image + sizing + teardown</td><td>Provisioned chiefly for the in-VM Guard window; a host iced + steamcmd login needs only steamcmd (+tmux) (<a href="../../../nix/cluster-vm-base.nix#L76-L129">cluster-vm-base.nix:76-129</a>, sizing <a href="../../../nix/lib/test-cluster.nix#L195">test-cluster.nix:195</a>, teardown <a href="../../../src/game/steam.rs#L949">steam.rs:949</a>)</td><td><strong>Keep as fallback</strong> → gate off the default path; keep <code>pkill tmux</code>; sway/grim stay for capture</td></tr>
+<tr><td>13</td><td>Headless package + dev-shell closure with zero GUI toolkit</td><td>Nix flake + Cargo.toml</td><td>iced introduces winit/wgpu/Wayland/Vulkan/fontconfig the strict-deps crane build and rs-harbor shell don’t provide; a headless binary shouldn’t link it (<a href="../../../Cargo.toml#L21-L53">Cargo.toml:21-53</a>, <a href="../../../nix/flake/packages.nix#L67-L84">packages.nix:67-84</a>)</td><td><strong>Redesign</strong> → separate helper crate/binary (preferred) or feature-gated iced + tiny-skia; add buildInputs only there</td></tr>
+<tr><td>14</td><td>User-facing docs/UX enshrining VNC two-mode/two-phase login</td><td>docs + CLI help</td><td>Documents the obsolete “VNC in + complete Guard” and “Complete from another shell” flow; omits the headless/MCP contract (<a href="../../../docs/src/configuration/steam-credentials.html#L23-L89">steam-credentials.md:23-89</a>, <a href="../../../README.html#L177-L207">README.md:177-207</a>, <a href="../../../src/game/steam.rs#L444">steam.rs:444</a>)</td><td><strong>Redesign</strong> → rewrite to auto-steamcmd + host dialog default; document no-display behavior; note vnc/wayvnc are screenshots-only</td></tr>
+</tbody>
+</table>
+</div>
+<h2 id="candidate-next-steps"><a class="header" href="#candidate-next-steps">Candidate Next Steps</a></h2>
+<p>Sequencing hints for the follow-on plan, not commitments.</p>
+<ol>
+<li><strong>Verify the state-sync/detection mismatch on a real host first</strong> (gates the
+whole “auto-login on missing session” premise). See Blockers. Cheap, and
+everything else assumes convergence.</li>
+<li><strong>Drive the existing <code>tmux send-keys</code> submit inline.</strong> Keep the no-code
+<code>steamcmd +login user pass</code> bootstrap (it makes Steam <em>issue</em> the email code and
+parks at the <code>Steam Guard code:</code> prompt), obtain the code, and relay it into the
+<strong>live</strong> session via the existing <code>steamcmd_guard_submit_script</code> +
+completion-wait — in the <em>same</em> invocation, looping on invalid-code re-prompt.
+Do <strong>not</strong> use a positional <code>+login user pass code</code> (email codes don’t exist
+until the attempt triggers them; positional only fits the on-demand
+authenticator). Remove the “retry from another shell with the latest code”
+control flow.</li>
+<li><strong>Introduce a <code>GuardCodeProvider</code> abstraction</strong> — one seam for all channels
+(HelperGui / Stdin-TTY / McpQueue / PreSupplied <code>--code</code>|env), selected by
+detected context. This replaces the <code>LeftRunning</code> early-return at
+<a href="../../../src/game/steam.rs#L1322">steam.rs:1322</a> with: <em>obtain code → submit →
+wait-for-completion (invalid-code retry via the existing post-submit marker) →
+<code>finish_steam_login</code></em>, in one invocation.</li>
+<li><strong>Extract a shared login orchestration callable</strong> returning a typed outcome
+(<code>Completed | GuardRequired | Failed</code>) that the CLI handler, the iced flow, and
+a new MCP tool all consume (<a href="../../../src/lib.rs#L892-L989">lib.rs:892-989</a>).
+Reserve a distinct exit code for the headless “guard code needed” case.</li>
+<li><strong>Add an explicit interactivity/display gate</strong> (<code>--non-interactive</code>/<code>--no-gui</code>
+global flag + <code>$WAYLAND_DISPLAY</code>/<code>$DISPLAY</code>/TTY probe + MCP-context detection)
+before any modal attempt.</li>
+<li><strong>Build the Guard prompt as a separate pinentry-style helper binary</strong> (see
+Recommended below), launched via <code>tokio::process::Command</code>, returning the code
+on stdout; non-zero exit / empty stdout = cancelled/unavailable.</li>
+<li><strong>Add the MCP code path</strong> (if AI-driven login is in scope): a <code>cluster_login</code>
+tool that returns structured <code>{guard_required, vm, token}</code> plus a
+<code>cluster_submit_guard{token, code}</code> tool, with a token TTL reconciled against
+the in-VM wait timeouts.</li>
+<li><strong>Decide the fate of the parallel path, <code>warm</code> timer, and harness <code>ensure_steam</code></strong>
+relative to auto-login + Guard (Open Decisions).</li>
+<li><strong>Rewrite docs/UX and update the <code>check()</code> guidance string</strong>
+(<a href="../../../src/game/steam.rs#L444">steam.rs:444</a>); keep the shipped
+lifecycle behavior in stable docs; demote VNC and <code>steam guard</code> to documented
+fallbacks; add the headless/MCP contract.</li>
+</ol>
+<h3 id="candidate-architectures-from-synthesis"><a class="header" href="#candidate-architectures-from-synthesis">Candidate architectures (from synthesis)</a></h3>
+<p>A <code>GuardCodeProvider</code> seam is common to all three; they differ only in where the
+GUI runs.</p>
+<ul>
+<li><strong>Option A — Separate pinentry-style helper binary (RECOMMENDED).</strong> A tiny
+<code>cluster-guard-prompt</code> binary owns iced/winit on its own OS main thread;
+<code>cluster-ctl</code> keeps its multi-thread tokio runtime untouched. It is the only
+option that satisfies <em>all</em> hard constraints at once: winit’s main-thread/
+blocking requirement is physically isolated; the headless <strong>panic</strong> becomes an
+observable non-zero child exit (robust by construction, not best-effort
+<code>catch_unwind</code>); the heavy GUI closure lands only in the helper crate so MCP/CI/
+timer builds stay GUI-free; and it is a near-literal implementation of the
+pinentry model the brief asks to emulate. Cost: a second binary + a small
+argv/stdout protocol + runtime discoverability of the helper.</li>
+<li><strong>Option B — In-process iced on the reclaimed main thread.</strong> Move the tokio
+runtime to a worker thread, reserve main for <code>iced::run</code> on demand, feed it via
+a channel. No second binary, simplest secret handling — but iced deps become
+<strong>mandatory in the one binary</strong> (bloating every headless consumer), headless
+safety relies on best-effort <code>catch_unwind</code> across the event-loop boundary, and
+it invasively reshapes startup (<a href="../../../src/lib.rs#L543">lib.rs:543</a>).</li>
+<li><strong>Option C — Reuse the OS <code>pinentry</code>/<code>zenity</code>/<code>kdialog</code> program (no iced).</strong>
+Zero new GUI dependency tree; inherits pinentry’s display→TTY fallback. But adds
+a <em>runtime</em> dependency on a prompt program being installed (not guaranteed on
+NixOS-operator hosts), gives less control over Steam-Guard-specific messaging,
+and deviates from the stated “iced dialog” direction.</li>
+</ul>
+<p>Regardless of option: the headless/AI contract is identical — under MCP/no-display
+the GUI is never spawned; the provider selects the MCP-queue path or fails fast
+with a typed “guard code required” error (distinct exit code), and a pre-supplied
+<code>--code</code>/env short-circuits the provider for fully-unattended runs. Prefer the
+<strong>tiny-skia</strong> software renderer to avoid a hard GPU dependency.</p>
+<h2 id="open-decisions-for-the-user"><a class="header" href="#open-decisions-for-the-user">Open Decisions For The User</a></h2>
+<p>These materially shape the implementation plan:</p>
+<ol>
+<li><strong>Steamcmd location &amp; code transport — SETTLED.</strong> steamcmd stays in-VM; the
+no-code <code>+login user pass</code> bootstrap triggers the email/prompt and the obtained
+code is relayed into the <strong>live</strong> session via <code>tmux send-keys</code>, inline in one
+invocation. No positional <code>+login user pass code</code> (email codes are issued by the
+attempt). <code>--code</code>/env is an authenticator/automation convenience on the same
+send-keys path. (Moving steamcmd host-side is explicitly <em>not</em> pursued.)</li>
+<li><strong>Is AI-driven login actually in scope,</strong> or is login an operator-only host
+action that merely must never pop a window / block under MCP? If in scope,
+commit to the <code>cluster_login</code> + <code>cluster_submit_guard</code> MCP tool pair; if not,
+the headless contract simplifies to “fail fast with a typed guard-required
+error.” (Note: an AI still cannot <em>obtain</em> an email/mobile code itself — that
+likely stays human-in-the-loop via a different channel, unless option 7 below.)</li>
+<li><strong>Parallel login with multiple Guard-needing VMs:</strong> serialize dialogs in a host
+queue, or restrict interactive Guard to single-target <code>steam login &lt;vm&gt;</code> (and
+keep <code>up</code>/<code>auto_login</code> non-interactive)? Decides whether Phase-02 parallel login
+must change.</li>
+<li><strong>Should <code>up</code>’s silent <code>auto_login</code></strong> (<a href="../../../src/game/steam.rs#L1237">steam.rs:1237</a>)
+be allowed to raise a host dialog mid-cluster-bringup, or stay strictly
+non-interactive (Guard ⇒ actionable error)?</li>
+<li><strong>Retire vs keep-as-fallback:</strong> the standalone <code>steam guard --code</code> subcommand,
+the <code>cluster-steam-guard</code> Nix wrappers, and <code>interactive_login()</code> (VNC).
+Recommendation: keep all three as deep/headless fallbacks (consumer flakes
+depend on the wrapper; VNC may still be needed for GUI-only first-trust — open
+question).</li>
+<li><strong>iced packaging:</strong> separate helper crate/binary (recommended — sidesteps the
+question), compile-time Cargo feature gate (two package variants, headless build
+links zero GUI deps), or always-linked-runtime-gated (one variant, heavier
+closure for every consumer)?</li>
+<li><strong>Fully-unattended login via stored TOTP <code>shared_secret</code></strong> (like
+<code>Weilbyte/steamcmd-2fa</code>)? This removes the human/dialog entirely for those
+accounts but adds a new secret to the credentials store (<code>VmCredentials</code> has no
+such field today, <a href="../../../src/core/credentials.rs#L7-L12">credentials.rs:7-12</a>).</li>
+<li><strong>Scope of auto-login:</strong> only <code>up</code>/<code>steam login</code>, or also <code>warm</code>/<code>check</code>/the
+harness <code>ensure_steam</code> test path? <code>command_uses_credentials</code>
+(<a href="../../../src/lib.rs#L259-L267">lib.rs:259-267</a>) loads creds only for
+Up/login/guard today, so the others <em>cannot</em> auto-login even if they detect a
+missing session — expanding this pulls the headless <code>warm</code> timer and MCP
+<code>cluster_test</code> into the Guard-fallback contract.</li>
+</ol>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../networking/network-simulation.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../planning/steam-login-iced-overhaul/index.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../networking/network-simulation.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../planning/steam-login-iced-overhaul/index.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../mark-09e88c2c.min.js"></script>
+        <script src="../searcher-c2a407aa.js"></script>
+
+        <script src="../clipboard-1626706a.min.js"></script>
+        <script src="../highlight-abc7f01d.js"></script>
+        <script src="../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

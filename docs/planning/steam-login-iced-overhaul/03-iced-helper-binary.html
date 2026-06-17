@@ -1,0 +1,448 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Phase 03 — iced helper binary - Steampipe Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "coal";
+            const default_dark_theme = "coal";
+            window.path_to_searchindex_js = "../../searchindex-223c68b7.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-58d43805.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Steampipe Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/caniko/steampipe" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="phase-03--cluster-guard-prompt-iced-helper-binary--nix-packaging"><a class="header" href="#phase-03--cluster-guard-prompt-iced-helper-binary--nix-packaging">Phase 03 — <code>cluster-guard-prompt</code> iced helper binary + Nix packaging</a></h1>
+<blockquote>
+<p><strong>Status: shipped (Rust + Nix packaging, 2026-05-29).</strong> The
+<code>crates/cluster-guard-prompt</code> workspace crate exists and builds: an iced 0.14
+modal (<code>wgpu</code> + <code>tiny-skia</code> auto renderer, <code>secure(true)</code> input,
+Cancel/Submit, timeout) that prints the code to stdout / exits 10 cancel, 11
+timeout, 12 no-display/runtime-unavailable. The helper pre-checks display
+sockets and NixOS GUI runtime libraries before iced so missing Wayland/X11 libs
+fail cleanly instead of surfacing as exit 101. <code>cluster-ctl</code> links no iced; the
+installed wrapper puts <code>cluster-guard-prompt</code> on <code>PATH</code> and the helper wrapper
+bakes the GUI runtime library path.</p>
+</blockquote>
+<blockquote>
+<p><strong>Recommended Codex model: GPT 5.5 high</strong></p>
+<p>Complex, self-contained deliverable with two hard subtleties the dossier flags
+as panic-class: iced 0.14 must own the OS main thread and <em>panics</em> (not
+returns <code>Err</code>) when no display exists, and adding the winit/wgpu/tiny-skia
+closure must not leak into <code>cluster-ctl</code>’s zero-<code>buildInputs</code> crane build. A
+standalone binary against a fixed protocol (sub-agent role), but mediocre work
+ships either a hard GPU dependency or a binary that crashes instead of exiting
+cleanly headless. <code>5.5 medium</code> would likely suffice for the iced code alone;
+the Nix-closure isolation and the headless-exit contract push it to <code>high</code>.</p>
+</blockquote>
+<h2 id="working-tree"><a class="header" href="#working-tree">Working tree</a></h2>
+<p><code>/data/nvme0/can/Projects/steampipe</code>. <strong>No phase dependency</strong> — this binary is
+standalone and built against the argv/stdout protocol defined below, so it runs in
+parallel with Phases 01/02 (Wave 0). It does <strong>not</strong> touch <code>src/game/steam.rs</code> or
+any login code; integration is Phase 04.</p>
+<h2 id="goal"><a class="header" href="#goal">Goal</a></h2>
+<p>A new binary <code>cluster-guard-prompt</code> renders a small pinentry-style modal that
+prompts for a Steam Guard one-time code and prints the entered code to stdout,
+exiting 0. On cancel it exits non-zero with empty stdout; on no usable display it
+exits non-zero <strong>cleanly</strong> (never crashes the parent). It owns iced/winit on its
+own OS main thread and uses the tiny-skia software renderer (no hard GPU
+dependency). The iced/winit/Wayland/Vulkan dependency closure is confined to this
+binary’s Nix output; <code>cluster-ctl</code> remains GUI-free.</p>
+<h2 id="why-this-matters-now"><a class="header" href="#why-this-matters-now">Why this matters now</a></h2>
+<p>The brief wants a host-side iced dialog, and the dossier’s recommended Option A
+isolates iced in a separate process precisely because of two hard external
+constraints:</p>
+<ul>
+<li><strong>Main-thread + blocking:</strong> iced 0.14 runs on winit; <code>iced::run()</code> must be
+called on the OS main thread and blocks until the window closes. <code>cluster-ctl</code>
+builds its multi-thread tokio runtime by hand and <code>block_on</code>s on main
+(<code>src/lib.rs:543-548</code>) — a separate process keeps these from colliding.</li>
+<li><strong>Headless = panic, not Result:</strong> with no <code>DISPLAY</code>/<code>WAYLAND_DISPLAY</code> or no
+client lib, iced panics during event-loop creation. A separate process turns
+that panic into an observable non-zero exit the parent can branch on; in-process
+it would need fragile <code>catch_unwind</code>.</li>
+</ul>
+<p>Building the helper now (in parallel with the core refactor) de-risks the
+integration in Phase 04 and keeps the heavy closure out of every headless
+consumer (<code>src/mcp.rs</code>, the <code>warm</code> timer).</p>
+<h2 id="out-of-scope"><a class="header" href="#out-of-scope">Out of scope</a></h2>
+<ul>
+<li>Wiring the helper into the login flow / <code>HelperGui</code> provider — Phase 04.</li>
+<li>Any change to <code>cluster-ctl</code>’s sources or its crane build inputs.</li>
+<li>TOTP generation, secret storage, or talking to steamcmd — the helper only
+renders a prompt and returns a string.</li>
+</ul>
+<h2 id="plan"><a class="header" href="#plan">Plan</a></h2>
+<ol>
+<li><strong>Decide crate layout.</strong> Add <code>cluster-guard-prompt</code> as a second binary. Given
+the repo is currently a single-package crate (<code>Cargo.toml</code> has <code>[package] name = "steampipe"</code>, one <code>[[bin]]</code>), prefer a <strong>separate workspace member
+crate</strong> under <code>crates/cluster-guard-prompt/</code> (convert root to a workspace, or
+add a <code>[workspace] members=[...]</code>) so the iced dependency does <strong>not</strong> appear
+in <code>cluster-ctl</code>’s dependency graph at all. If a workspace conversion is too
+invasive, fall back to a second <code>[[bin]]</code> gated behind a <code>gui</code> feature that is
+off by default — but the separate-crate option is strongly preferred for clean
+closure isolation. Document the choice in the crate README.</li>
+<li><strong>Add iced 0.14</strong> with the tiny-skia renderer feature (disable the default
+wgpu renderer to avoid a hard GPU dependency). Pin to <code>0.14.x</code>; the repo is
+on edition 2024 / rust 1.88.</li>
+<li><strong>Define the argv/stdout protocol</strong> (pinentry-style, caller pushes context):
+<ul>
+<li><strong>Input (argv/env):</strong> <code>--vm &lt;name&gt; --user &lt;steam_user&gt; --reason &lt;text&gt; [--invalid-retry] [--timeout-secs N]</code>. Do <strong>not</strong> accept the code on input.</li>
+<li><strong>Output:</strong> on submit, print the entered code to stdout (single line) and
+exit <code>0</code>. On cancel/window-close, print nothing and exit <code>10</code>. On
+timeout, exit <code>11</code>. On no-usable-display/init failure, exit <code>12</code>.</li>
+<li>These exit codes are the contract Phase 04’s <code>HelperGui</code> provider branches on.
+Document them in the crate README and reference them from Phase 04.</li>
+</ul>
+</li>
+<li><strong>Pre-check the display before constructing the event loop.</strong> At <code>main()</code>
+start, check <code>$WAYLAND_DISPLAY</code>/<code>$DISPLAY</code>; if neither is usable, print nothing
+and <code>std::process::exit(12)</code> <strong>before</strong> any iced call (turns the would-be panic
+into a clean exit). Additionally wrap <code>iced::run(...)</code> in
+<code>std::panic::catch_unwind</code> as a belt-and-suspenders guard that maps a panic to
+exit <code>12</code>.</li>
+<li><strong>Build the modal</strong> with the iced 0.14 functional API (<code>iced::run</code>/
+<code>iced::application</code>): a <code>text_input</code> for the code (mask or not — Guard codes are
+low-sensitivity but treat as secret: do not echo to logs), an <code>on_submit</code> and a
+submit <code>button</code>, a Cancel button, and a label showing vm/user/reason. State
+holds the typed string; submit stores it and requests window close; on close,
+<code>main</code> prints the stored code and exits 0.</li>
+<li><strong>Enforce the timeout.</strong> Honor <code>--timeout-secs</code> (default e.g. 120) so an
+unattended prompt can’t hang a parent forever; on expiry, exit <code>11</code>.</li>
+<li><strong>Secret hygiene.</strong> Zeroize the entered string buffer after printing; never log
+it; do not write it to a file or to stderr.</li>
+<li><strong>Nix packaging.</strong> In <code>flake.nix</code> / <code>nix/flake/packages.nix</code>, add a
+<code>cluster-guard-prompt</code> package built with crane, declaring the GUI
+<code>buildInputs</code> <strong>only on this output</strong>: <code>libxkbcommon</code>, <code>wayland</code>,
+<code>wayland-protocols</code>, <code>libGL</code>, <code>vulkan-loader</code> (loader only; tiny-skia avoids a
+GPU requirement at build), <code>fontconfig</code>, <code>freetype</code>, plus <code>makeWrapper</code> to set
+<code>LD_LIBRARY_PATH</code>/<code>XDG_*</code> as needed for runtime lib discovery. Confirm
+<code>cluster-ctl</code>’s existing package (<code>packages.nix:67-84</code>) is <strong>unchanged</strong> and
+still builds with zero <code>buildInputs</code>.</li>
+<li><strong>Dev shell.</strong> Add the GUI <code>pkgConfigDeps</code>/libs to <code>nix/flake/dev-shells.nix</code>
+so <code>cargo run -p cluster-guard-prompt</code> works in the dev shell, without forcing
+them on the <code>cluster-ctl</code>-only build.</li>
+<li>Verify: <code>nix build .#cluster-guard-prompt</code> succeeds; <code>nix build .#default</code>
+(cluster-ctl) closure contains no iced/winit/wgpu; run the helper manually on
+a graphical host and confirm it returns the typed code on stdout and the right
+exit codes for cancel/timeout/headless.</li>
+</ol>
+<h2 id="acceptance-criteria"><a class="header" href="#acceptance-criteria">Acceptance criteria</a></h2>
+<ul>
+<li><input disabled="" type="checkbox"> <code>cluster-guard-prompt</code> builds as its own crate/output; <code>cargo tree -p     steampipe</code> (the <code>cluster-ctl</code> crate) shows <strong>no</strong> <code>iced</code>/<code>winit</code>/<code>wgpu</code>
+dependency.</li>
+<li><input disabled="" type="checkbox"> Running the helper on a graphical host prints the entered code to stdout and
+exits 0; Cancel exits 10; timeout exits 11.</li>
+<li><input disabled="" type="checkbox"> Running with <code>DISPLAY=</code>/<code>WAYLAND_DISPLAY=</code> unset (or invalid) exits 12
+<strong>without a panic backtrace on stderr</strong> and prints nothing to stdout.</li>
+<li><input disabled="" type="checkbox"> Uses the tiny-skia renderer (no wgpu feature enabled); <code>nix build     .#cluster-guard-prompt</code> succeeds and the closure does not require a GPU at
+build time.</li>
+<li><input disabled="" type="checkbox"> <code>nix build .#default</code> (cluster-ctl) closure is unchanged w.r.t. GUI libs
+(no new <code>buildInputs</code>); diff the derivation inputs to confirm.</li>
+<li><input disabled="" type="checkbox"> The argv/stdout/exit-code protocol is documented in the crate README and
+matches what Phase 04 expects.</li>
+<li><input disabled="" type="checkbox"> The entered code is zeroized after printing and never logged.</li>
+</ul>
+<h2 id="files-likely-touched"><a class="header" href="#files-likely-touched">Files likely touched</a></h2>
+<ul>
+<li><code>Cargo.toml</code> (root) — workspace members, or <code>[[bin]]</code> + <code>gui</code> feature.</li>
+<li><code>crates/cluster-guard-prompt/Cargo.toml</code>, <code>.../src/main.rs</code> <em>(new)</em> — the helper.</li>
+<li><code>crates/cluster-guard-prompt/README.md</code> <em>(new)</em> — protocol + exit codes.</li>
+<li><code>flake.nix</code>, <code>nix/flake/packages.nix</code> — new <code>cluster-guard-prompt</code> package with
+GUI <code>buildInputs</code> scoped to it.</li>
+<li><code>nix/flake/dev-shells.nix</code> — GUI libs for the dev shell.</li>
+<li><code>Cargo.lock</code> — regenerated.</li>
+</ul>
+<h2 id="pitfalls"><a class="header" href="#pitfalls">Pitfalls</a></h2>
+<ul>
+<li><strong>iced default renderer is wgpu (GPU).</strong> Forgetting to disable the wgpu feature
+and enable tiny-skia pulls a Vulkan/GL hard requirement and can crash on some
+Wayland+Vulkan combos. <em>Recovery:</em> set <code>default-features = false</code> and enable the
+<code>tiny-skia</code> feature explicitly; verify the closure.</li>
+<li><strong>Closure leak into cluster-ctl.</strong> A second <code>[[bin]]</code> in the <em>same</em> crate makes
+iced a dependency of the whole package unless feature-gated <em>and</em> the feature is
+off in the cluster-ctl build — easy to get wrong. <em>Recovery:</em> the separate
+workspace crate avoids this entirely; prefer it.</li>
+<li><strong>Event loop off the main thread.</strong> If <code>main</code> spawns a runtime or thread and
+calls <code>iced::run</code> from it, winit panics (“Initializing the event loop outside of
+the main thread”). <em>Recovery:</em> the helper has no tokio runtime; call <code>iced::run</code>
+directly from <code>main</code>.</li>
+<li><strong>Panic backtrace leaking to the parent.</strong> A raw panic prints a backtrace to
+stderr that Phase 04 might surface. <em>Recovery:</em> the early env pre-check + the
+<code>catch_unwind</code> mapping to exit 12 keep stderr clean.</li>
+<li><strong>edition/MSRV mismatch.</strong> iced 0.14 MSRV is 1.88; keep the helper crate’s
+<code>rust-version</code> aligned with the root crate’s <code>rust-version = "1.88"</code>.</li>
+</ul>
+<h2 id="reference"><a class="header" href="#reference">Reference</a></h2>
+<ul>
+<li>Dossier: “iced imposes hard, non-negotiable constraints” + “pinentry is a
+validated blueprint” + incompatibility #13 (headless closure) + Option A.</li>
+<li>iced 0.14 functional API (<code>iced::run</code>/<code>text_input</code>/<code>button</code>); tiny-skia
+renderer feature.</li>
+<li>cluster-ctl crane build to keep GUI-free: <code>nix/flake/packages.nix:67-84</code>.</li>
+<li>Consumed by Phase 04 (the <code>HelperGui</code> provider spawns this binary).</li>
+</ul>
+<h2 id="execution-notes"><a class="header" href="#execution-notes">Execution Notes</a></h2>
+<p>2026-05-29:</p>
+<ul>
+<li>Shipped <code>crates/cluster-guard-prompt</code> (291-line <code>main.rs</code>): iced 0.14 functional
+API, <code>tiny-skia</code> + <code>x11</code> + <code>wayland</code> features (no wgpu), <code>secure(true)</code> code
+input, Cancel/Submit, <code>--timeout-secs</code> (default 120), and a <code>has_display()</code>
+pre-check + <code>catch_unwind</code> mapping no-display/init failure to exit 12.</li>
+<li>Verified: <code>nix</code>-free <code>cargo build -p cluster-guard-prompt</code> succeeds;
+<code>cargo tree</code> shows iced only under the helper crate, not <code>cluster-ctl</code>; the
+headless contract holds (<code>env -u DISPLAY -u WAYLAND_DISPLAY cluster-guard-prompt … → exit 12</code>, empty stdout, no panic backtrace on stderr); <code>--help</code> matches the
+argv protocol Phase 04 passes.</li>
+<li><strong>Dev-shell runtime libs: done.</strong> The dialog initially failed under <code>cargo run</code>
+with <code>WaylandError(Connection(NoWaylandLib))</code> — winit <code>dlopen</code>s
+<code>libwayland-client.so</code> at runtime and it was not on the loader path. Fixed in
+<code>nix/flake/dev-shells.nix</code> by exporting <code>LD_LIBRARY_PATH</code> over
+wayland/libxkbcommon/libGL/vulkan-loader/fontconfig/freetype + libx11/libxcursor/
+libxi/libxrandr/libxcb. Verified: in the dev shell the helper opens the window
+(<code>--timeout-secs 2 → exit 11</code>, no panic). The helper’s panic hook now reports the
+reason to stderr instead of a silent exit-101.</li>
+<li><strong>Renderer: wgpu + tiny-skia auto-discovery.</strong> The crate enables both iced
+renderer features (<code>wgpu</code>, <code>tiny-skia</code>): iced uses the GPU (Vulkan/GL) when
+available and falls back to the software renderer otherwise — no hard GPU
+dependency, no manual backend selection. Verified the window opens via this
+build (<code>exit 11</code>).</li>
+<li><strong>Dev spawn prefers <code>cargo run</code>.</strong> <code>cluster-ctl</code> running from a cargo
+<code>target/&lt;profile&gt;/</code> tree launches the helper via <code>cargo run -p cluster-guard-prompt</code> rather than a sibling binary, because <code>cargo run -- steam login</code> only rebuilds <code>cluster-ctl</code> and a sibling helper would be <strong>stale</strong>.
+(Installed binaries still use the sibling/<code>$PATH</code>.)</li>
+<li><strong>Installed packaging done.</strong> <code>nix/flake/packages.nix</code> now builds
+<code>cluster-guard-prompt</code> with a <code>makeWrapper</code> that prefixes <code>LD_LIBRARY_PATH</code>
+with the same Wayland/libxkbcommon/libGL/vulkan-loader/fontconfig/freetype/X11
+libraries as the dev shell, appends <code>/run/opengl-driver/lib</code>, and sets default
+GL/EGL/XDG runtime paths. The <code>cluster-ctl</code> wrapper prefixes <code>PATH</code> with the
+helper package so installed <code>cluster-ctl</code> can resolve the dialog helper without
+relying on a dev shell or sibling binary.</li>
+<li><strong>Runtime guard hardened.</strong> On NixOS, if a display socket exists but the
+expected Wayland/X11 client libraries are absent from <code>LD_LIBRARY_PATH</code>, the
+helper exits 12 with an actionable message before calling iced/winit. Verified
+the former exit-101 repro (<code>LD_LIBRARY_PATH</code> unset with a valid Wayland socket)
+now exits 12, while the wrapped installed helper opens and times out cleanly
+with caller <code>LD_LIBRARY_PATH</code> unset.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../planning/steam-login-iced-overhaul/02-context-detection.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../planning/steam-login-iced-overhaul/04-helper-provider-wiring.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../planning/steam-login-iced-overhaul/02-context-detection.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../planning/steam-login-iced-overhaul/04-helper-provider-wiring.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

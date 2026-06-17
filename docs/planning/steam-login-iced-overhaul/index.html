@@ -1,0 +1,405 @@
+<!DOCTYPE HTML>
+<html lang="en" class="coal sidebar-visible" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Steam login overhaul — plan - Steampipe Documentation</title>
+
+
+        <!-- Custom HTML head -->
+
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="../../favicon-de23e50b.svg">
+        <link rel="shortcut icon" href="../../favicon-8114d1fc.png">
+        <link rel="stylesheet" href="../../css/variables-8adf115d.css">
+        <link rel="stylesheet" href="../../css/general-2459343d.css">
+        <link rel="stylesheet" href="../../css/chrome-ae938929.css">
+        <link rel="stylesheet" href="../../css/print-9e4910d8.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="../../fonts/fonts-9644e21d.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" id="mdbook-highlight-css" href="../../highlight-493f70e1.css">
+        <link rel="stylesheet" id="mdbook-tomorrow-night-css" href="../../tomorrow-night-4c0ae647.css">
+        <link rel="stylesheet" id="mdbook-ayu-highlight-css" href="../../ayu-highlight-3fdfc3ac.css">
+
+        <!-- Custom theme stylesheets -->
+
+
+        <!-- Provide site root and default themes to javascript -->
+        <script>
+            const path_to_root = "../../";
+            const default_light_theme = "coal";
+            const default_dark_theme = "coal";
+            window.path_to_searchindex_js = "../../searchindex-223c68b7.js";
+        </script>
+        <!-- Start loading toc.js asap -->
+        <script src="../../toc-58d43805.js"></script>
+    </head>
+    <body>
+    <div id="mdbook-help-container">
+        <div id="mdbook-help-popup">
+            <h2 class="mdbook-help-title">Keyboard shortcuts</h2>
+            <div>
+                <p>Press <kbd>←</kbd> or <kbd>→</kbd> to navigate between chapters</p>
+                <p>Press <kbd>S</kbd> or <kbd>/</kbd> to search in the book</p>
+                <p>Press <kbd>?</kbd> to show this help</p>
+                <p>Press <kbd>Esc</kbd> to hide this help</p>
+            </div>
+        </div>
+    </div>
+    <div id="mdbook-body-container">
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                let theme = localStorage.getItem('mdbook-theme');
+                let sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            const default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? default_dark_theme : default_light_theme;
+            let theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            const html = document.documentElement;
+            html.classList.remove('coal')
+            html.classList.add(theme);
+            html.classList.add("js");
+        </script>
+
+        <input type="checkbox" id="mdbook-sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            let sidebar = null;
+            const sidebar_toggle = document.getElementById("mdbook-sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+                sidebar_toggle.checked = false;
+            }
+            if (sidebar === 'visible') {
+                sidebar_toggle.checked = true;
+            } else {
+                html.classList.remove('sidebar-visible');
+            }
+        </script>
+
+        <nav id="mdbook-sidebar" class="sidebar" aria-label="Table of contents">
+            <!-- populated by js -->
+            <mdbook-sidebar-scrollbox class="sidebar-scrollbox"></mdbook-sidebar-scrollbox>
+            <noscript>
+                <iframe class="sidebar-iframe-outer" src="../../toc.html"></iframe>
+            </noscript>
+            <div id="mdbook-sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <div id="mdbook-page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                <div id="mdbook-menu-bar-hover-placeholder"></div>
+                <div id="mdbook-menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="mdbook-sidebar-toggle" class="icon-button" for="mdbook-sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="mdbook-sidebar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M0 96C0 78.3 14.3 64 32 64H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32C14.3 128 0 113.7 0 96zM0 256c0-17.7 14.3-32 32-32H416c17.7 0 32 14.3 32 32s-14.3 32-32 32H32c-17.7 0-32-14.3-32-32zM448 416c0 17.7-14.3 32-32 32H32c-17.7 0-32-14.3-32-32s14.3-32 32-32H416c17.7 0 32 14.3 32 32z"/></svg></span>
+                        </label>
+                        <button id="mdbook-theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="mdbook-theme-list">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M371.3 367.1c27.3-3.9 51.9-19.4 67.2-42.9L600.2 74.1c12.6-19.5 9.4-45.3-7.6-61.2S549.7-4.4 531.1 9.6L294.4 187.2c-24 18-38.2 46.1-38.4 76.1L371.3 367.1zm-19.6 25.4l-116-104.4C175.9 290.3 128 339.6 128 400c0 3.9 .2 7.8 .6 11.6c1.8 17.5-10.2 36.4-27.8 36.4H96c-17.7 0-32 14.3-32 32s14.3 32 32 32H240c61.9 0 112-50.1 112-112c0-2.5-.1-5-.2-7.5z"/></svg></span>
+                        </button>
+                        <ul id="mdbook-theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-default_theme">Auto</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="mdbook-theme-ayu">Ayu</button></li>
+                        </ul>
+                        <button id="mdbook-search-toggle" class="icon-button" type="button" title="Search (`/`)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="/ s" aria-controls="mdbook-searchbar">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M416 208c0 45.9-14.9 88.3-40 122.7L502.6 457.4c12.5 12.5 12.5 32.8 0 45.3s-32.8 12.5-45.3 0L330.7 376c-34.4 25.2-76.8 40-122.7 40C93.1 416 0 322.9 0 208S93.1 0 208 0S416 93.1 416 208zM208 352c79.5 0 144-64.5 144-144s-64.5-144-144-144S64 128.5 64 208s64.5 144 144 144z"/></svg></span>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Steampipe Documentation</h1>
+
+                    <div class="right-buttons">
+                        <a href="../../print.html" title="Print this book" aria-label="Print this book">
+                            <span class=fa-svg id="print-button"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M128 0C92.7 0 64 28.7 64 64v96h64V64H354.7L384 93.3V160h64V93.3c0-17-6.7-33.3-18.7-45.3L400 18.7C388 6.7 371.7 0 354.7 0H128zM384 352v32 64H128V384 368 352H384zm64 32h32c17.7 0 32-14.3 32-32V256c0-35.3-28.7-64-64-64H64c-35.3 0-64 28.7-64 64v96c0 17.7 14.3 32 32 32H64v64c0 35.3 28.7 64 64 64H384c35.3 0 64-28.7 64-64V384zm-16-88c-13.3 0-24-10.7-24-24s10.7-24 24-24s24 10.7 24 24s-10.7 24-24 24z"/></svg></span>
+                        </a>
+                        <a href="https://codeberg.org/caniko/steampipe" title="Git repository" aria-label="Git repository">
+                            <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 496 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M165.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6zm-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3zm44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9zM244.8 8C106.1 8 0 113.3 0 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C428.2 457.8 496 362.9 496 252 496 113.3 383.5 8 244.8 8zM97.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1zm-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7zm32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1zm-11.4-14.7c-1.6 1-1.6 3.6 0 5.9 1.6 2.3 4.3 3.3 5.6 2.3 1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2z"/></svg></span>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="mdbook-search-wrapper" class="hidden">
+                    <form id="mdbook-searchbar-outer" class="searchbar-outer">
+                        <div class="search-wrapper">
+                            <input type="search" id="mdbook-searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="mdbook-searchresults-outer" aria-describedby="searchresults-header">
+                            <div class="spinner-wrapper">
+                                <span class=fa-svg id="fa-spin"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M304 48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zm0 416c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM48 304c26.5 0 48-21.5 48-48s-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48zm464-48c0-26.5-21.5-48-48-48s-48 21.5-48 48s21.5 48 48 48s48-21.5 48-48zM142.9 437c18.7-18.7 18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zm0-294.2c18.7-18.7 18.7-49.1 0-67.9S93.7 56.2 75 75s-18.7 49.1 0 67.9s49.1 18.7 67.9 0zM369.1 437c18.7 18.7 49.1 18.7 67.9 0s18.7-49.1 0-67.9s-49.1-18.7-67.9 0s-18.7 49.1 0 67.9z"/></svg></span>
+                            </div>
+                        </div>
+                    </form>
+                    <div id="mdbook-searchresults-outer" class="searchresults-outer hidden">
+                        <div id="mdbook-searchresults-header" class="searchresults-header"></div>
+                        <ul id="mdbook-searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('mdbook-sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('mdbook-sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#mdbook-sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="mdbook-content" class="content">
+                    <main>
+                        <h1 id="plan-steam-login-overhaul-iced-host-dialog--auto-steamcmd"><a class="header" href="#plan-steam-login-overhaul-iced-host-dialog--auto-steamcmd">Plan: Steam login overhaul (iced host dialog + auto-steamcmd)</a></h1>
+<blockquote>
+<p><strong>Recommended Codex model for plan-set orchestration: GPT 5.5 high</strong></p>
+<p>Coordinating this set requires holding the whole control-plane refactor in
+view at once: a typed login outcome, a provider seam, a new GUI helper
+binary, a state-detection convergence fix, and a retirement — all converging
+on <code>src/game/steam.rs</code>, which nearly every phase touches. The dependency graph
+has real serialization hazards (one shared file) and one verification gate
+(Phase 05 needs a real Steam account on the atlas host). A weaker orchestrator
+would under-serialize the <code>steam.rs</code> edits or green-light the retirement
+(Phase 07) before the convergence fix is proven, shipping an infinite
+auto-login loop. It is orchestration, not frontier novelty, so <code>high</code> rather
+than <code>max</code>.</p>
+</blockquote>
+<h2 id="scope-and-current-state"><a class="header" href="#scope-and-current-state">Scope and current state</a></h2>
+<p>Replace the two-phase Steam Guard flow (<code>login</code> bails on Guard → leaves the VM
+running → operator runs a separate <code>steam guard --code</code> later) with a
+single-invocation flow: detect a missing/expired session, run <code>steamcmd</code>
+automatically, and when a one-time code is needed raise a <strong>host-side</strong> iced
+dialog (pinentry-style), feed the code into the in-VM <code>steamcmd</code> in one shot, and
+finish. Headless / AI / MCP contexts <strong>fail fast</strong> with a typed “guard code
+needed” error — the GUI is operator-only and there is <strong>no</strong> MCP login tool pair.</p>
+<p>Full evidence, incompatibility matrix, and the architecture rationale are in the
+research dossier:
+<a href="../steam-login-iced-overhaul-research.html">steam-login-iced-overhaul-research.md</a>.</p>
+<h3 id="decisions-locked-before-planning-from-the-dossiers-open-decisions"><a class="header" href="#decisions-locked-before-planning-from-the-dossiers-open-decisions">Decisions locked before planning (from the dossier’s Open Decisions)</a></h3>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Decision</th><th>Resolution</th></tr>
+</thead>
+<tbody>
+<tr><td>#1 steamcmd location &amp; code transport</td><td><strong>Keep steamcmd in-VM</strong>; keep the no-code <code>steamcmd +login &lt;user&gt; &lt;pass&gt;</code> bootstrap (this attempt is what makes Steam <em>issue</em> the code) and submit the obtained code into the <strong>live</strong> session via <code>tmux send-keys</code> — <strong>inline, in one invocation</strong> instead of via a separate <code>steam guard</code> process. A positional <code>+login user pass &lt;code&gt;</code> is <strong>not</strong> used: email Steam Guard mails the code in response to the attempt, so it cannot be known beforehand; positional only ever fits the on-demand mobile authenticator.</td></tr>
+<tr><td>#2 AI/headless in scope?</td><td><strong>Fail fast</strong> with a typed “guard code needed” error. GUI is operator-only. <strong>No</strong> <code>cluster_login</code>/<code>cluster_submit_guard</code> MCP tools.</td></tr>
+<tr><td>#3 parallel vs single modal</td><td>One host dialog at a time: serialize Guard prompts via a host-side queue; never run two iced helpers concurrently.</td></tr>
+<tr><td>#4 <code>up</code> silent auto_login raising a dialog</td><td>The dialog is raised whenever the context is interactive <strong>and</strong> a host display is present <strong>and</strong> not MCP/<code>--non-interactive</code>; otherwise fail fast. This rule is uniform across <code>up</code>, <code>steam login</code>, and <code>steam login all</code>.</td></tr>
+<tr><td>#6 iced packaging</td><td><strong>Option A</strong> — a separate <code>cluster-guard-prompt</code> helper binary owns iced/winit; <code>cluster-ctl</code> stays GUI-free. tiny-skia software renderer.</td></tr>
+<tr><td>topology</td><td>iced renders <strong>host-side</strong>; the code is captured on the host and relayed into the VM’s <strong>live</strong> steamcmd prompt via <code>tmux send-keys</code>.</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>Code-delivery reality (drives the mechanism above).</strong> Email Steam Guard — the
+always-available default — issues the one-time code <em>in response to the login
+attempt</em> (Steam mails it when steamcmd tries to log in from an unrecognized
+machine), so you cannot have a code to “pass in” beforehand. The mobile
+authenticator (sometimes available) is on-demand. Therefore the canonical flow
+is <strong>attempt (no code) → Steam issues the code → operator enters it → relay into
+the live prompt → continue</strong>. <code>--code</code>/<code>STEAMPIPE_GUARD_CODE</code> is a <em>convenience
+for the authenticator/automation case only</em>, fed through the same send-keys path
+after the attempt — never a positional argument that skips the attempt.</p>
+</blockquote>
+<h3 id="out-of-scope-for-the-whole-set"><a class="header" href="#out-of-scope-for-the-whole-set">Out of scope for the whole set</a></h3>
+<ul>
+<li>Fully-unattended login via a stored TOTP <code>shared_secret</code> (dossier Open
+Decision #7) — adds a new secret to <code>VmCredentials</code>; deferred.</li>
+<li>Expanding auto-login into <code>warm</code>/<code>check</code>/the harness <code>ensure_steam</code> path
+beyond surfacing the typed fail-fast error (dossier Open Decision #8).</li>
+<li>Any MCP tool that initiates or completes a Guard login (decision #2).</li>
+<li>Moving <code>steamcmd</code> execution to the host (decision #1).</li>
+</ul>
+<h2 id="phase-table"><a class="header" href="#phase-table">Phase table</a></h2>
+<div class="table-wrapper">
+<table>
+<thead>
+<tr><th>Phase</th><th>File</th><th>Depends on</th><th>Touches (primary)</th><th>Can parallel with</th><th>Blocking?</th></tr>
+</thead>
+<tbody>
+<tr><td>01 — Typed login outcome + shared callable + provider seam + inline Guard submit</td><td><a href="./01-login-control-plane.html">01-login-control-plane.md</a></td><td>—</td><td><code>src/game/steam.rs</code>, <code>src/lib.rs</code></td><td>03</td><td><strong>Yes</strong> (spine)</td></tr>
+<tr><td>02 — Host context detection + interactivity flags + Stdin provider</td><td><a href="./02-context-detection.html">02-context-detection.md</a></td><td>01</td><td><code>src/ui/cli.rs</code>, <code>src/game/steam.rs</code>, <code>src/lib.rs</code></td><td>03, 05</td><td>Yes (gates 04/06)</td></tr>
+<tr><td>03 — <code>cluster-guard-prompt</code> iced helper binary + Nix packaging</td><td><a href="./03-iced-helper-binary.html">03-iced-helper-binary.md</a></td><td>—</td><td>new crate/bin, <code>flake.nix</code>, <code>nix/flake/packages.nix</code></td><td>01, 02, 05</td><td>Yes (gates 04)</td></tr>
+<tr><td>04 — Wire HelperGui provider (spawn helper) + concurrency queue</td><td><a href="./04-helper-provider-wiring.html">04-helper-provider-wiring.md</a></td><td>01, 02, 03</td><td><code>src/game/steam.rs</code></td><td>05</td><td>No</td></tr>
+<tr><td>05 — State-sync / session-detection convergence fix</td><td><a href="./05-state-sync-convergence.html">05-state-sync-convergence.md</a></td><td>01</td><td><code>src/game/steam.rs</code>, <code>src/game/accounts.rs</code></td><td>02, 03, 04</td><td><strong>Yes</strong> (gates 07)</td></tr>
+<tr><td>06 — Headless/MCP fail-fast contract across callers</td><td><a href="./06-headless-failfast-contract.html">06-headless-failfast-contract.md</a></td><td>01, 02</td><td><code>src/mcp.rs</code>, <code>src/harness/runner.rs</code>, <code>src/game/steam.rs</code></td><td>04, 05</td><td>No</td></tr>
+<tr><td>07 — Retire interactive VNC login + gate login-runner GUI packages</td><td><a href="./07-retire-vnc-login.html">07-retire-vnc-login.md</a></td><td>01–06 green</td><td><code>src/game/steam.rs</code>, <code>src/ui/cli.rs</code>, <code>nix/cluster-vm-base.nix</code>, <code>nix/lib/test-cluster.nix</code></td><td>—</td><td>No</td></tr>
+<tr><td>08 — Docs, CLI help, tests, plan retirement</td><td><a href="./08-docs-and-tests/README.html">08-docs-and-tests/README.md</a></td><td>01–07</td><td><code>docs/</code>, <code>README.md</code>, <code>tests/</code>, <code>src/ui/cli.rs</code></td><td>—</td><td>No</td></tr>
+</tbody>
+</table>
+</div>
+<blockquote>
+<p><strong>Serialization hazard — <code>src/game/steam.rs</code>.</strong> Phases 01, 02, 04, 05, 06, 07
+all edit this file. They are sequenced so each lands on top of the prior; an
+agent starting a later phase must <code>git pull</code>/rebase and re-read the current
+<code>steam.rs</code> before editing. Where two phases touch <em>disjoint functions</em> in
+<code>steam.rs</code> (05 touches the sync/detector; 06 touches one guidance string),
+they may overlap with a rebase, but treat <code>steam.rs</code> as a mutex by default.</p>
+</blockquote>
+<h2 id="parallelism-layer-execution-waves"><a class="header" href="#parallelism-layer-execution-waves">Parallelism layer (execution waves)</a></h2>
+<ul>
+<li><strong>Wave 0 (from current tree):</strong> <strong>Phase 01</strong> (control-plane spine, <code>steam.rs</code> +
+<code>lib.rs</code>) and <strong>Phase 03</strong> (standalone helper binary + Nix, disjoint files) run
+fully in parallel. This is the main parallelism win — the GUI helper is built
+against a fixed argv/stdout protocol and needs nothing from the core refactor.</li>
+<li><strong>Wave 1 (after 01 accepted):</strong> <strong>Phase 02</strong> (context detection + flags +
+Stdin provider) and <strong>Phase 05</strong> (state-sync convergence) start. Both rebase on
+01’s <code>steam.rs</code>. 02 and 05 touch disjoint <code>steam.rs</code> functions and can overlap
+with a rebase; 03 may still be finishing in parallel.</li>
+<li><strong>Wave 2 (after 01+02+03 accepted):</strong> <strong>Phase 04</strong> (wire HelperGui provider)
+and <strong>Phase 06</strong> (fail-fast contract). 04 depends on the helper binary (03) and
+the provider seam + detection (01, 02); 06 depends on 01+02. Both touch
+<code>steam.rs</code> — land 04 first, then 06 rebases (06’s <code>steam.rs</code> change is a single
+guidance string at <code>steam.rs:444</code>).</li>
+<li><strong>Wave 3 (after 05 verified on a real host + 01–06 green):</strong> <strong>Phase 07</strong>
+retires the VNC login path and gates the login-runner GUI packages. Gated on
+Phase 05’s host verification proving steamcmd-only login establishes machine
+trust — do not start until that evidence exists.</li>
+<li><strong>Wave 4 (after 01–07 green):</strong> <strong>Phase 08</strong> docs + tests. The two sub-layers
+(docs vs tests/CLI-help) are disjoint and fan out in parallel; the
+tests sub-layer needs the final code behavior, so it follows the code phases.</li>
+<li><strong>Plan exhausted</strong> after Wave 4.</li>
+</ul>
+<h2 id="whole-set-acceptance-criteria"><a class="header" href="#whole-set-acceptance-criteria">Whole-set acceptance criteria</a></h2>
+<ul>
+<li><input disabled="" type="checkbox"> <code>cluster-ctl steam login &lt;vm&gt;</code> on a session-less VM, in an interactive
+terminal with a host display, raises the <code>cluster-guard-prompt</code> window,
+accepts the code, and completes the login in <strong>one</strong> invocation (no second
+<code>steam guard</code> command needed).</li>
+<li><input disabled="" type="checkbox"> The same login under <code>--non-interactive</code>, with no <code>$DISPLAY</code>/
+<code>$WAYLAND_DISPLAY</code>, or via MCP, exits non-zero with a typed, machine-
+distinguishable “guard code needed” error and <strong>never</strong> opens a window or
+blocks on stdin.</li>
+<li><input disabled="" type="checkbox"> <code>cluster-ctl steam login &lt;vm&gt; --code &lt;CODE&gt;</code> (authenticator/automation case)
+completes the login in the <strong>same</strong> invocation — the no-code bootstrap
+triggers the prompt and the supplied code is relayed via <code>send-keys</code> into the
+live session — with no display present and no separate <code>steam guard</code> step.</li>
+<li><input disabled="" type="checkbox"> After a steamcmd-only login, <code>cluster-ctl steam accounts</code> reports the VM as
+<code>Ok</code> (the refresh-token JWT is found by <code>classify_session_status</code>) — i.e.
+auto-login converges and does not re-trigger on the next <code>up</code>.</li>
+<li><input disabled="" type="checkbox"> <code>cluster-ctl</code> builds and runs with <strong>zero</strong> GUI/<code>buildInputs</code> in its crane
+closure; only <code>cluster-guard-prompt</code> links iced/winit/tiny-skia.</li>
+<li><input disabled="" type="checkbox"> <code>interactive_login()</code> (VNC + host stdin REPL) is removed; <code>steam guard     --code</code> and the <code>cluster-steam-guard</code> wrapper remain as documented
+headless fallbacks.</li>
+<li><input disabled="" type="checkbox"> <code>cargo build</code>, <code>cargo clippy</code> (workspace lints in <code>Cargo.toml</code>), and
+<code>cargo test</code> (incl. <code>tests/cli_steam_standalone.rs</code>) are green; the new
+typed-outcome and fail-fast paths have unit/integration coverage.</li>
+<li><input disabled="" type="checkbox"> <code>docs/src/configuration/steam-credentials.md</code> and README steam sections
+describe the new default flow and the headless contract; the
+shipped lifecycle behavior remains documented in stable docs.</li>
+</ul>
+<h2 id="global-constraints-apply-to-every-phase"><a class="header" href="#global-constraints-apply-to-every-phase">Global constraints (apply to every phase)</a></h2>
+<ul>
+<li><strong>Secrets:</strong> the Steam password and the Guard code are secrets. Every new
+channel (provider, helper pipe, event/result type, error messages, log tails)
+must route through <code>redact_sensitive</code> (<code>src/game/steam.rs:1919</code>) and the Guard
+code must be zeroized after use. Never log the code; the steamcmd LOG tail
+surfaced on failure can contain it.</li>
+<li><strong>Headless never panics or blocks:</strong> iced panics (not <code>Result</code>) with no
+display; the helper-process boundary and an explicit display/TTY/MCP pre-check
+are the only safe gates. No code path may pop a window or block on stdin in a
+non-interactive context.</li>
+<li><strong>MCP stdout is sacred:</strong> MCP transport is stdio JSON-RPC; never <code>println</code> to
+stdout from an MCP-reachable path (<code>src/mcp.rs</code> keeps <code>verbose: false</code>).</li>
+<li><strong>Don’t regress shipped work:</strong> parallel login + skip-bounce-when-reachable
+(Phase 02 of the prior plan), fill-the-gaps detection, and the per-VM virtiofsd
+lifecycle are done and durable — preserve them.</li>
+<li><strong><code>vnc</code> crate stays:</strong> it is the screenshot backend (<code>src/game/capture.rs</code>),
+not login infra. Retiring VNC <em>login</em> must not touch it.</li>
+</ul>
+<h2 id="reference"><a class="header" href="#reference">Reference</a></h2>
+<ul>
+<li>Research dossier (evidence + incompatibility matrix + options):
+<a href="../steam-login-iced-overhaul-research.html">steam-login-iced-overhaul-research.md</a>.</li>
+<li>Stable docs for the shipped lifecycle behavior this builds on:
+<a href="../../configuration/steam-credentials.html">Steam Credentials</a> and
+<a href="../../configuration/host-config.html">Global host config</a>.</li>
+<li>Run each phase in a fresh session pointed at its file. Prompt <code>verify</code> when
+done to audit acceptance criteria.</li>
+</ul>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="../../planning/steam-login-iced-overhaul-research.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                            </a>
+
+                            <a rel="next prefetch" href="../../planning/steam-login-iced-overhaul/01-login-control-plane.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="../../planning/steam-login-iced-overhaul-research.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M41.4 233.4c-12.5 12.5-12.5 32.8 0 45.3l160 160c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L109.3 256 246.6 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0l-160 160z"/></svg></span>
+                    </a>
+
+                    <a rel="next prefetch" href="../../planning/steam-login-iced-overhaul/01-login-control-plane.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M278.6 233.4c12.5 12.5 12.5 32.8 0 45.3l-160 160c-12.5 12.5-32.8 12.5-45.3 0s-12.5-32.8 0-45.3L210.7 256 73.4 118.6c-12.5-12.5-12.5-32.8 0-45.3s32.8-12.5 45.3 0l160 160z"/></svg></span>
+                    </a>
+            </nav>
+
+        </div>
+
+        <template id=fa-eye><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 576 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M288 32c-80.8 0-145.5 36.8-192.6 80.6C48.6 156 17.3 208 2.5 243.7c-3.3 7.9-3.3 16.7 0 24.6C17.3 304 48.6 356 95.4 399.4C142.5 443.2 207.2 480 288 480s145.5-36.8 192.6-80.6c46.8-43.5 78.1-95.4 93-131.1c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C433.5 68.8 368.8 32 288 32zM432 256c0 79.5-64.5 144-144 144s-144-64.5-144-144s64.5-144 144-144s144 64.5 144 144zM288 192c0 35.3-28.7 64-64 64c-11.5 0-22.3-3-31.6-8.4c-.2 2.8-.4 5.5-.4 8.4c0 53 43 96 96 96s96-43 96-96s-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6z"/></svg></span></template>
+        <template id=fa-eye-slash><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M38.8 5.1C28.4-3.1 13.3-1.2 5.1 9.2S-1.2 34.7 9.2 42.9l592 464c10.4 8.2 25.5 6.3 33.7-4.1s6.3-25.5-4.1-33.7L525.6 386.7c39.6-40.6 66.4-86.1 79.9-118.4c3.3-7.9 3.3-16.7 0-24.6c-14.9-35.7-46.2-87.7-93-131.1C465.5 68.8 400.8 32 320 32c-68.2 0-125 26.3-169.3 60.8L38.8 5.1zM223.1 149.5C248.6 126.2 282.7 112 320 112c79.5 0 144 64.5 144 144c0 24.9-6.3 48.3-17.4 68.7L408 294.5c5.2-11.8 8-24.8 8-38.5c0-53-43-96-96-96c-2.8 0-5.6 .1-8.4 .4c5.3 9.3 8.4 20.1 8.4 31.6c0 10.2-2.4 19.8-6.6 28.3l-90.3-70.8zm223.1 298L373 389.9c-16.4 6.5-34.3 10.1-53 10.1c-79.5 0-144-64.5-144-144c0-6.9 .5-13.6 1.4-20.2L83.1 161.5C60.3 191.2 44 220.8 34.5 243.7c-3.3 7.9-3.3 16.7 0 24.6c14.9 35.7 46.2 87.7 93 131.1C174.5 443.2 239.2 480 320 480c47.8 0 89.9-12.9 126.2-32.5z"/></svg></span></template>
+        <template id=fa-copy><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M502.6 70.63l-61.25-61.25C435.4 3.371 427.2 0 418.7 0H255.1c-35.35 0-64 28.66-64 64l.0195 256C192 355.4 220.7 384 256 384h192c35.2 0 64-28.8 64-64V93.25C512 84.77 508.6 76.63 502.6 70.63zM464 320c0 8.836-7.164 16-16 16H255.1c-8.838 0-16-7.164-16-16L239.1 64.13c0-8.836 7.164-16 16-16h128L384 96c0 17.67 14.33 32 32 32h47.1V320zM272 448c0 8.836-7.164 16-16 16H63.1c-8.838 0-16-7.164-16-16L47.98 192.1c0-8.836 7.164-16 16-16H160V128H63.99c-35.35 0-64 28.65-64 64l.0098 256C.002 483.3 28.66 512 64 512h192c35.2 0 64-28.8 64-64v-32h-47.1L272 448z"/></svg></span></template>
+        <template id=fa-play><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M73 39c-14.8-9.1-33.4-9.4-48.5-.9S0 62.6 0 80V432c0 17.4 9.4 33.4 24.5 41.9s33.7 8.1 48.5-.9L361 297c14.3-8.7 23-24.2 23-41s-8.7-32.2-23-41L73 39z"/></svg></span></template>
+        <template id=fa-clock-rotate-left><span class=fa-svg><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 6.2.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2022 Fonticons, Inc. --><path d="M75 75L41 41C25.9 25.9 0 36.6 0 57.9V168c0 13.3 10.7 24 24 24H134.1c21.4 0 32.1-25.9 17-41l-30.8-30.8C155 85.5 203 64 256 64c106 0 192 86 192 192s-86 192-192 192c-40.8 0-78.6-12.7-109.7-34.4c-14.5-10.1-34.4-6.6-44.6 7.9s-6.6 34.4 7.9 44.6C151.2 495 201.7 512 256 512c141.4 0 256-114.6 256-256S397.4 0 256 0C185.3 0 121.3 28.7 75 75zm181 53c-13.3 0-24 10.7-24 24V256c0 6.4 2.5 12.5 7 17l72 72c9.4 9.4 24.6 9.4 33.9 0s9.4-24.6 0-33.9l-65-65V152c0-13.3-10.7-24-24-24z"/></svg></span></template>
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="../../elasticlunr-ef4e11c1.min.js"></script>
+        <script src="../../mark-09e88c2c.min.js"></script>
+        <script src="../../searcher-c2a407aa.js"></script>
+
+        <script src="../../clipboard-1626706a.min.js"></script>
+        <script src="../../highlight-abc7f01d.js"></script>
+        <script src="../../book-a0b12cfe.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+
+    </div>
+    </body>
+</html>

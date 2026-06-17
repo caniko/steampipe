@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "plan": {
+    "id": "fce386fb-f0d9-4518-9e70-b298717bc190",
+    "name": "Plan: Steam login overhaul (iced host dialog + auto-steamcmd)",
+    "flavor": "codex",
+    "worktype": null,
+    "created_at": 1780037123,
+    "phase_count": 8,
+    "wave_count": 5,
+    "max_chain_depth": 5,
+    "repo_spread": 8,
+    "routing_dist": {
+      "high": 5,
+      "medium": 3
+    },
+    "shape_hash": "a56aefdedd2501205db344c6395febcad86ffec9036fcaab987b35dd75bbc06a"
+  },
+  "triggers": [
+    {
+      "name": "shared-file-contention",
+      "input_value": 1.0,
+      "threshold": 2.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "external-repo-phases",
+      "input_value": 7.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": "External repo coordination"
+    },
+    {
+      "name": "convergence-point",
+      "input_value": 3.0,
+      "threshold": 3.0,
+      "fired": true,
+      "section_added": "Merge-readiness checklist"
+    },
+    {
+      "name": "ownership-boundary-spread",
+      "input_value": 8.0,
+      "threshold": 2.0,
+      "fired": true,
+      "section_added": "PR sequencing & cross-owner coordination"
+    },
+    {
+      "name": "risk-concentration",
+      "input_value": 0.0,
+      "threshold": 2.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "risk-late-in-plan",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "infrastructure-spof",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "revendor-phase",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "long-serial-chain",
+      "input_value": 5.0,
+      "threshold": 4.0,
+      "fired": true,
+      "section_added": "Serial-chain recovery"
+    },
+    {
+      "name": "mid-plan-rerouting",
+      "input_value": 8.0,
+      "threshold": 10.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "trivial-phase-swamp",
+      "input_value": 0.6,
+      "threshold": 4.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "no-integrated-verification",
+      "input_value": 1.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": null
+    },
+    {
+      "name": "routing-tier-inversion",
+      "input_value": 2.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": null
+    },
+    {
+      "name": "mechanical-streak",
+      "input_value": 0.0,
+      "threshold": 3.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "hidden-prerequisite",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    }
+  ],
+  "phases": [
+    {
+      "ordinal": 1,
+      "slug": "login-control-plane",
+      "routing_tier": "high",
+      "files": [
+        "src/bin/cluster-ctl.rs` — exit-code mapping if the new typed outcome surfaces",
+        "src/game/guard.rs` *(new, optional)* — `GuardProvider` enum/trait,",
+        "src/game/mod.rs` — module declaration if `guard.rs` is added.",
+        "src/game/steam.rs` — `LoginOutcome`, `automated_login`, `login_single_vm`,",
+        "src/lib.rs` — extract the shared login orchestration callable from the"
+      ]
+    },
+    {
+      "ordinal": 2,
+      "slug": "context-detection",
+      "routing_tier": "medium",
+      "files": [
+        "src/game/guard.rs` (or wherever Phase 01 put the seam) — `LoginContext`,",
+        "src/game/steam.rs` — fold `read_guard_code_from_stdin` into the `Stdin",
+        "src/lib.rs` — pass detected context + flags into the shared login callable.",
+        "src/ui/cli.rs` — `--non-interactive`/`--no-gui` global flags; help text."
+      ]
+    },
+    {
+      "ordinal": 3,
+      "slug": "iced-helper-binary",
+      "routing_tier": "high",
+      "files": [
+        "Cargo.lock` — regenerated.",
+        "Cargo.toml` (root) — workspace members, or `[[bin]]` + `gui` feature.",
+        "crates/cluster-guard-prompt/Cargo.toml`, `.../src/main.rs` *(new)* — the helper.",
+        "crates/cluster-guard-prompt/README.md` *(new)* — protocol + exit codes.",
+        "flake.nix`, `nix/flake/packages.nix` — new `cluster-guard-prompt` package with",
+        "nix/flake/dev-shells.nix` — GUI libs for the dev shell."
+      ]
+    },
+    {
+      "ordinal": 4,
+      "slug": "helper-provider-wiring",
+      "routing_tier": "high",
+      "files": [
+        "Cargo.toml` — `zeroize` dep if not already present (cluster-ctl crate; this is",
+        "Tests under `src/game/` or `tests/`.",
+        "src/game/guard.rs` (or the seam module) — `HelperGui` variant, exit-code",
+        "src/game/steam.rs` — selection wiring into `automated_login`; zeroize after"
+      ]
+    },
+    {
+      "ordinal": 5,
+      "slug": "state-sync-convergence",
+      "routing_tier": "high",
+      "files": [
+        "Test fixtures under `tests/` or inline `tempfile` fixtures in `accounts.rs",
+        "src/game/accounts.rs` — `find_refresh_token_file` hardening + detector tests.",
+        "src/game/steam.rs` — `steamcmd_state_sync_script` (+ its unit test). *(Disjoint"
+      ]
+    },
+    {
+      "ordinal": 6,
+      "slug": "headless-failfast-contract",
+      "routing_tier": "medium",
+      "files": [
+        "nix/lib/warm-timer.nix` — optional description note (no behavior change).",
+        "src/game/steam.rs` — `check()` guidance string at `steam.rs:444` (+ any",
+        "src/harness/runner.rs` — typed \"guard needed\" message in the Steam path;",
+        "src/mcp.rs` — force-headless context at entry; ensure error text returns via"
+      ]
+    },
+    {
+      "ordinal": 7,
+      "slug": "retire-vnc-login",
+      "routing_tier": "high",
+      "files": [
+        "nix/cluster-vm-base.nix` — gate GUI-login packages off the default login path.",
+        "nix/lib/test-cluster.nix`, `nix/module.nix` — optional login-runner downsizing",
+        "src/game/steam.rs` — remove `interactive_login`, creds-less branch, dead stdin",
+        "src/ui/cli.rs` — `SteamAction::Login` help text; remove VNC framing."
+      ]
+    },
+    {
+      "ordinal": 8,
+      "slug": "README",
+      "routing_tier": "medium",
+      "files": []
+    }
+  ],
+  "meta_heuristics_fired": [
+    "threshold-proximity"
+  ],
+  "tags": {
+    "flavor": "codex",
+    "risk": "mixed",
+    "scope": "cross-org"
+  },
+  "verify": null
+}

@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "plan": {
+    "id": "36b16691-c864-4d14-aacc-eb9e2ec234fc",
+    "name": "Plan: Headless Steam token-mint login",
+    "flavor": "codex",
+    "worktype": null,
+    "created_at": 1780073168,
+    "phase_count": 5,
+    "wave_count": 4,
+    "max_chain_depth": 4,
+    "repo_spread": 6,
+    "routing_dist": {
+      "high": 4,
+      "medium": 1
+    },
+    "shape_hash": "923a86e4068f2026a0e902eb94f6666f6f80008c01833bb1c7d3a7b4ea73af8a"
+  },
+  "triggers": [
+    {
+      "name": "shared-file-contention",
+      "input_value": 2.0,
+      "threshold": 2.0,
+      "fired": true,
+      "section_added": "Shared-file lockstep"
+    },
+    {
+      "name": "external-repo-phases",
+      "input_value": 5.0,
+      "threshold": 1.0,
+      "fired": true,
+      "section_added": "External repo coordination"
+    },
+    {
+      "name": "convergence-point",
+      "input_value": 3.0,
+      "threshold": 3.0,
+      "fired": true,
+      "section_added": "Merge-readiness checklist"
+    },
+    {
+      "name": "ownership-boundary-spread",
+      "input_value": 6.0,
+      "threshold": 2.0,
+      "fired": true,
+      "section_added": "PR sequencing & cross-owner coordination"
+    },
+    {
+      "name": "risk-concentration",
+      "input_value": 0.0,
+      "threshold": 2.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "risk-late-in-plan",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "infrastructure-spof",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "revendor-phase",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "long-serial-chain",
+      "input_value": 4.0,
+      "threshold": 4.0,
+      "fired": true,
+      "section_added": "Serial-chain recovery"
+    },
+    {
+      "name": "mid-plan-rerouting",
+      "input_value": 5.0,
+      "threshold": 10.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "trivial-phase-swamp",
+      "input_value": 0.25,
+      "threshold": 4.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "no-integrated-verification",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "routing-tier-inversion",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "mechanical-streak",
+      "input_value": 0.0,
+      "threshold": 3.0,
+      "fired": false,
+      "section_added": null
+    },
+    {
+      "name": "hidden-prerequisite",
+      "input_value": 0.0,
+      "threshold": 1.0,
+      "fired": false,
+      "section_added": null
+    }
+  ],
+  "phases": [
+    {
+      "ordinal": 1,
+      "slug": "mint-feasibility-spike",
+      "routing_tier": "high",
+      "files": [
+        "None durably. Throwaway: `crates/spike-steam-mint/` or an `examples/` PoC",
+        "This phase file's `## Findings`."
+      ]
+    },
+    {
+      "ordinal": 2,
+      "slug": "mint-engine",
+      "routing_tier": "high",
+      "files": [
+        "Cargo.toml` — the chosen mint crate (or none, if a packaged helper is spawned).",
+        "src/game/mod.rs` — module declaration.",
+        "src/game/steam.rs` — reuse `GuardProvider`/`GuardPromptContext`/`GuardCodeNeeded",
+        "src/game/steam_auth.rs` *(new)* — the engine."
+      ]
+    },
+    {
+      "ordinal": 3,
+      "slug": "artifact-writer",
+      "routing_tier": "high",
+      "files": [
+        "src/game/accounts.rs` — tests only (round-trip), no behavior change.",
+        "src/game/mod.rs` — module declaration.",
+        "src/game/steam_session.rs` *(new)* — the writer."
+      ]
+    },
+    {
+      "ordinal": 4,
+      "slug": "wire-login-engine",
+      "routing_tier": "high",
+      "files": [
+        "src/game/steam.rs` — `automated_login`, `login_single_vm_automated`,",
+        "src/lib.rs` — login dispatch unchanged in shape but confirm `login_state_dir"
+      ]
+    },
+    {
+      "ordinal": 5,
+      "slug": "retire-and-verify",
+      "routing_tier": "medium",
+      "files": [
+        "docs/src/configuration/steam-credentials.md`, `README.md`, `docs/src/SUMMARY.md`,",
+        "src/game/steam.rs` — delete dead login internals; keep shared helpers.",
+        "src/ui/cli.rs` — `SteamAction` help (+ remove `Guard` if retired); parse tests.",
+        "tests/cli_steam_standalone.rs` — adjust exact-stdout assertions."
+      ]
+    }
+  ],
+  "meta_heuristics_fired": [
+    "threshold-proximity"
+  ],
+  "tags": {
+    "flavor": "codex",
+    "risk": "mixed",
+    "scope": "cross-org"
+  },
+  "verify": null
+}
