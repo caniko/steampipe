@@ -30,6 +30,21 @@
         "type": "github"
       }
     },
+    "crane_3": {
+      "locked": {
+        "lastModified": 1772080396,
+        "narHash": "sha256-84W9UNtSk9DNMh43WBkOjpkbfODlmg+RDi854PnNgLE=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "8525580bc0316c39dbfa18bd09a1331e98c9e463",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -72,11 +87,11 @@
         "spectrum": "spectrum"
       },
       "locked": {
-        "lastModified": 1779641751,
-        "narHash": "sha256-xSEiY1kZoCHX7bzeDe6fzwnaG9Mjd/WrJ4MEWJghI/Q=",
+        "lastModified": 1781738058,
+        "narHash": "sha256-wgKY6pbZbFpBXae+8bjvJtW1Z9qekZergGly44n2qZw=",
         "owner": "astro",
         "repo": "microvm.nix",
-        "rev": "4fe5ab55ef830e4b2d82d37ef7a5aca6e7b0e5f8",
+        "rev": "225b35c204e29efb5bbe9b55b1a38b07b3fca2af",
         "type": "github"
       },
       "original": {
@@ -126,11 +141,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1777536753,
-        "narHash": "sha256-0lLJir4zYlQ+00hMGhhSs8VbBV8oHtHOZd2OIwv7NEA=",
+        "lastModified": 1780425807,
+        "narHash": "sha256-vPrpqec/uHpOu0u4P+XdL70MWaHyn4zh8IfpCmp1yIs=",
         "owner": "caniko",
         "repo": "osxcross",
-        "rev": "25e6c510f1530d2b430da35ea6d4fda460cb5569",
+        "rev": "246fc035534167fadba187a602bc4a40990974dc",
         "type": "github"
       },
       "original": {
@@ -157,6 +172,34 @@
         "ref": "refs/heads/trunk",
         "rev": "bfa970d7f38f51515e01092cd7f9fde81eef26ae",
         "revCount": 67,
+        "type": "git",
+        "url": "https://codeberg.org/caniko/plinth.git"
+      },
+      "original": {
+        "ref": "refs/heads/trunk",
+        "type": "git",
+        "url": "https://codeberg.org/caniko/plinth.git"
+      }
+    },
+    "plinth_2": {
+      "inputs": {
+        "crane": "crane_3",
+        "flake-utils": [
+          "rs-harbor",
+          "flake-utils"
+        ],
+        "nixpkgs": [
+          "rs-harbor",
+          "nixpkgs"
+        ],
+        "rust-overlay": "rust-overlay_2"
+      },
+      "locked": {
+        "lastModified": 1780921919,
+        "narHash": "sha256-qWNGqKWmGecXS7PaDHS3TS++XX3IdWnf4HRscDYfD0E=",
+        "ref": "refs/heads/trunk",
+        "rev": "8c4855f9ee40543277b15d1dbf0298f0a90c34d7",
+        "revCount": 43,
         "type": "git",
         "url": "https://codeberg.org/caniko/plinth.git"
       },
@@ -195,14 +238,15 @@
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs_2",
         "osxcross": "osxcross",
-        "rust-overlay": "rust-overlay_2"
+        "plinth": "plinth_2",
+        "rust-overlay": "rust-overlay_3"
       },
       "locked": {
-        "lastModified": 1779859344,
-        "narHash": "sha256-YO5U3IjPq5VbwquFfVcL7k99BOQb3P9dlDcW+dqpF7M=",
+        "lastModified": 1781383741,
+        "narHash": "sha256-KP//FURKbm/MAcvYFQqCX+pRVsOtM/mYVbKLquCwER4=",
         "ref": "refs/heads/main",
-        "rev": "de14c55f5b7fc3cb3d30f9acc3c530d9482a552c",
-        "revCount": 48,
+        "rev": "a3f16444ca98f10c5af8d7afa4ef5c5a0851a0dd",
+        "revCount": 58,
         "type": "git",
         "url": "https://codeberg.org/caniko/rs-harbor.git"
       },
@@ -233,6 +277,28 @@
       }
     },
     "rust-overlay_2": {
+      "inputs": {
+        "nixpkgs": [
+          "rs-harbor",
+          "plinth",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1772247314,
+        "narHash": "sha256-x6IFQ9bL7YYfW2m2z8D3Em2YtAA3HE8kiCFwai2fwrw=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "a1ab5e89ab12e1a37c0b264af6386a7472d68a15",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_3": {
       "inputs": {
         "nixpkgs": [
           "rs-harbor",

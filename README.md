@@ -1,5 +1,9 @@
 # cluster-ctl
 
+<!-- simit:badges:start -->
+![CI](https://img.shields.io/badge/CI-drift-2088ff) [![Nix](https://img.shields.io/badge/Nix-managed-5277c3)](flake.nix) [![docs](https://img.shields.io/badge/docs-enabled-6f42c1)](docs)
+<!-- simit:badges:end -->
+
 A NixOS microVM cluster orchestrator for automated multiplayer game testing.
 
 Originally developed as internal tooling for
