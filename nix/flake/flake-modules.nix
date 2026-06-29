@@ -23,6 +23,8 @@
       vm-graphics = import ../vm-graphics.nix;
       # Host-level timer for refreshing Steam sessions.
       warmTimer = import ../modules/warm-timer.nix;
+      # Host-level game user (Steam + GameMode + Wine).
+      gameUser = import ../modules/game-user.nix;
       # Host-level preset: headless runtime runners plus weekly Steam refresh.
       steamSessionRefresh = import ../modules/steam-session-refresh.nix;
     };
