@@ -6,3 +6,4 @@ step_runners = { cargo-clippy = "codeberg-small", cargo-doc = "codeberg-small", 
 
 [ci.pages]
 repo = "caniko/steampipe"
+canonical_domain = "cluster-ctl.tartanoglu.com"
