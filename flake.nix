@@ -13,12 +13,11 @@
       follows = "rs-harbor/rust-overlay";
     };
     crane.follows = "rs-harbor/crane";
-    flake-utils.follows = "rs-harbor/flake-utils";
+    flake-utils.url = "github:numtide/flake-utils";
     microvm.url = "github:astro/microvm.nix";
     plinth = {
       url = "git+https://codeberg.org/caniko/plinth.git?ref=refs/heads/trunk";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.flake-utils.follows = "flake-utils";
     };
   };
 
