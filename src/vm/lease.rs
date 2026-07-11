@@ -102,11 +102,22 @@ pub fn probe_holder(vm_id: u8, lock_dir: &Path) -> Option<LeaseInfo> {
     let mut file = OpenOptions::new().read(true).open(&path).ok()?;
 
     let mut contents = String::new();
-    file.read_to_string(&mut contents).ok()?;
+    if file.read_to_string(&mut contents).is_err() {
+        let _ = fs::remove_file(&path);
+        return None;
+    }
 
-    let v: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    let pid = v.get("pid")?.as_u64()? as u32;
-    let cluster = v.get("cluster")?.as_str()?.to_string();
+    let Some((pid, cluster)) = serde_json::from_str::<serde_json::Value>(&contents)
+        .ok()
+        .and_then(|v| {
+            let pid = v.get("pid")?.as_u64()? as u32;
+            let cluster = v.get("cluster")?.as_str()?.to_string();
+            Some((pid, cluster))
+        })
+    else {
+        let _ = fs::remove_file(&path);
+        return None;
+    };
 
     if !state::is_pid_alive(pid) {
         // Stale claim — reclaim by removing it
@@ -320,6 +331,10 @@ mod tests {
         let dir = unique_lock_dir("corrupt");
         fs::write(claim_path(1, &dir), "not json at all").unwrap();
         assert!(probe_holder(1, &dir).is_none());
+        assert!(
+            !claim_path(1, &dir).exists(),
+            "corrupt claim file should be removed"
+        );
     }
 
     #[test]

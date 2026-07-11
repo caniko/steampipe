@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Ensure the state directory exists.
 pub fn ensure_state_dir(state_dir: &Path) -> anyhow::Result<()> {
@@ -28,6 +28,36 @@ pub fn remove_pid(state_dir: &Path, vm_name: &str) {
 /// Check if a process is alive by reading /proc/<pid>/status.
 pub fn is_pid_alive(pid: u32) -> bool {
     Path::new(&format!("/proc/{pid}")).exists()
+}
+
+/// Read a process command line from procfs.
+pub fn process_cmdline(pid: u32) -> Option<Vec<String>> {
+    let bytes = std::fs::read(format!("/proc/{pid}/cmdline")).ok()?;
+    if bytes.is_empty() {
+        return None;
+    }
+    let args = bytes
+        .split(|byte| *byte == 0)
+        .filter(|arg| !arg.is_empty())
+        .filter_map(|arg| String::from_utf8(arg.to_vec()).ok())
+        .collect::<Vec<_>>();
+    (!args.is_empty()).then_some(args)
+}
+
+/// Read a process current working directory from procfs.
+pub fn process_cwd(pid: u32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+/// Read a process group id from procfs.
+pub fn process_group_id(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let fields = stat
+        .rsplit_once(") ")?
+        .1
+        .split_whitespace()
+        .collect::<Vec<_>>();
+    fields.get(2)?.parse().ok()
 }
 
 /// Check if a filename looks like a leftover socket file.

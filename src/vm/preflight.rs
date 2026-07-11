@@ -41,6 +41,7 @@ pub fn cleanup_stale_state<S>(config: &ClusterConfig<S>) -> Option<String> {
 
     for id in 1..=config.max_vms {
         let vm_name = format!("vm-{id}");
+        let vm_dir = config.state_dir.join(&vm_name);
 
         if let Some(pid) = state::read_pid(&config.state_dir, &vm_name)
             && !state::is_pid_alive(pid)
@@ -49,23 +50,41 @@ pub fn cleanup_stale_state<S>(config: &ClusterConfig<S>) -> Option<String> {
             cleaned.push(format!("{vm_name}: removed stale PID {pid}"));
         }
 
-        let pattern = format!("microvm@{vm_name}");
-        if let Ok(out) = std::process::Command::new("pgrep")
-            .args(["-f", &pattern])
-            .output()
-            && out.status.success()
+        if matches!(config.backend_kind, BackendKind::Microvm)
+            && let Some(info) = lease::probe_holder(id, &config.lock_dir)
+            && !valid_microvm_claim(info.pid, &vm_name, &vm_dir)
         {
-            let has_claim = lease::probe_holder(id, &config.lock_dir).is_some();
-            if !has_claim {
-                let pids = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                let _ = std::process::Command::new("pkill")
-                    .args(["-f", &pattern])
-                    .status();
-                cleaned.push(format!("{vm_name}: killed orphan PIDs {pids}"));
-            }
+            lease::remove_claim(id, &config.lock_dir);
+            cleaned.push(format!(
+                "{vm_name}: removed invalid claim for pid {}",
+                info.pid
+            ));
         }
 
-        let vm_dir = config.state_dir.join(&vm_name);
+        let has_claim = lease::probe_holder(id, &config.lock_dir).is_some();
+        let orphan_pids = if matches!(config.backend_kind, BackendKind::Microvm) {
+            microvm_pids(&vm_name)
+        } else {
+            Vec::new()
+        };
+        if !has_claim && !orphan_pids.is_empty() {
+            let process_groups = orphan_pids
+                .iter()
+                .filter_map(|pid| state::process_group_id(*pid))
+                .collect::<std::collections::BTreeSet<_>>();
+            for pgid in process_groups {
+                terminate_process_group(pgid);
+            }
+            cleaned.push(format!(
+                "{vm_name}: killed orphan PIDs {}",
+                orphan_pids
+                    .iter()
+                    .map(u32::to_string)
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+        }
+
         if vm_dir.exists()
             && let Ok(entries) = std::fs::read_dir(&vm_dir)
         {
@@ -86,6 +105,59 @@ pub fn cleanup_stale_state<S>(config: &ClusterConfig<S>) -> Option<String> {
     } else {
         Some(format!("Pre-flight cleanup:\n  {}", cleaned.join("\n  ")))
     }
+}
+
+fn valid_microvm_claim(pid: u32, vm_name: &str, vm_dir: &Path) -> bool {
+    if !state::is_pid_alive(pid) {
+        return false;
+    }
+
+    let expected_name = format!("microvm@{vm_name}");
+    let Some(cmdline) = state::process_cmdline(pid) else {
+        return false;
+    };
+    if cmdline.first().is_none_or(|arg| arg != &expected_name) {
+        return false;
+    }
+
+    match state::process_cwd(pid) {
+        Some(cwd) => paths_match(&cwd, vm_dir),
+        None => true,
+    }
+}
+
+fn paths_match(left: &Path, right: &Path) -> bool {
+    let left = left.canonicalize().unwrap_or_else(|_| left.to_path_buf());
+    let right = right.canonicalize().unwrap_or_else(|_| right.to_path_buf());
+    left == right
+}
+
+fn microvm_pids(vm_name: &str) -> Vec<u32> {
+    let expected_name = format!("microvm@{vm_name}");
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_string_lossy().parse::<u32>().ok())
+        .filter(|pid| {
+            state::process_cmdline(*pid)
+                .and_then(|cmdline| cmdline.into_iter().next())
+                .is_some_and(|arg| arg == expected_name)
+        })
+        .collect()
+}
+
+fn terminate_process_group(pid: u32) {
+    let pid = pid.to_string();
+    let _ = std::process::Command::new("kill")
+        .args(["-TERM", &format!("-{pid}")])
+        .status();
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let _ = std::process::Command::new("kill")
+        .args(["-KILL", &format!("-{pid}")])
+        .status();
 }
 
 /// Verify that at least one VM can TCP-connect back to the host.
@@ -1073,6 +1145,108 @@ pub async fn doctor<S>(config: &ClusterConfig<S>, fix: bool) -> anyhow::Result<(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+    use crate::core::config::{ClusterConfig, Unchecked};
+    use std::sync::{Mutex, OnceLock};
+
+    fn process_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn test_config(tmp: &tempfile::TempDir) -> ClusterConfig<Unchecked> {
+        let mut config = ClusterConfig::for_test(1);
+        config.backend_kind = BackendKind::Microvm;
+        config.state_dir = tmp.path().join("state");
+        config.lock_dir = tmp.path().join("locks");
+        config.max_vms = 1;
+        std::fs::create_dir_all(config.state_dir.join("vm-1")).unwrap();
+        std::fs::create_dir_all(&config.lock_dir).unwrap();
+        config
+    }
+
+    #[cfg(unix)]
+    fn spawn_named_microvm(vm_dir: &Path, vm_name: &str) -> std::process::Child {
+        use std::os::unix::process::CommandExt as _;
+
+        let child = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(format!(
+                "exec -a microvm@{vm_name} bash -c 'while true; do sleep 60; done'"
+            ))
+            .current_dir(vm_dir)
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let expected_name = format!("microvm@{vm_name}");
+        for _ in 0..50 {
+            if state::process_cmdline(child.id())
+                .and_then(|cmdline| cmdline.into_iter().next())
+                .is_some_and(|arg| arg == expected_name)
+            {
+                return child;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        child
+    }
+
+    #[test]
+    fn cleanup_removes_claim_for_live_unrelated_pid_without_killing_it() {
+        let _guard = process_test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(&tmp);
+        let pid = std::process::id();
+        lease::write_claim(1, &config.lock_dir, "other", pid).unwrap();
+
+        let cleaned = cleanup_stale_state(&config).expect("cleanup summary");
+
+        assert!(cleaned.contains("vm-1: removed invalid claim"));
+        assert!(lease::probe_holder(1, &config.lock_dir).is_none());
+        assert!(state::is_pid_alive(pid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_preserves_valid_microvm_claim() {
+        let _guard = process_test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(&tmp);
+        let vm_dir = config.state_dir.join("vm-1");
+        let mut child = spawn_named_microvm(&vm_dir, "vm-1");
+        lease::write_claim(1, &config.lock_dir, "other", child.id()).unwrap();
+
+        let cleaned = cleanup_stale_state(&config);
+
+        assert!(cleaned.is_none(), "{cleaned:?}");
+        assert!(lease::probe_holder(1, &config.lock_dir).is_some());
+        assert!(child.try_wait().unwrap().is_none());
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &format!("-{}", child.id())])
+            .status();
+        let _ = child.wait();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_kills_unclaimed_microvm_process() {
+        let _guard = process_test_lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let config = test_config(&tmp);
+        let vm_dir = config.state_dir.join("vm-1");
+        let mut child = spawn_named_microvm(&vm_dir, "vm-1");
+
+        let cleaned = cleanup_stale_state(&config).expect("cleanup summary");
+
+        assert!(cleaned.contains("vm-1: killed orphan PIDs"), "{cleaned}");
+        assert!(child.try_wait().unwrap().is_some());
+    }
 }
 
 #[cfg(test)]

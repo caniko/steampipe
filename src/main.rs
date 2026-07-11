@@ -537,9 +537,15 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let vm_count = cli
-        .vm_count
-        .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?;
+    let vm_count = if cli.command.needs_vm_count() {
+        cli.vm_count
+            .ok_or_else(|| anyhow::anyhow!("--vm-count is required (e.g. --vm-count 7)"))?
+    } else {
+        // The operational VM set for these commands is derived from the
+        // cluster's lease state (see the with_vm_ids rewrite below), so the
+        // synthetic placeholder is immediately overwritten.
+        cli.vm_count.unwrap_or(1)
+    };
     let mut config =
         ClusterConfig::from_vm_count(&project_root, vm_count, cli.cluster.as_deref(), cli.backend)?;
     if let Some(key) = &cli.ssh_key {
@@ -559,6 +565,10 @@ async fn main() -> anyhow::Result<()> {
         .transpose()?;
 
     state::ensure_state_dir(&config.state_dir)?;
+
+    if let Some(cleanup_msg) = preflight::cleanup_stale_state(&config) {
+        println!("{cleanup_msg}");
+    }
 
     let claimed_vm_ids =
         crate::vm::lease::list_cluster_vms(&config.cluster_name, config.max_vms, &config.lock_dir);

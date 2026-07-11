@@ -574,6 +574,18 @@ pub enum Commands {
     },
 }
 
+impl Commands {
+    /// Whether this command requires the global `--vm-count` flag.
+    ///
+    /// `steam-guard` targets exactly one VM by name; `netem` either targets
+    /// one named VM or fans out across the already-leased set. Both derive
+    /// their operational VM set from the cluster's lease state, so the user
+    /// shouldn't have to repeat the pool size on the command line.
+    pub fn needs_vm_count(&self) -> bool {
+        !matches!(self, Self::SteamGuard { .. } | Self::Netem { .. })
+    }
+}
+
 /// Fixture-only maintenance command groups.
 #[cfg(feature = "fixture-tools")]
 #[derive(Subcommand)]
@@ -805,7 +817,9 @@ mod tests {
 
     #[test]
     fn steam_guard_accepts_target_and_code() {
-        let cli = parse(&["--vm-count", "7", "steam-guard", "vm-1", "--code", "ABCDE"]);
+        let cli = parse(&["steam-guard", "vm-1", "--code", "ABCDE"]);
+        assert!(cli.vm_count.is_none());
+        assert!(!cli.command.needs_vm_count());
         match cli.command {
             Commands::SteamGuard { target, code } => {
                 assert_eq!(target, "vm-1");
@@ -818,8 +832,6 @@ mod tests {
     #[test]
     fn steam_guard_accepts_global_credentials_after_subcommand() {
         let cli = parse(&[
-            "--vm-count",
-            "7",
             "steam-guard",
             "vm-1",
             "--credentials",
@@ -1657,7 +1669,9 @@ mod tests {
 
     #[test]
     fn netem_with_profile() {
-        let cli = parse(&["--vm-count", "7", "netem", "all", "--profile", "wifi"]);
+        let cli = parse(&["netem", "all", "--profile", "wifi"]);
+        assert!(cli.vm_count.is_none());
+        assert!(!cli.command.needs_vm_count());
         match cli.command {
             Commands::Netem {
                 target,
@@ -1827,8 +1841,6 @@ mod tests {
     fn netem_profile_conflicts_with_params() {
         let args = vec![
             "cluster-ctl",
-            "--vm-count",
-            "7",
             "netem",
             "all",
             "--profile",
@@ -1838,6 +1850,28 @@ mod tests {
         ];
         let result = Cli::try_parse_from(args);
         assert!(result.is_err(), "profile should conflict with latency");
+    }
+
+    #[test]
+    fn needs_vm_count_waives_only_steam_guard_and_netem() {
+        assert!(!parse(&["steam-guard", "vm-1", "--code", "X"])
+            .command
+            .needs_vm_count());
+        assert!(!parse(&["netem", "vm-1", "--latency", "50"])
+            .command
+            .needs_vm_count());
+        assert!(!parse(&["netem", "all", "--loss", "1"])
+            .command
+            .needs_vm_count());
+        assert!(parse(&["--vm-count", "7", "status"])
+            .command
+            .needs_vm_count());
+        assert!(parse(&["--vm-count", "7", "up"])
+            .command
+            .needs_vm_count());
+        assert!(parse(&["--vm-count", "7", "down"])
+            .command
+            .needs_vm_count());
     }
 
     // ── Original tests ──────────────────────────────────────────────────
