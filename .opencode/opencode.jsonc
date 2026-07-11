@@ -1,0 +1,1 @@
+{"$schema":"https://opencode.ai/config.json","lsp":{"nixd":{"command":["nixd"]},"rust":{"command":["rust-analyzer"]},"taplo":{"command":["taplo","lsp","stdio"],"extensions":[".toml"]}}}
