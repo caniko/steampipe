@@ -3,6 +3,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    rs-harbor = {
+      url = "git+https://codeberg.org/caniko/rs-harbor.git?ref=trunk&rev=9bfa8bdb0ecb22d7bc11448665f7fbaebae7a759";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     steampipe.url = "path:../..";
     steampipe.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -10,6 +14,7 @@
   outputs = {
     self,
     nixpkgs,
+    rs-harbor,
     steampipe,
     ...
   }: let
@@ -19,12 +24,16 @@
       overlays = [steampipe.overlays.default];
     };
     lib = pkgs.lib;
+    buildCache = rs-harbor.lib.mkBuildCachePolicy {
+      inherit pkgs;
+      namespaceScope = "steampipe-fixture";
+    };
     clusterCtl = steampipe.packages.${system}.default;
     projectConfig = builtins.fromTOML (builtins.readFile ./steampipe.toml);
     workloads = {
       footBanner = import ./workloads/foot-banner.nix {inherit pkgs lib;};
       vkcubeFrozen = import ./workloads/vkcube-frozen.nix {inherit pkgs;};
-      wgpuChecker = import ./workloads/wgpu-checker.nix {inherit pkgs lib;};
+      wgpuChecker = import ./workloads/wgpu-checker.nix {inherit pkgs lib buildCache;};
     };
     cluster = steampipe.lib.mkTestCluster {
       inherit pkgs lib nixpkgs clusterCtl steampipe projectConfig;

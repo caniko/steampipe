@@ -1,5 +1,6 @@
-{pkgs, lib}:
-pkgs.rustPlatform.buildRustPackage {
+{pkgs, lib, buildCache}:
+buildCache.withRustCache {
+  package = pkgs.rustPlatform.buildRustPackage {
   pname = "wgpu-checker";
   version = "0.1.0";
   src = lib.cleanSource ./wgpu-checker;
@@ -16,4 +17,5 @@ pkgs.rustPlatform.buildRustPackage {
     wrapProgram "$out/bin/wgpu-checker" \
       --prefix LD_LIBRARY_PATH : /run/opengl-driver/lib
   '';
+  };
 }

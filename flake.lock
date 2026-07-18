@@ -337,6 +337,7 @@
       },
       "original": {
         "ref": "trunk",
+        "rev": "9bfa8bdb0ecb22d7bc11448665f7fbaebae7a759",
         "type": "git",
         "url": "https://codeberg.org/caniko/rs-harbor.git"
       }
