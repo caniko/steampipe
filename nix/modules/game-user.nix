@@ -35,6 +35,17 @@ in {
       description = "Linux username for the game account.";
     };
 
+    password = mkOption {
+      type = types.nullOr types.str;
+      default = "123456";
+      description = ''
+        Default login password for the game account. Set to null to leave the
+        account without a password. This is intended for public or disposable
+        game accounts; consumers should override it when they need a stronger
+        password.
+      '';
+    };
+
     uid = mkOption {
       type = types.int;
       default = 1002;
@@ -93,6 +104,7 @@ in {
         uid = cfg.uid;
         extraGroups = cfg.extraGroups;
         shell = cfg.shell;
+        initialPassword = cfg.password;
       };
     }
 
