@@ -17,7 +17,7 @@
   lib,
   nixpkgs,
   steampipe,
-  clusterCtl ? steampipe.packages.${pkgs.system}.default,
+  clusterCtl ? steampipe.packages.${pkgs.stdenv.hostPlatform.system}.default,
   projectRoot,
   projectConfig ? builtins.fromTOML (builtins.readFile (projectRoot + "/steampipe.toml")),
   extraVmOverlays ? [],

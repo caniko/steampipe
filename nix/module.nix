@@ -356,8 +356,8 @@ in {
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = steampipe.packages.${pkgs.system}.default;
-      defaultText = lib.literalExpression "steampipe.packages.\${pkgs.system}.default";
+      default = steampipe.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      defaultText = lib.literalExpression "steampipe.packages.\${pkgs.stdenv.hostPlatform.system}.default";
       description = ''
         The `cluster-ctl` derivation to install on the host. Override
         to pin a fork, a debug build, or a locally patched version.

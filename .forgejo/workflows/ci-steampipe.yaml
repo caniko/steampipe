@@ -62,7 +62,7 @@ jobs:
         run: nix develop -c cargo test -p steampipe
 
       - name: Package crate
-        run: nix develop -c cargo package -p steampipe
+        run: nix develop -c cargo package -p steampipe --allow-dirty --list
   codeberg-small:
     needs: [atlas-nix-trusted]
     runs-on: codeberg-small
