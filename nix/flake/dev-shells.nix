@@ -39,6 +39,12 @@ in
         pkgs.mdbook
         pkgs.pkg-config
         pkgs.wayland-protocols
+        # Tools used by the desktop visual-rubric producer. The Steam Guard
+        # prompt is an actual Iced/X11 window, so captures need a deterministic
+        # virtual display and window-level screenshot rather than a browser.
+        pkgs.xorg.xorgserver
+        pkgs.xdotool
+        pkgs.imagemagick
         packages.default
         (pkgs.python3.withPackages (ps: [ps.pillow]))
       ]
