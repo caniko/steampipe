@@ -50,7 +50,7 @@ tokio = { version = "1", features = [
 toml = "1"
 rmcp = { version = "0.17", features = ["server", "transport-io"] }
 schemars = "1"
-steam-vent = { git = "https://codeberg.org/caniko/steam-vent.git", branch = "integration" }
+steam-vent = { git = "https://codefloe.com/caniko/steam-vent.git", branch = "integration" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
 vnc = "0.4"

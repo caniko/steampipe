@@ -4853,7 +4853,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 [[package]]
 name = "steam-vent"
 version = "0.5.0"
-source = "git+https://codeberg.org/caniko/steam-vent.git?branch=integration#eeb45aed9dd46b1e265b67fcc2416dcdb8431467"
+source = "git+https://codefloe.com/caniko/steam-vent.git?branch=integration#eeb45aed9dd46b1e265b67fcc2416dcdb8431467"
 dependencies = [
  "another-steam-totp",
  "async-stream",
@@ -4893,7 +4893,7 @@ dependencies = [
 [[package]]
 name = "steam-vent-crypto"
 version = "0.2.1"
-source = "git+https://codeberg.org/caniko/steam-vent.git?branch=integration#eeb45aed9dd46b1e265b67fcc2416dcdb8431467"
+source = "git+https://codefloe.com/caniko/steam-vent.git?branch=integration#eeb45aed9dd46b1e265b67fcc2416dcdb8431467"
 dependencies = [
  "aes",
  "bytes",
