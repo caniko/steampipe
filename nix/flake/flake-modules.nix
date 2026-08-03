@@ -21,12 +21,8 @@
       cluster-vm-base = import ../cluster-vm-base.nix;
       # VM-side graphics setup (mesa, virtio-gpu kernel modules, overlay)
       vm-graphics = import ../vm-graphics.nix;
-      # Host-level timer for refreshing Steam sessions.
-      warmTimer = import ../modules/warm-timer.nix;
       # Host-level game user (Steam + GameMode + Wine).
       gameUser = import ../modules/game-user.nix;
-      # Host-level preset: headless runtime runners plus weekly Steam refresh.
-      steamSessionRefresh = import ../modules/steam-session-refresh.nix;
     };
 
   lib = {

@@ -75,29 +75,6 @@
     warmTimerDisabledModule
   ];
 
-  hostWarmTimerEval = mkSystem [
-    steampipeModule
-    ../modules/warm-timer.nix
-    clusterUserModule
-    baseClusterConfig
-    {
-      services.steampipe-warm-timer.enable = true;
-    }
-  ];
-
-  steamSessionRefreshEval = mkSystem [
-    steampipeModule
-    ../modules/steam-session-refresh.nix
-    clusterUserModule
-    baseClusterConfig
-    {
-      services.steampipe-cluster.loginRunners = {
-        enable = true;
-        sshAuthorizedKey = fakeSshAuthorizedKey;
-      };
-    }
-  ];
-
   moduleLoginRunnersEnabledEval = mkSystem [
     steampipeModule
     clusterUserModule
@@ -247,90 +224,6 @@ in
         test "$timerOnCalendar" = weekly
         test "$timerPersistent" = true
         test "$timerRandomizedDelaySec" = 1h
-        touch "$out"
-      '';
-
-    host-warm-timer-eval =
-      pkgs.runCommand "host-warm-timer-eval" {
-        timerOnCalendar = hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.OnCalendar;
-        timerPersistent =
-          if hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.Persistent
-          then "true"
-          else "false";
-        timerRandomizedDelaySec = hostWarmTimerEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
-        serviceUser = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.User;
-        serviceRuntimeDirectory = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectory;
-        serviceRuntimeDirectoryMode = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.RuntimeDirectoryMode;
-        serviceUMask = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.UMask;
-        serviceEnv = builtins.concatStringsSep " " hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.Environment;
-        warmCommand = hostWarmTimerEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
-      } ''
-        test "$timerOnCalendar" = weekly
-        test "$timerPersistent" = true
-        test "$timerRandomizedDelaySec" = 1h
-        test "$serviceUser" = cluster
-        test "$serviceRuntimeDirectory" = steampipe-steam-warm
-        test "$serviceRuntimeDirectoryMode" = 0700
-        test "$serviceUMask" = 0077
-        case "$serviceEnv" in
-          *"HOME=/home/cluster"*"XDG_RUNTIME_DIR=/run/steampipe-steam-warm"*) ;;
-          *) echo "unexpected host warm timer env: $serviceEnv" >&2; exit 1 ;;
-        esac
-        warmCommandText="$(cat "$warmCommand")"
-        case "$warmCommandText" in
-          *"--runners-dir"*) echo "host warm timer should rely on module.json, not --runners-dir" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"--ssh-key"*) echo "host warm timer should not use SSH" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"--vm-count"*) echo "host warm timer should not pass vm-count" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"steam warm"*) echo "host warm timer should not use steam warm" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"cluster-ctl"*"--non-interactive"*"--no-gui"*"steam refresh"*) ;;
-          *) echo "unexpected warm command: $warmCommandText" >&2; exit 1 ;;
-        esac
-        touch "$out"
-      '';
-
-    steam-session-refresh-eval =
-      pkgs.runCommand "steam-session-refresh-eval" {
-        runnersEnabled =
-          if steamSessionRefreshEval.config.services.steampipe-cluster.runners.enable
-          then "true"
-          else "false";
-        warmTimerEnabled =
-          if steamSessionRefreshEval.config.services.steampipe-warm-timer.enable
-          then "true"
-          else "false";
-        timerOnCalendar = steamSessionRefreshEval.config.systemd.timers.steampipe-steam-warm.timerConfig.OnCalendar;
-        timerRandomizedDelaySec = steamSessionRefreshEval.config.systemd.timers.steampipe-steam-warm.timerConfig.RandomizedDelaySec;
-        warmCommand = steamSessionRefreshEval.config.systemd.services.steampipe-steam-warm.serviceConfig.ExecStart;
-      } ''
-        test "$runnersEnabled" = false
-        test "$warmTimerEnabled" = true
-        test "$timerOnCalendar" = weekly
-        test "$timerRandomizedDelaySec" = 1h
-        warmCommandText="$(cat "$warmCommand")"
-        case "$warmCommandText" in
-          *"--runners-dir"*) echo "steam session refresh should rely on module.json, not --runners-dir" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"--ssh-key"*) echo "steam session refresh should not use SSH" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"--vm-count"*) echo "steam session refresh should not pass vm-count" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"steam warm"*) echo "steam session refresh should not use steam warm" >&2; exit 1 ;;
-        esac
-        case "$warmCommandText" in
-          *"cluster-ctl"*"--non-interactive"*"--no-gui"*"steam refresh"*) ;;
-          *) echo "unexpected warm command: $warmCommandText" >&2; exit 1 ;;
-        esac
         touch "$out"
       '';
 
