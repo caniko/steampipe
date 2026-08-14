@@ -17,6 +17,36 @@
     },
     "crane_2": {
       "locked": {
+        "lastModified": 1783203018,
+        "narHash": "sha256-G6R9IT/xwFuu+CYBWDUAok6AdC4ERC4ZfPPFtEpxnZE=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "80db5bdc391be8a1794f6d8a2d56e3a84ebcede2",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "crane_3": {
+      "locked": {
+        "lastModified": 1773857772,
+        "narHash": "sha256-5xsK26KRHf0WytBtsBnQYC/lTWDhQuT57HJ7SzuqZcM=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "b556d7bbae5ff86e378451511873dfd07e4504cd",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "crane_4": {
+      "locked": {
         "lastModified": 1772080396,
         "narHash": "sha256-84W9UNtSk9DNMh43WBkOjpkbfODlmg+RDi854PnNgLE=",
         "owner": "ipetkov",
@@ -30,7 +60,22 @@
         "type": "github"
       }
     },
-    "crane_3": {
+    "crane_5": {
+      "locked": {
+        "lastModified": 1781825982,
+        "narHash": "sha256-SlXKwIRIhrOSAcTjCB3ftPLzJWZStQIPS7J1FlZPnKk=",
+        "owner": "ipetkov",
+        "repo": "crane",
+        "rev": "469fd08d0bcf6926321fa973c6777fbc87785dd7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "ipetkov",
+        "repo": "crane",
+        "type": "github"
+      }
+    },
+    "crane_6": {
       "locked": {
         "lastModified": 1784248371,
         "narHash": "sha256-0l0Y4D4wbZhp1Oi6h8OpbLtIm/4FN88oCf54MK2ZgiM=",
@@ -86,6 +131,42 @@
         "nixpkgs-lib": "nixpkgs-lib_3"
       },
       "locked": {
+        "lastModified": 1785627969,
+        "narHash": "sha256-4dtXQk/NMePegK/nWp5NSeuZKLATItOq61lpEvmXqGw=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "427bf4bd9435fdf21321c8cc628c24efc14c0f7a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_4": {
+      "inputs": {
+        "nixpkgs-lib": "nixpkgs-lib_4"
+      },
+      "locked": {
+        "lastModified": 1772408722,
+        "narHash": "sha256-rHuJtdcOjK7rAHpHphUb1iCvgkU3GpfvicLMwwnfMT0=",
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "rev": "f20dc5d9b8027381c474144ecabc9034d6a839a3",
+        "type": "github"
+      },
+      "original": {
+        "owner": "hercules-ci",
+        "repo": "flake-parts",
+        "type": "github"
+      }
+    },
+    "flake-parts_5": {
+      "inputs": {
+        "nixpkgs-lib": "nixpkgs-lib_5"
+      },
+      "locked": {
         "lastModified": 1782949081,
         "narHash": "sha256-vp6Y/Grm98ESt6ceOkWiHWyZRDV3J1RID4w+6NWK9yA=",
         "owner": "hercules-ci",
@@ -99,9 +180,9 @@
         "type": "github"
       }
     },
-    "flake-parts_4": {
+    "flake-parts_6": {
       "inputs": {
-        "nixpkgs-lib": "nixpkgs-lib_4"
+        "nixpkgs-lib": "nixpkgs-lib_6"
       },
       "locked": {
         "lastModified": 1782949081,
@@ -240,17 +321,17 @@
         "rev": "f3384cf15bc50fdb01c4fce1552e8c9fbad1199d",
         "revCount": 4,
         "type": "git",
-        "url": "https://codefloe.com/caniko/meta-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/meta-harbor.git"
       },
       "original": {
         "ref": "trunk",
         "type": "git",
-        "url": "https://codefloe.com/caniko/meta-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/meta-harbor.git"
       }
     },
     "meta-harbor_2": {
       "inputs": {
-        "flake-parts": "flake-parts_4",
+        "flake-parts": "flake-parts_6",
         "nixpkgs": [
           "steampipe",
           "rs-harbor",
@@ -264,12 +345,12 @@
         "rev": "f3384cf15bc50fdb01c4fce1552e8c9fbad1199d",
         "revCount": 4,
         "type": "git",
-        "url": "https://codefloe.com/caniko/meta-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/meta-harbor.git"
       },
       "original": {
         "ref": "trunk",
         "type": "git",
-        "url": "https://codefloe.com/caniko/meta-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/meta-harbor.git"
       }
     },
     "microvm": {
@@ -336,6 +417,32 @@
         "type": "github"
       }
     },
+    "nix-cache-pin": {
+      "inputs": {
+        "crane": "crane_3",
+        "flake-parts": "flake-parts_4",
+        "nixpkgs": "nixpkgs_3",
+        "plinth": "plinth_2",
+        "rs-harbor": [
+          "steampipe",
+          "rs-harbor"
+        ]
+      },
+      "locked": {
+        "lastModified": 1785942123,
+        "narHash": "sha256-vQrXcZM9iyb3f24jDjRN/HMduKnv7UCM2BeMYiSAMlk=",
+        "ref": "trunk",
+        "rev": "ddf90037b3dc0648365298836b9163af35e4f0ea",
+        "revCount": 68,
+        "type": "git",
+        "url": "https://codeberg.org/caniko/nix-cache-pin.git"
+      },
+      "original": {
+        "ref": "trunk",
+        "type": "git",
+        "url": "https://codeberg.org/caniko/nix-cache-pin.git"
+      }
+    },
     "nix-opencode-lsp": {
       "inputs": {
         "flake-utils": "flake-utils",
@@ -347,15 +454,14 @@
       "locked": {
         "lastModified": 1785298780,
         "narHash": "sha256-hq+/QcdG+pOKugcglqt92n3AwDbZnJB/Z+FCgmM3nwg=",
-        "ref": "refs/heads/trunk",
         "rev": "38e7ce16c754947a257a00a77682adfe696b6718",
-        "revCount": 7,
         "type": "git",
-        "url": "https://codefloe.com/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
       },
       "original": {
+        "ref": "trunk",
         "type": "git",
-        "url": "https://codefloe.com/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
       }
     },
     "nix-opencode-lsp_2": {
@@ -370,15 +476,44 @@
       "locked": {
         "lastModified": 1785298780,
         "narHash": "sha256-hq+/QcdG+pOKugcglqt92n3AwDbZnJB/Z+FCgmM3nwg=",
-        "ref": "refs/heads/trunk",
         "rev": "38e7ce16c754947a257a00a77682adfe696b6718",
-        "revCount": 7,
         "type": "git",
-        "url": "https://codefloe.com/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
       },
       "original": {
+        "ref": "trunk",
         "type": "git",
-        "url": "https://codefloe.com/caniko/nix-opencode-lsp.git"
+        "url": "ssh://git@github.com/caniko/nix-opencode-lsp.git"
+      }
+    },
+    "nix-pklx": {
+      "inputs": {
+        "crane": "crane_5",
+        "nixpkgs": "nixpkgs_4",
+        "plinth": [
+          "steampipe",
+          "plinth"
+        ],
+        "rs-harbor": [
+          "steampipe",
+          "rs-harbor"
+        ],
+        "rust-overlay": "rust-overlay_3"
+      },
+      "locked": {
+        "lastModified": 1785419231,
+        "narHash": "sha256-E5MYAfHgEJu55TqbdgwR3C5lv8fXUDfar87wF1Eueko=",
+        "ref": "trunk",
+        "rev": "541c3655e9251fdd047f96a4f30810fa21f89d2f",
+        "revCount": 29,
+        "type": "git",
+        "url": "ssh://git@codeberg.org/caniko/nix-pklx.git"
+      },
+      "original": {
+        "ref": "trunk",
+        "rev": "541c3655e9251fdd047f96a4f30810fa21f89d2f",
+        "type": "git",
+        "url": "ssh://git@codeberg.org/caniko/nix-pklx.git"
       }
     },
     "nixpkgs": {
@@ -429,6 +564,36 @@
     },
     "nixpkgs-lib_3": {
       "locked": {
+        "lastModified": 1785031560,
+        "narHash": "sha256-OmshNvn2vupOFpYinLUu+1Dnpu4n7Q5N3ggGVNHpkUI=",
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "rev": "0e79af5e3d4dcfcd676ab5ba3f95d2e3352e078c",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "type": "github"
+      }
+    },
+    "nixpkgs-lib_4": {
+      "locked": {
+        "lastModified": 1772328832,
+        "narHash": "sha256-e+/T/pmEkLP6BHhYjx6GmwP5ivonQQn0bJdH9YrRB+Q=",
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "rev": "c185c7a5e5dd8f9add5b2f8ebeff00888b070742",
+        "type": "github"
+      },
+      "original": {
+        "owner": "nix-community",
+        "repo": "nixpkgs.lib",
+        "type": "github"
+      }
+    },
+    "nixpkgs-lib_5": {
+      "locked": {
         "lastModified": 1782614948,
         "narHash": "sha256-ePjCwr1sNm9NYUqywL7QfK3JnlS015msC+eBu2zKlp8=",
         "owner": "nix-community",
@@ -442,7 +607,7 @@
         "type": "github"
       }
     },
-    "nixpkgs-lib_4": {
+    "nixpkgs-lib_6": {
       "locked": {
         "lastModified": 1782614948,
         "narHash": "sha256-ePjCwr1sNm9NYUqywL7QfK3JnlS015msC+eBu2zKlp8=",
@@ -474,6 +639,38 @@
       }
     },
     "nixpkgs_3": {
+      "locked": {
+        "lastModified": 1772736753,
+        "narHash": "sha256-au/m3+EuBLoSzWUCb64a/MZq6QUtOV8oC0D9tY2scPQ=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "917fec990948658ef1ccd07cef2a1ef060786846",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixpkgs-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_4": {
+      "locked": {
+        "lastModified": 1782467914,
+        "narHash": "sha256-pGvFkM8N0xEkIIXDe5YYfbEAvHrk4IxBrjB/x8OomhE=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "e73de5be04e0eff4190a1432b946d469c794e7b4",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "nixpkgs_5": {
       "locked": {
         "lastModified": 1784282293,
         "narHash": "sha256-IpX7tmVJi9seHg5M4Wuexy78bQDlbntVk1HcT9kFts4=",
@@ -539,9 +736,42 @@
     "plinth": {
       "inputs": {
         "crane": "crane_2",
+        "flake-parts": "flake-parts_3",
+        "nix-cache-pin": "nix-cache-pin",
+        "nix-pklx": "nix-pklx",
+        "nixpkgs": [
+          "steampipe",
+          "nixpkgs"
+        ],
+        "rs-harbor": [
+          "steampipe",
+          "rs-harbor"
+        ],
+        "rust-overlay": "rust-overlay_4"
+      },
+      "locked": {
+        "lastModified": 1786574539,
+        "narHash": "sha256-EG4hm76+a82iX24MpXsI1i7A7tmylu97ITpGX6GIVy4=",
+        "ref": "refs/heads/trunk",
+        "rev": "79a5be7f33a1309fb0c58188767f8cf6c8604a20",
+        "revCount": 248,
+        "type": "git",
+        "url": "ssh://git@codeberg.org/caniko/plinth.git"
+      },
+      "original": {
+        "ref": "refs/heads/trunk",
+        "type": "git",
+        "url": "ssh://git@codeberg.org/caniko/plinth.git"
+      }
+    },
+    "plinth_2": {
+      "inputs": {
+        "crane": "crane_4",
         "flake-utils": "flake-utils_4",
         "nixpkgs": [
           "steampipe",
+          "plinth",
+          "nix-cache-pin",
           "nixpkgs"
         ],
         "rust-overlay": "rust-overlay_2"
@@ -553,12 +783,12 @@
         "rev": "bfa970d7f38f51515e01092cd7f9fde81eef26ae",
         "revCount": 67,
         "type": "git",
-        "url": "https://codefloe.com/caniko/plinth.git"
+        "url": "https://codeberg.org/caniko/plinth.git"
       },
       "original": {
         "ref": "refs/heads/trunk",
         "type": "git",
-        "url": "https://codefloe.com/caniko/plinth.git"
+        "url": "https://codeberg.org/caniko/plinth.git"
       }
     },
     "root": {
@@ -582,46 +812,46 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1785506791,
-        "narHash": "sha256-2xL+FrtBUKDdJHk/dd2+vE9ofP1aN3OFe2tVOj6whQY=",
+        "lastModified": 1786573790,
+        "narHash": "sha256-HNroLml6L6xV7ZS5pS8QYQdxfPqayi6kJYrClxNa3Gs=",
         "ref": "trunk",
-        "rev": "7fa1c2104dab4e1dbaa1aaa6df84bba815aa282d",
-        "revCount": 161,
+        "rev": "f209ddbca3fdbb0dc31fa3886ccc2ff7369c18ac",
+        "revCount": 164,
         "type": "git",
-        "url": "https://codefloe.com/caniko/rs-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/rs-harbor.git"
       },
       "original": {
         "ref": "trunk",
-        "rev": "7fa1c2104dab4e1dbaa1aaa6df84bba815aa282d",
+        "rev": "f209ddbca3fdbb0dc31fa3886ccc2ff7369c18ac",
         "type": "git",
-        "url": "https://codefloe.com/caniko/rs-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/rs-harbor.git"
       }
     },
     "rs-harbor_2": {
       "inputs": {
-        "crane": "crane_3",
-        "flake-parts": "flake-parts_3",
+        "crane": "crane_6",
+        "flake-parts": "flake-parts_5",
         "meta-harbor": "meta-harbor_2",
         "nix-bundle": "nix-bundle_2",
         "nix-opencode-lsp": "nix-opencode-lsp_2",
-        "nixpkgs": "nixpkgs_3",
+        "nixpkgs": "nixpkgs_5",
         "osxcross": "osxcross_2",
-        "rust-overlay": "rust-overlay_3"
+        "rust-overlay": "rust-overlay_5"
       },
       "locked": {
-        "lastModified": 1785506791,
-        "narHash": "sha256-2xL+FrtBUKDdJHk/dd2+vE9ofP1aN3OFe2tVOj6whQY=",
+        "lastModified": 1786573790,
+        "narHash": "sha256-HNroLml6L6xV7ZS5pS8QYQdxfPqayi6kJYrClxNa3Gs=",
         "ref": "trunk",
-        "rev": "7fa1c2104dab4e1dbaa1aaa6df84bba815aa282d",
-        "revCount": 161,
+        "rev": "f209ddbca3fdbb0dc31fa3886ccc2ff7369c18ac",
+        "revCount": 164,
         "type": "git",
-        "url": "https://codefloe.com/caniko/rs-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/rs-harbor.git"
       },
       "original": {
         "ref": "trunk",
-        "rev": "7fa1c2104dab4e1dbaa1aaa6df84bba815aa282d",
+        "rev": "f209ddbca3fdbb0dc31fa3886ccc2ff7369c18ac",
         "type": "git",
-        "url": "https://codefloe.com/caniko/rs-harbor.git"
+        "url": "ssh://git@codeberg.org/caniko/rs-harbor.git"
       }
     },
     "rust-overlay": {
@@ -650,6 +880,8 @@
         "nixpkgs": [
           "steampipe",
           "plinth",
+          "nix-cache-pin",
+          "plinth",
           "nixpkgs"
         ]
       },
@@ -668,6 +900,51 @@
       }
     },
     "rust-overlay_3": {
+      "inputs": {
+        "nixpkgs": [
+          "steampipe",
+          "plinth",
+          "nix-pklx",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1782616745,
+        "narHash": "sha256-NN5B1cKBXF6h1Ec681gMGZ2o/99d7vKXAAfFNEvyOKA=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "b916d014dc57eb555f84e51172a82f7f6fb560d7",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_4": {
+      "inputs": {
+        "nixpkgs": [
+          "steampipe",
+          "plinth",
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1783320166,
+        "narHash": "sha256-l7C/OsjcnWDOk2K3ssj+SBduwL67LashjBqis9+t468=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "20ee15370c9256669d66968b89ee20a4b0a4e673",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "rust-overlay_5": {
       "inputs": {
         "nixpkgs": [
           "steampipe",
