@@ -348,13 +348,13 @@
         "rev": "541c3655e9251fdd047f96a4f30810fa21f89d2f",
         "revCount": 29,
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/nix-pklx.git"
+        "url": "https://github.com/caniko/nix-pklx.git"
       },
       "original": {
         "ref": "trunk",
         "rev": "541c3655e9251fdd047f96a4f30810fa21f89d2f",
         "type": "git",
-        "url": "ssh://git@codeberg.org/caniko/nix-pklx.git"
+        "url": "https://github.com/caniko/nix-pklx.git"
       }
     },
     "nixpkgs": {

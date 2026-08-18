@@ -20,7 +20,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rs-harbor.follows = "rs-harbor";
       inputs.nix-cache-pin.inputs.rs-harbor.follows = "rs-harbor";
-      inputs.nix-pklx.url = "git+ssh://git@codeberg.org/caniko/nix-pklx.git?ref=trunk&rev=541c3655e9251fdd047f96a4f30810fa21f89d2f";
+      inputs.nix-pklx.url = "git+https://github.com/caniko/nix-pklx.git?ref=trunk&rev=541c3655e9251fdd047f96a4f30810fa21f89d2f";
       inputs.nix-pklx.inputs.rs-harbor.follows = "rs-harbor";
       inputs.nix-pklx.inputs.plinth.follows = "plinth";
       inputs.nix-pklx.inputs.plinth.inputs.rs-harbor.follows = "rs-harbor";
