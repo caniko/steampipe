@@ -170,12 +170,6 @@ cluster-ctl --vm-count 7 steam warm vm-3 --runners-dir ./result
 cluster-ctl --vm-count 7 steam warm -+ vm-3 --runners-dir ./result
 ```
 
-### Automated rotation
-
-The warm-timer module is retained for compatibility but cannot satisfy the
-Steam GUI client. Host-level warm timers should be disabled for GUI session
-freshness; use explicit `steam login` instead.
-
 Verify GUI session state with `cluster-ctl steam accounts`. JWT-only Steam Vent
 state appears as not GUI-valid and should be repaired with
 `cluster-ctl steam login <vm> --force`.

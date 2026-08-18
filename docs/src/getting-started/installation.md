@@ -125,34 +125,6 @@ To pin a different binary derivation, set `services.steampipe-cluster.package`.
 See [Global host config](../configuration/host-config.md) for the full option
 surface.
 
-### Optional: weekly warm timer
-
-Import the warm timer module next to the host module:
-
-```nix
-{
-  imports = [
-    inputs.steampipe.nixosModules.default
-    inputs.steampipe.nixosModules.warmTimer
-  ];
-
-  services.steampipe-cluster = {
-    enable = true;
-    tapOwner = "yourhostuser";
-    tapOwnerUid = 1000;
-    runners = {
-      enable = true;
-      sshAuthorizedKey = "ssh-ed25519 AAAA... steampipe-loginrunners@host";
-    };
-  };
-
-  services.steampipe-warm-timer.enable = true;
-}
-```
-
-The warm timer requires `runners.enable = true;` because it relies on
-`/etc/steampipe/module.json` to resolve `/etc/steampipe/runners`.
-
 ## Bare binary
 
 For non-NixOS hosts:
