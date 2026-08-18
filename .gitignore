@@ -9,5 +9,8 @@ tests/fixture/.direnv
 tests/fixture/golden/.candidate/
 tests/fixture/diagnose/_run-*
 
+# Generated
+graphify-out/
+
 # System
 .steampipe-system-warning/
