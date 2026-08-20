@@ -7,7 +7,7 @@
   };
 
   inputs = {
-    rs-harbor.url = "git+https://github.com/caniko/rs-harbor.git?ref=trunk&rev=f209ddbca3fdbb0dc31fa3886ccc2ff7369c18ac";
+    rs-harbor.url = "git+https://github.com/caniko/rs-harbor.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
     nixpkgs.follows = "rs-harbor/nixpkgs";
     rust-overlay = {
       follows = "rs-harbor/rust-overlay";
