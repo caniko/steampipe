@@ -3,10 +3,11 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
-    rs-harbor = {
-      url = "git+https://github.com/caniko/rs-harbor.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
+    harbor-rs = {
+      url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    rs-harbor.follows = "harbor-rs";
     steampipe.url = "path:../..";
     steampipe.inputs.nixpkgs.follows = "nixpkgs";
   };
@@ -14,7 +15,7 @@
   outputs = {
     self,
     nixpkgs,
-    rs-harbor,
+    harbor-rs,
     steampipe,
     ...
   }: let
@@ -24,7 +25,7 @@
       overlays = [steampipe.overlays.default];
     };
     lib = pkgs.lib;
-    buildCache = rs-harbor.lib.mkBuildCachePolicy {
+    buildCache = harbor-rs.lib.mkBuildCachePolicy {
       inherit pkgs;
       namespaceScope = "steampipe-fixture";
     };

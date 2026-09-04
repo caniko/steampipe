@@ -14,7 +14,7 @@ memory commitment.
 
 When the dev profile is tuned (mold linker, cranelift dev backend,
 `debug = "line-tables-only"`, `[profile.dev.package."*"] debug =
-false` — all set by rs-harbor's `mkCargoConfig` defaults), the bulk
+false` — all set by harbor-rs's `mkCargoConfig` defaults), the bulk
 of system memory pressure during a build is the *parallel sum* of
 rustc child processes, not any single child's peak. The MaxRSS
 metric will not move when those settings change, even when the
@@ -112,7 +112,7 @@ echo "system memory committed (kB): $committed" | tee -a "$SUMMARY_LOG"
 ## Known result (2026-05-27)
 
 Atlas, warm pagecache, `cargo build --workspace` after `cargo
-clean`, mold linker + cranelift dev backend (rs-harbor defaults):
+clean`, mold linker + cranelift dev backend (harbor-rs defaults):
 
 | Config | rustc VmHWM peak | system committed | wall |
 |---|---:|---:|---:|
@@ -123,7 +123,7 @@ clean`, mold linker + cranelift dev backend (rs-harbor defaults):
 Lessons:
 
 - `codegen-units = 32` raised per-process rustc peak by ~1.5%
-  without a wall-clock win for steampipe; rs-harbor's
+  without a wall-clock win for steampipe; harbor-rs's
   `devCodegenUnits` parameter is left null on this project.
 - The debug-info cuts (`debug = "line-tables-only"`,
   `split-debuginfo = "unpacked"`, deps `debug = false`) hold
@@ -143,6 +143,6 @@ absolute numbers from a different host or kernel.
   memory budgets for steampipe-managed VMs (a different memory
   surface, but the same "measure with VmHWM, not RSS" rule
   applies).
-- rs-harbor's `mkCargoConfig` `enableDevProfileOpts` and
+- harbor-rs's `mkCargoConfig` `enableDevProfileOpts` and
   `devCodegenUnits` parameters — the upstream knobs that this
   project leaves at defaults.

@@ -40,7 +40,7 @@ next steps are listed but not phased.
   - `cargo fmt --check` is clean.
 - **Toolchain pin**: `.cargo/config.toml` declares `[unstable]
   codegen-backend = true` plus `-Zshare-generics -Zthreads=0`. The
-  pinned channel is `nightly` (rs-harbor `mkCargoConfig { channel =
+  pinned channel is `nightly` (harbor-rs `mkCargoConfig { channel =
   "nightly"; }` at [flake.nix:36](../../../flake.nix#L36)). `cargo
   --version` inside the devShell is `1.97.0-nightly`. So
   `rust-version = "1.87"` in `Cargo.toml` is aspirational only —

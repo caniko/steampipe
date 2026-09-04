@@ -7,32 +7,33 @@
   };
 
   inputs = {
-    rs-harbor.url = "git+https://github.com/caniko/rs-harbor.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
-    nixpkgs.follows = "rs-harbor/nixpkgs";
+    harbor-rs.url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
+    rs-harbor.follows = "harbor-rs";
+    nixpkgs.follows = "harbor-rs/nixpkgs";
     rust-overlay = {
-      follows = "rs-harbor/rust-overlay";
+      follows = "harbor-rs/rust-overlay";
     };
-    crane.follows = "rs-harbor/crane";
+    crane.follows = "harbor-rs/crane";
     flake-utils.url = "github:numtide/flake-utils";
     microvm.url = "github:astro/microvm.nix";
     plinth = {
       url = "git+ssh://git@codeberg.org/caniko/plinth.git?ref=refs/heads/trunk";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.rs-harbor.follows = "rs-harbor";
-      inputs.nix-cache-pin.inputs.rs-harbor.follows = "rs-harbor";
+      inputs.rs-harbor.follows = "harbor-rs";
+      inputs.nix-cache-pin.inputs.rs-harbor.follows = "harbor-rs";
       inputs.nix-pklx.url = "git+https://github.com/caniko/nix-pklx.git?ref=trunk&rev=541c3655e9251fdd047f96a4f30810fa21f89d2f";
-      inputs.nix-pklx.inputs.rs-harbor.follows = "rs-harbor";
+      inputs.nix-pklx.inputs.rs-harbor.follows = "harbor-rs";
       inputs.nix-pklx.inputs.plinth.follows = "plinth";
-      inputs.nix-pklx.inputs.plinth.inputs.rs-harbor.follows = "rs-harbor";
-      inputs.nix-pklx.inputs.plinth.inputs.nix-cache-pin.inputs.rs-harbor.follows = "rs-harbor";
-      inputs.nix-pklx.inputs.plinth.inputs.nix-pklx.inputs.rs-harbor.follows = "rs-harbor";
+      inputs.nix-pklx.inputs.plinth.inputs.rs-harbor.follows = "harbor-rs";
+      inputs.nix-pklx.inputs.plinth.inputs.nix-cache-pin.inputs.rs-harbor.follows = "harbor-rs";
+      inputs.nix-pklx.inputs.plinth.inputs.nix-pklx.inputs.rs-harbor.follows = "harbor-rs";
     };
   };
 
   outputs = {
     self,
     nixpkgs,
-    rs-harbor,
+    harbor-rs,
     rust-overlay,
     flake-utils,
     microvm,
@@ -52,11 +53,11 @@
       };
       inherit (pkgs) lib;
 
-      toolchain = rs-harbor.lib.mkToolchain {inherit pkgs; toolchainProfile = "nightly";};
+      toolchain = harbor-rs.lib.mkToolchain {inherit pkgs; toolchainProfile = "nightly";};
       inherit (toolchain) craneLib rustToolchain;
 
-      cross = rs-harbor.lib.mkCross {inherit pkgs system;};
-      cargoConfig = rs-harbor.lib.mkCargoConfig {
+      cross = harbor-rs.lib.mkCross {inherit pkgs system;};
+      cargoConfig = harbor-rs.lib.mkCargoConfig {
         inherit pkgs;
         channel = "nightly";
       };
@@ -78,7 +79,7 @@
       devShells = import ./nix/flake/dev-shells.nix {
         inherit cargoConfig craneLib cross packages pkgs rustToolchain;
         plinthProject = plinth.packages.${system}.plinth-project;
-        rsHarborLib = rs-harbor.lib;
+        rsHarborLib = harbor-rs.lib;
       };
     }))
     // (import ./nix/flake/flake-modules.nix {
