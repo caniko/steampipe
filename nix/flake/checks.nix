@@ -190,7 +190,7 @@
     shareSteamState = false;
   };
 in
-  lib.optionalAttrs pkgs.stdenv.isLinux {
+  lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
     warm-timer-eval =
       pkgs.runCommand "warm-timer-eval" {
         enabled =
