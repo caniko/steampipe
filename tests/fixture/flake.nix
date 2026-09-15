@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     harbor-rs = {
-      url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=05cc4f162b55fa904b687db1821e2463fa813e50";
+      url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=de6a15f5c102a63b14430fc09f73f9af02606ca6";
       inputs.nixpkgs.follows = "nixpkgs";
     };
     rs-harbor.follows = "harbor-rs";

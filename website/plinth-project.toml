@@ -10,11 +10,11 @@ href = "#overview"
 
 [[nav]]
 label = "Source"
-href = "ssh://git@codeberg.org/caniko/steampipe.git"
+href = "ssh://git@github.com/caniko/steampipe.git"
 
 [[footer_links]]
 label = "Source"
-href = "ssh://git@codeberg.org/caniko/steampipe.git"
+href = "ssh://git@github.com/caniko/steampipe.git"
 
 [[pages]]
 slug = "index"
@@ -29,7 +29,7 @@ subtitle = "A NixOS microVM cluster orchestrator for automated multiplayer game 
 
 [[pages.sections.ctas]]
 label = "View source"
-href = "ssh://git@codeberg.org/caniko/steampipe.git"
+href = "ssh://git@github.com/caniko/steampipe.git"
 primary = true
 
 [[pages.sections]]

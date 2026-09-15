@@ -7,7 +7,7 @@
   };
 
   inputs = {
-    harbor-rs.url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=fac8049316846e0ef1c1e6acd92aed7a337b333a";
+    harbor-rs.url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=de6a15f5c102a63b14430fc09f73f9af02606ca6";
     rs-harbor.follows = "harbor-rs";
     nixpkgs.follows = "harbor-rs/nixpkgs";
     rust-overlay = {
@@ -17,7 +17,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     microvm.url = "github:astro/microvm.nix";
     plinth = {
-      url = "git+ssh://git@codeberg.org/caniko/plinth.git?ref=refs/heads/trunk";
+      url = "git+https://github.com/caniko/plinth.git?ref=refs/heads/trunk";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.rs-harbor.follows = "harbor-rs";
       inputs.nix-cache-pin.inputs.rs-harbor.follows = "harbor-rs";

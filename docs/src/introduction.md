@@ -15,7 +15,7 @@ sessions from a single host.
 
 ## Project links
 
-- Source repository: <https://codeberg.org/caniko/steampipe>
+- Source repository: <https://github.com/caniko/steampipe>
 - Landing page: <https://caniko.codeberg.page/steampipe>
 
 ## Documentation map
