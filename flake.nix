@@ -8,7 +8,6 @@
 
   inputs = {
     harbor-rs.url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=de6a15f5c102a63b14430fc09f73f9af02606ca6";
-    rs-harbor.follows = "harbor-rs";
     nixpkgs.follows = "harbor-rs/nixpkgs";
     rust-overlay = {
       follows = "harbor-rs/rust-overlay";
@@ -19,14 +18,14 @@
     plinth = {
       url = "git+https://github.com/caniko/plinth.git?ref=refs/heads/trunk";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.rs-harbor.follows = "harbor-rs";
-      inputs.nix-cache-pin.inputs.rs-harbor.follows = "harbor-rs";
+      inputs.harbor-rs.follows = "harbor-rs";
+      inputs.nix-cache-pin.inputs.harbor-rs.follows = "harbor-rs";
       inputs.nix-pklx.url = "git+https://github.com/caniko/nix-pklx.git?ref=trunk&rev=541c3655e9251fdd047f96a4f30810fa21f89d2f";
-      inputs.nix-pklx.inputs.rs-harbor.follows = "harbor-rs";
+      inputs.nix-pklx.inputs.harbor-rs.follows = "harbor-rs";
       inputs.nix-pklx.inputs.plinth.follows = "plinth";
-      inputs.nix-pklx.inputs.plinth.inputs.rs-harbor.follows = "harbor-rs";
-      inputs.nix-pklx.inputs.plinth.inputs.nix-cache-pin.inputs.rs-harbor.follows = "harbor-rs";
-      inputs.nix-pklx.inputs.plinth.inputs.nix-pklx.inputs.rs-harbor.follows = "harbor-rs";
+      inputs.nix-pklx.inputs.plinth.inputs.harbor-rs.follows = "harbor-rs";
+      inputs.nix-pklx.inputs.plinth.inputs.nix-cache-pin.inputs.harbor-rs.follows = "harbor-rs";
+      inputs.nix-pklx.inputs.plinth.inputs.nix-pklx.inputs.harbor-rs.follows = "harbor-rs";
     };
   };
 

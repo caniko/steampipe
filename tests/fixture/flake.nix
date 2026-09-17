@@ -7,7 +7,6 @@
       url = "git+https://github.com/caniko/harbor-rs.git?ref=trunk&rev=de6a15f5c102a63b14430fc09f73f9af02606ca6";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    rs-harbor.follows = "harbor-rs";
     steampipe.url = "path:../..";
     steampipe.inputs.nixpkgs.follows = "nixpkgs";
   };
