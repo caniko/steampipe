@@ -18,10 +18,7 @@
     plinth = {
       url = "git+https://github.com/caniko/plinth.git?ref=refs/heads/trunk";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.harbor-rs.follows = "harbor-rs";
-      inputs.nix-cache-pin.inputs.harbor-rs.follows = "harbor-rs";
-      inputs.nix-pklx.url = "git+https://github.com/caniko/nix-pklx.git?ref=trunk&rev=541c3655e9251fdd047f96a4f30810fa21f89d2f";
-      inputs.nix-pklx.inputs.harbor-rs.follows = "harbor-rs";
+      inputs.nix-pklx.url = "git+https://github.com/caniko/nix-pklx.git?ref=trunk&rev=4e5dbefa4c94bb8af3c9e400a1a57790a39b518b";
       inputs.nix-pklx.inputs.plinth.follows = "plinth";
       inputs.nix-pklx.inputs.plinth.inputs.harbor-rs.follows = "harbor-rs";
       inputs.nix-pklx.inputs.plinth.inputs.nix-cache-pin.inputs.harbor-rs.follows = "harbor-rs";
