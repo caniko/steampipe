@@ -1,11 +1,12 @@
 [ci]
 runtime = "nix"
-runner = "codefloe-global"
+runner = "ubuntu-24.04"
 workspace = true
-step_runners = { cargo-clippy = "codeberg-small", cargo-doc = "codeberg-small", cargo-fmt = "codeberg-tiny", cargo-package = "codeberg-medium", cargo-test = "codeberg-medium", nix-check = "atlas-nix-trusted", quality-tools = "codeberg-small" }
-provider = "crow"
-platform = "forgejo"
+step_runners = { cargo-clippy = "ubuntu-24.04", cargo-doc = "ubuntu-24.04", cargo-fmt = "ubuntu-24.04", cargo-package = "ubuntu-24.04", cargo-test = "ubuntu-24.04", nix-check = "ubuntu-24.04", quality-tools = "ubuntu-24.04" }
+provider = "actions"
+platform = "github"
 publish_crates = true
+all_features = false
 
 [ci.pages]
 repo = "caniko/steampipe"
