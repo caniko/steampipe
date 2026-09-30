@@ -2539,7 +2539,7 @@ fn monitor_local_process(
                             vm_launch_evidence,
                         )
                         .into_iter()
-                        .filter(|item| missing.iter().any(|name| *name == item.vm_name))
+                        .filter(|item| missing.contains(&item.vm_name))
                         .collect();
                         exit_code = kill_and_reap(child, shutdown_timeout);
                         failure = Some(MonitorFailure::vm_launch_no_heartbeat(
