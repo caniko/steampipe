@@ -28,7 +28,11 @@ in
         steampipe.nixosModules.microvm
         steampipe.nixosModules.vm-graphics
         steampipe.nixosModules.cluster-vm-base
-        ({pkgs, ...}: {
+        ({
+          config,
+          pkgs,
+          ...
+        }: {
           nixpkgs.overlays =
             [steampipe.overlays.default]
             ++ extraVmOverlays;
@@ -54,6 +58,13 @@ in
           microvm = {
             hypervisor = flavor.hypervisor;
             graphics.enable = flavor.graphics;
+            # microvm's optimize step rebuilds qemu_kvm with nixosTestRunner,
+            # a variant Hydra never builds. qemu_test already has it, so the
+            # override is a no-op and the runner substitutes from
+            # cache.nixos.org. Graphical guests keep the GUI-capable default.
+            qemu.package =
+              lib.mkIf (flavor.hypervisor == "qemu" && !flavor.graphics)
+              config.microvm.vmHostPackages.qemu_test;
             cloud-hypervisor.package =
               lib.mkIf (flavor.hypervisor == "cloud-hypervisor" && !flavor.graphics)
               pkgs.cloud-hypervisor;
