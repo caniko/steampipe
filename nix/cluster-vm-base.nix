@@ -2,11 +2,16 @@
 {
   config,
   lib,
+  options,
   pkgs,
   ...
 }: let
   cfg = config.steampipe.clusterVm;
   homeDir = "/home/${cfg.user}";
+  # nixpkgs removed scripted initrd and the boot.initrd.systemd.enable switch
+  # (NixOS 26.11): systemd stage 1 is then the only initrd.
+  initrdChoice = options.boot.initrd.systemd.enable ? default;
+  systemdStage1 = cfg.useSystemdStage1 || !initrdChoice;
 in {
   options.steampipe.clusterVm = {
     user = lib.mkOption {
@@ -133,10 +138,10 @@ in {
     }
 
     {
-      boot.initrd.systemd.enable = cfg.useSystemdStage1;
+      boot.initrd.systemd.enable = lib.mkIf initrdChoice cfg.useSystemdStage1;
     }
 
-    (lib.mkIf (cfg.useSystemdStage1 == true) {
+    (lib.mkIf systemdStage1 {
       # microvm.nix's crosvm systemd-stage-1 default is off because the store
       # disk mount needs filesystem modules available before sysroot mounts.
       boot.initrd.kernelModules = ["erofs" "squashfs"];
