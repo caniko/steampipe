@@ -11,3 +11,18 @@ all_features = false
 [ci.pages]
 repo = "caniko/steampipe"
 canonical_domain = "cluster-ctl.tartanoglu.com"
+
+# Linux closures consumed by canix, published to the public canix cache on
+# trunk pushes only (secret ATTIC_TOKEN). Pull requests build but never push.
+[prebuild]
+publish_attic = true
+attic_app = ".#push-flake-inputs"
+system_runners = { x86_64-linux = "ubuntu-24.04" }
+nix_builds = [".#packages.x86_64-linux.cluster-ctl", ".#packages.x86_64-linux.cluster-guard-prompt"]
+push_branches = ["trunk"]
+
+[release.attic]
+cache = "canix"
+url = "https://attic.candee.baby"
+token_name = "steampipe"
+token_secret = "ATTIC_TOKEN"

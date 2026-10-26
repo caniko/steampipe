@@ -68,6 +68,21 @@
         domain = "cluster-ctl.tartanoglu.com";
       };
 
+      # Simit prebuild publication on trunk (secret ATTIC_TOKEN): the
+      # packages canix consumes, pushed to the public canix cache.
+      apps.push-flake-inputs = harbor-rs.lib.mkAtticPush {
+        inherit pkgs;
+        flake = ".";
+        paths = [packages.cluster-ctl packages.cluster-guard-prompt];
+        adapter = harbor-rs.lib.mkAdapter {
+          attic = {
+            endpoint = "https://attic.candee.baby";
+            cache = "canix";
+            tokenEnvVar = "ATTIC_TOKEN";
+          };
+        };
+      };
+
       checks = import ./nix/flake/checks.nix {
         inherit lib microvm nixpkgs pkgs self system;
       };
