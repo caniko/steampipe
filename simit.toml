@@ -1,4 +1,5 @@
 [ci]
+push_branches = ["trunk", "simit/update/**"]
 runtime = "nix"
 runner = "ubuntu-24.04"
 workspace = true
@@ -20,7 +21,7 @@ publish_attic = true
 attic_app = ".#push-flake-inputs"
 system_runners = { x86_64-linux = "ubuntu-24.04" }
 nix_builds = [".#packages.x86_64-linux.cluster-ctl", ".#packages.x86_64-linux.cluster-guard-prompt"]
-push_branches = ["trunk"]
+push_branches = ["trunk", "simit/update/**"]
 
 [release.attic]
 cache = "canix"
