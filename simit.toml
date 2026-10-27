@@ -1,11 +1,14 @@
 [ci]
+push_branches = ["trunk", "simit/update/**"]
 runtime = "nix"
-runner = "codefloe-global"
+runner = "ubuntu-24.04"
 workspace = true
-step_runners = { cargo-clippy = "codeberg-small", cargo-doc = "codeberg-small", cargo-fmt = "codeberg-tiny", cargo-package = "codeberg-medium", cargo-test = "codeberg-medium", nix-check = "atlas-nix-trusted", quality-tools = "codeberg-small" }
-provider = "crow"
-platform = "forgejo"
+step_runners = { cargo-clippy = "ubuntu-24.04", cargo-doc = "ubuntu-24.04", cargo-fmt = "ubuntu-24.04", cargo-package = "ubuntu-24.04", cargo-test = "ubuntu-24.04", nix-check = "ubuntu-24.04", quality-tools = "ubuntu-24.04" }
+provider = "actions"
+platform = "github"
 publish_crates = true
+all_features = false
+publish_strategy = "members"
 
 [ci.pages]
 repo = "caniko/steampipe"
@@ -18,7 +21,7 @@ publish_attic = true
 attic_app = ".#push-flake-inputs"
 system_runners = { x86_64-linux = "ubuntu-24.04" }
 nix_builds = [".#packages.x86_64-linux.cluster-ctl", ".#packages.x86_64-linux.cluster-guard-prompt"]
-push_branches = ["trunk"]
+push_branches = ["trunk", "simit/update/**"]
 
 [release.attic]
 cache = "canix"
