@@ -74,6 +74,5 @@ migrations, and pin refreshes.
 ## Place in the fleet
 
 The canix flake consumes the repository as the `steampipe` input and imports
-its NixOS module on atlas, where `nomad` configures `services.steampipe-cluster`
-and its login-runner SSH key; canix docs name it as the reference for the
-microVM test-cluster module.
+its NixOS module on atlas and nomad, which configure
+`services.steampipe-cluster` and its login-runner SSH key.
