@@ -1,45 +1,94 @@
 [site]
 title = "cluster-ctl"
-description = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
+description = "cluster-ctl boots a fleet of lightweight NixOS VMs on one host, signs each into Steam, deploys your game and runs scripted multiplayer sessions."
 base_url = "/"
-footer_note = "Generated from repository metadata by the plinth-project FOSS sweep."
 
 [[nav]]
 label = "Overview"
 href = "#overview"
 
 [[nav]]
+label = "Install"
+href = "#install"
+
+[[nav]]
+label = "Documentation"
+href = "/docs/"
+
+[[nav]]
 label = "Source"
-href = "ssh://git@github.com/caniko/steampipe.git"
+href = "https://github.com/caniko/steampipe"
+
+[[footer_links]]
+label = "Documentation"
+href = "/docs/"
 
 [[footer_links]]
 label = "Source"
-href = "ssh://git@github.com/caniko/steampipe.git"
+href = "https://github.com/caniko/steampipe"
 
 [[pages]]
 slug = "index"
 title = "cluster-ctl"
-description = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
+description = "cluster-ctl boots a fleet of lightweight NixOS VMs on one host, signs each into Steam, deploys your game and runs scripted multiplayer sessions."
 
 [[pages.sections]]
 type = "hero"
-title = "cluster-ctl"
-tagline = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
-subtitle = "A NixOS microVM cluster orchestrator for automated multiplayer game testing."
+title = "A multiplayer test cluster on one machine"
+tagline = "Many game peers, one host, repeatable runs."
+subtitle = "cluster-ctl boots a fleet of lightweight NixOS VMs on one host, signs each into Steam, deploys your game and runs scripted multiplayer sessions."
 
 [[pages.sections.ctas]]
 label = "View source"
-href = "ssh://git@github.com/caniko/steampipe.git"
+href = "https://github.com/caniko/steampipe"
 primary = true
+
+[[pages.sections.ctas]]
+label = "Documentation"
+href = "/docs/"
 
 [[pages.sections]]
 type = "feature_grid"
 id = "overview"
 
 [[pages.sections.features]]
-title = "Rust"
-description = "Project technology detected from repository manifests."
+title = "A full lobby from one host"
+description = "Seven VMs plus the host make an eight-player session on a single machine. Each peer gets its own TAP device, its NAT rules and its copy of the game binary, so the whole lobby comes from one host."
 
 [[pages.sections.features]]
-title = "Nix"
-description = "Project technology detected from repository manifests."
+title = "Steam, handled across the fleet"
+description = "cluster-ctl steam check and cluster-ctl steam warm bring Steam up inside every VM, and snapshot-save keeps the post-login state so later runs skip the slow login cycle."
+
+[[pages.sections.features]]
+title = "Repeatable end-to-end runs"
+description = "cluster-ctl test builds and deploys the game, launches every peer, and polls heartbeat files until the run ends. A stalled heartbeat is killed, each run is classified as pass, fail or timeout, and failures leave VM logs, panic sidecars and core dumps behind."
+
+[[pages.sections.features]]
+title = "Network conditions on demand"
+description = "tc netem shapes the VM links from the same CLI: latency, jitter, packet loss and bandwidth limits, applied to one VM or to the whole cluster before a run."
+
+[[pages.sections]]
+type = "install"
+id = "install"
+heading = "Install"
+intro = "Run the binary from the flake, or enable the NixOS module to get cluster-ctl on PATH with shell completions, the cluster bridge and its NAT rules already wired."
+guide_href = "/docs/getting-started/installation.html"
+
+[[pages.sections.primary_routes]]
+label = "Nix flake"
+audience = "Linux x86_64, run without installing"
+href = "/docs/getting-started/installation.html#bare-binary"
+command = "nix run github:caniko/steampipe -- --help"
+recommended = true
+
+[[pages.sections.secondary_routes]]
+label = "Nix profile"
+audience = "Bare binary on a non-NixOS host"
+href = "/docs/getting-started/installation.html#bare-binary"
+command = "nix profile install github:caniko/steampipe"
+
+[[pages.sections.secondary_routes]]
+label = "Cargo"
+audience = "Build from a source checkout"
+href = "/docs/getting-started/installation.html#bare-binary"
+command = "cargo install --path /path/to/steampipe"

@@ -11,7 +11,7 @@ bare binary is the fallback for non-NixOS hosts.
 
    ```nix
    {
-     inputs.steampipe.url = "codeberg:caniko/steampipe";
+     inputs.steampipe.url = "github:caniko/steampipe";
    }
    ```
 
@@ -19,7 +19,7 @@ bare binary is the fallback for non-NixOS hosts.
 
    ```nix
    {
-     inputs.steampipe.url = "codeberg:caniko/steampipe";
+     inputs.steampipe.url = "github:caniko/steampipe";
 
      outputs = {
        self,
@@ -130,8 +130,8 @@ surface.
 For non-NixOS hosts:
 
 ```bash
-nix run codeberg:caniko/steampipe -- --help
-nix profile install codeberg:caniko/steampipe
+nix run github:caniko/steampipe -- --help
+nix profile install github:caniko/steampipe
 ```
 
 With Cargo:
@@ -150,7 +150,7 @@ and Steam commands. The NixOS module does that host integration for you.
 Three names refer to the same toolchain:
 
 - `steampipe` is the flake and repository name. Use it as
-  `inputs.steampipe.url = "codeberg:caniko/steampipe";`.
+  `inputs.steampipe.url = "github:caniko/steampipe";`.
 - `cluster-ctl` is the binary name. On a module-managed host,
   `which cluster-ctl` returns `/run/current-system/sw/bin/cluster-ctl`.
 - `services.steampipe-cluster` is the NixOS module option namespace. The
