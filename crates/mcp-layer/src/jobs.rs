@@ -28,6 +28,10 @@ pub struct JobSpec {
     pub locks: Vec<String>,
     pub fail_markers: Vec<String>,
     pub artifacts: Vec<String>,
+    #[serde(default)]
+    pub cleanup: Option<Vec<String>>,
+    #[serde(default)]
+    pub sequence_timeout_secs: Option<u64>,
 }
 
 fn default_grace() -> u64 { 5 }
@@ -36,7 +40,7 @@ impl Default for JobSpec {
     fn default() -> Self {
         Self { runner: String::new(), argv: Vec::new(), cwd: PathBuf::new(), env: Vec::new(), timeout_secs: 0,
             grace_secs: default_grace(), locks: Vec::new(), fail_markers: Vec::new(),
-            artifacts: Vec::new() }
+            artifacts: Vec::new(), cleanup: None, sequence_timeout_secs: None }
     }
 }
 
@@ -130,6 +134,10 @@ impl Jobs {
         for spec in &specs {
         ensure!(!spec.argv.is_empty() && !spec.argv[0].is_empty(), "empty argv");
         ensure!(spec.timeout_secs > 0 && spec.timeout_secs <= 14_400, "invalid timeout");
+        ensure!(spec.sequence_timeout_secs.is_none_or(|t| t > 0 && t <= 14_400),
+            "invalid sequence timeout");
+        ensure!(spec.cleanup.as_ref().is_none_or(|c| !c.is_empty() && !c[0].is_empty()),
+            "empty cleanup argv");
         for marker in &spec.fail_markers { Regex::new(marker)?; }
         for key in &spec.locks { ensure!(valid_name(key), "invalid lock name"); }
         let mut keys = spec.locks.clone();
@@ -213,7 +221,20 @@ impl Jobs {
         let pid = record.supervisor_pid.or_else(|| fs::read_to_string(dir.join("supervisor.pid"))
             .ok().and_then(|s| s.parse().ok()));
         if record.state.active() && pid.is_some_and(|pid| !alive(pid)) {
+            let Ok(_gate) = lock(&self.dir.join("start.lock"), true) else { return Ok(record); };
+            record = serde_json::from_slice(&fs::read(dir.join("record.json"))?)?;
+            if !record.state.active() { return Ok(record); }
+            let mut held = Vec::new();
+            for key in &record.spec.locks {
+                held.push(lock(&self.dir.join("locks").join(key), false)?);
+            }
+            if let Some(pid) = record.pgid.and_then(|p| Pid::from_raw(p as i32)) {
+                let _ = kill_process_group(pid, Signal::KILL);
+            }
+            cleanup(&record.spec, &record.log_path)?;
             record.state = JobState::Lost;
+            record.end = Some(now());
+            write_record(&dir, &record)?;
         }
         Ok(record)
     }
@@ -304,23 +325,37 @@ fn supervise(dir: &Path) -> Result<()> {
     record.supervisor_pid = Some(std::process::id());
     record.state = JobState::Running;
     let mut failed = false;
+    let mut timed_out = false;
+    let deadline = specs[0].sequence_timeout_secs.map(|s| Instant::now() + Duration::from_secs(s));
     let total = specs.len();
     for (index, spec) in specs.iter().enumerate() {
+        record.spec.cleanup.clone_from(&spec.cleanup);
+        record.spec.cwd.clone_from(&spec.cwd);
+        record.spec.env.clone_from(&spec.env);
         if headers {
             writeln!(OpenOptions::new().create(true).append(true).open(&record.log_path)?,
                 "== cell {}/{}: {} ==", index + 1, total, spec.runner)?;
         }
         let offset = fs::metadata(&record.log_path).map_or(0, |m| m.len());
-        run_cell(dir, &mut record, spec, offset)?;
-        if matches!(record.state, JobState::Cancelled | JobState::TimedOut) { break; }
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            record.state = JobState::TimedOut;
+            break;
+        }
+        run_cell(dir, &mut record, spec, offset, deadline)?;
+        if record.state == JobState::Cancelled { break; }
+        if record.state == JobState::TimedOut {
+            timed_out = true;
+            if stop || deadline.is_some_and(|d| Instant::now() >= d) { break; }
+        }
         if record.state == JobState::Failed {
             failed = true;
             if stop { break; }
         }
         record.state = JobState::Running;
     }
-    if record.state == JobState::Running {
-        record.state = if failed { JobState::Failed } else { JobState::Passed };
+    if record.state == JobState::Running || (timed_out && record.state == JobState::Failed) {
+        record.state = if timed_out { JobState::TimedOut }
+            else if failed { JobState::Failed } else { JobState::Passed };
     }
     record.end = Some(now());
     write_record(dir, &record)?;
@@ -328,7 +363,8 @@ fn supervise(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn run_cell(dir: &Path, record: &mut JobRecord, spec: &JobSpec, offset: u64) -> Result<()> {
+fn run_cell(dir: &Path, record: &mut JobRecord, spec: &JobSpec, offset: u64,
+    deadline: Option<Instant>) -> Result<()> {
     if dir.join("cancel").exists() {
         record.state = JobState::Cancelled;
         return Ok(());
@@ -355,24 +391,32 @@ fn run_cell(dir: &Path, record: &mut JobRecord, spec: &JobSpec, offset: u64) -> 
     let started = Instant::now();
     let status = loop {
         let reason = if dir.join("cancel").exists() { Some(JobState::Cancelled) }
-            else if started.elapsed() >= Duration::from_secs(spec.timeout_secs) {
+            else if started.elapsed() >= Duration::from_secs(spec.timeout_secs)
+                || deadline.is_some_and(|d| Instant::now() >= d) {
                 Some(JobState::TimedOut)
             } else { None };
         if let Some(reason) = reason {
             record.state = reason;
             break if let Some(pid) = Pid::from_raw(child.id() as i32) {
-                let _ = kill_process_group(pid, Signal::TERM);
+                // Runners may start processes in their own groups (cluster-ctl's local
+                // host game does); snapshot every descendant group before signalling.
+                let groups = process_groups_under(pid);
+                let signal_all = |signal| for group in &groups {
+                    let _ = kill_process_group(*group, signal);
+                };
+                signal_all(Signal::TERM);
                 let until = Instant::now() + Duration::from_secs(spec.grace_secs);
                 let mut status = None;
                 loop {
                     if status.is_none() {
                         status = child.try_wait()?;
                     }
-                    if test_kill_process_group(pid).is_err() && let Some(status) = status {
+                    let gone = groups.iter().all(|group| test_kill_process_group(*group).is_err());
+                    if gone && let Some(status) = status {
                         break status;
                     }
                     if Instant::now() >= until {
-                        let _ = kill_process_group(pid, Signal::KILL);
+                        signal_all(Signal::KILL);
                         break match status { Some(status) => status, None => child.wait()? };
                     }
                     thread::sleep(Duration::from_millis(50));
@@ -386,25 +430,121 @@ fn run_cell(dir: &Path, record: &mut JobRecord, spec: &JobSpec, offset: u64) -> 
     };
     record.exit_code = status.code();
     record.signal = status.signal();
+    if matches!(record.state, JobState::Cancelled | JobState::TimedOut) {
+        cleanup(spec, &record.log_path)?;
+    }
     let patterns: Vec<_> = spec.fail_markers.iter()
         .map(|s| Regex::new(s)).collect::<std::result::Result<_, _>>()?;
     let mut file = File::open(&record.log_path)?;
     file.seek(SeekFrom::Start(offset))?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
-    let content = String::from_utf8_lossy(&bytes);
+    let mut contents = vec![String::from_utf8_lossy(&bytes).into_owned()];
+    for artifact in &spec.artifacts {
+        if let Ok(bytes) = fs::read(spec.cwd.join(artifact)) {
+            contents.push(String::from_utf8_lossy(&bytes).into_owned());
+        }
+    }
+    let mut hit = false;
+    for content in &contents {
     for (number, line) in content.lines().enumerate() {
         for (pattern, re) in spec.fail_markers.iter().zip(&patterns) {
-            if re.is_match(line) && record.marker_hits.len() < 20 {
+            if re.is_match(line) {
+                hit = true;
+                if record.marker_hits.len() < 20 {
                 record.marker_hits.push(MarkerHit { line: number + 1,
                     text: line.chars().take(300).collect(), pattern: pattern.clone() });
+                }
             }
         }
     }
+    }
     if record.state == JobState::Running {
-        record.state = if status.success() && !patterns.iter().any(|re| re.is_match(&content)) {
+        record.state = if status.success() && !hit {
             JobState::Passed
         } else { JobState::Failed };
+    }
+    Ok(())
+}
+
+/// The job's own group plus the process group of every live descendant of `root`,
+/// read from /proc (Linux). Orphans already reparented away are not found.
+fn process_groups_under(root: Pid) -> Vec<Pid> {
+    let mut groups = vec![root];
+    let mut queue = vec![root.as_raw_nonzero().get()];
+    while let Some(pid) = queue.pop() {
+        let tasks = std::fs::read_dir(format!("/proc/{pid}/task")).into_iter().flatten();
+        for task in tasks.flatten() {
+            let children = std::fs::read_to_string(task.path().join("children"))
+                .unwrap_or_default();
+            for child in children.split_whitespace().filter_map(|c| c.parse::<i32>().ok()) {
+                queue.push(child);
+                let stat = std::fs::read_to_string(format!("/proc/{child}/stat"))
+                    .unwrap_or_default();
+                // Field 5 (pgrp) follows the parenthesised command name.
+                let pgrp = stat.rsplit_once(')').and_then(|(_, rest)| {
+                    rest.split_whitespace().nth(2)?.parse::<i32>().ok()
+                });
+                if let Some(group) = pgrp.and_then(Pid::from_raw)
+                    && !groups.contains(&group)
+                {
+                    groups.push(group);
+                }
+            }
+        }
+    }
+    groups
+}
+
+/// Blocking `job watch <id>`: stream the job's log to stdout through EOF and return
+/// the process exit code for its final state (0 pass, 1 fail, 124 timeout,
+/// 130 cancelled, 3 lost). Shared by every layer's binary.
+pub fn watch_to_exit(jobs: &Jobs, id: &str) -> Result<i32> {
+    let mut cursor = 0;
+    loop {
+        let (record, lines, next) = jobs.watch(id, 30, cursor)?;
+        print!("{lines}");
+        cursor = next;
+        let finished = !matches!(record.state, JobState::Pending | JobState::Running);
+        if !finished || std::fs::metadata(&record.log_path).is_ok_and(|m| cursor < m.len()) {
+            continue;
+        }
+        std::io::Write::flush(&mut std::io::stdout())?;
+        return Ok(match record.state {
+            JobState::Pending | JobState::Running => unreachable!("checked above"),
+            JobState::Passed => 0,
+            JobState::TimedOut => 124,
+            JobState::Cancelled => 130,
+            JobState::Lost => 3,
+            JobState::Failed => 1,
+        });
+    }
+}
+
+fn cleanup(spec: &JobSpec, log_path: &Path) -> Result<()> {
+    let Some(argv) = &spec.cleanup else { return Ok(()); };
+    if argv.is_empty() { return Ok(()); }
+    let mut log = OpenOptions::new().create(true).append(true).open(log_path)?;
+    writeln!(log, "== cleanup ==")?;
+    let child = Command::new(&argv[0]).args(&argv[1..]).current_dir(&spec.cwd)
+        .envs(spec.env.iter().map(|(k, v)| (k, v))).stdin(Stdio::null())
+        .stdout(log.try_clone()?).stderr(log.try_clone()?).process_group(0).spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => { writeln!(log, "cleanup spawn failed: {e}")?; return Ok(()); }
+    };
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        if child.try_wait()?.is_some() { break; }
+        if Instant::now() >= deadline {
+            if let Some(pid) = Pid::from_raw(child.id() as i32) {
+                let _ = kill_process_group(pid, Signal::KILL);
+            }
+            let _ = child.wait();
+            writeln!(log, "cleanup timed out")?;
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
     }
     Ok(())
 }

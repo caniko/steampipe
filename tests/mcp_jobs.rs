@@ -57,3 +57,24 @@ params = { cluster = "tournament", players = 8 }
     client.cancel().await.unwrap();
     server.await.unwrap();
 }
+
+#[test]
+fn cluster_ctl_job_watch_follows_a_job_to_its_verdict() {
+    let dir = tempfile::tempdir().unwrap();
+    let cluster_ctl = env!("CARGO_BIN_EXE_cluster-ctl");
+    let jobs = Jobs::new(dir.path().join("jobs"), cluster_ctl);
+    let id = jobs.start(mcp_layer::jobs::JobSpec {
+        argv: vec!["sh".into(), "-c".into(), "echo watched-line; exit 3".into()],
+        cwd: dir.path().to_owned(),
+        timeout_secs: 10,
+        ..Default::default()
+    }).unwrap();
+    let out = std::process::Command::new(cluster_ctl)
+        .args(["job", "watch", &id])
+        .env("MCP_JOBS_DIR", dir.path().join("jobs"))
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("watched-line"), "{out:?}");
+}

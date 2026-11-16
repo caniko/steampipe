@@ -55,15 +55,27 @@ impl Runner for SteampipeRunner {
         match self.name {
             "cluster-test" => {
                 let p: ClusterTest = params.clone().try_into()?;
+                // cluster-ctl defaults to 8 players; a 1v1 cluster has one VM, so without
+                // an explicit count or a steampipe.toml profile it means 2, as the old tool did.
+                let players = p.players.or_else(|| {
+                    (p.profile.is_none() && p.cluster == "1v1").then_some(2)
+                });
                 let a = &mut spec.argv;
                 a.push(self.ctx.cluster_ctl.to_string_lossy().into_owned());
                 a.push("test".into());
                 option(a, "cluster", Some(&p.cluster));
+                // Cancel/timeout: the job kills local descendants itself; VM games
+                // live on other machines, so stop them through cluster-ctl.
+                spec.cleanup = Some(vec![
+                    self.ctx.cluster_ctl.to_string_lossy().into_owned(),
+                    format!("--cluster={}", p.cluster),
+                    "stop-game".into(),
+                ]);
                 option(a, "profile", p.profile);
                 option(a, "chaos-profile", p.chaos_profile);
                 option(a, "vm-count", p.vm_count);
                 option(a, "network", p.network);
-                option(a, "players", p.players);
+                option(a, "players", players);
                 option(a, "max-runs", p.max_runs);
                 option(a, "timeout", p.timeout);
                 option(a, "hard-timeout", p.hard_timeout);
@@ -122,6 +134,21 @@ mod tests {
     use clap::Parser;
 
     #[test]
+    fn one_v_one_defaults_to_two_players_unless_set_or_profiled() {
+        let ctx = SteampipeCtx { project_root: ".".into(), cluster_ctl: "cluster-ctl".into() };
+        let runner = SteampipeRunner { name: "cluster-test", ctx };
+        let argv = |toml: &str| runner.build(&toml::from_str(toml).unwrap()).unwrap().argv;
+        assert!(argv(r#"cluster = "1v1""#).contains(&"--players=2".to_string()));
+        assert!(argv(r#"cluster = "1v1"
+            players = 3"#).contains(&"--players=3".to_string()));
+        let profiled = argv(r#"cluster = "1v1"
+            profile = "smoke""#);
+        assert!(!profiled.iter().any(|arg| arg.starts_with("--players")));
+        let tournament = argv(r#"cluster = "tournament""#);
+        assert!(!tournament.iter().any(|arg| arg.starts_with("--players")));
+    }
+
+    #[test]
     fn cluster_test_argv_is_accepted_and_unknown_keys_rejected() {
         let ctx = SteampipeCtx { project_root: ".".into(), cluster_ctl: "cluster-ctl".into() };
         let runner = SteampipeRunner { name: "cluster-test", ctx };
@@ -150,6 +177,9 @@ mod tests {
         let spec = runner.build(&params).unwrap();
         assert!(crate::Cli::try_parse_from(&spec.argv).is_ok());
         assert!(spec.argv.contains(&"--profile=smoke".to_string()));
+        let cleanup = spec.cleanup.as_ref().expect("cluster-test stops VM games on cancel");
+        assert!(crate::Cli::try_parse_from(cleanup).is_ok(), "{cleanup:?}");
+        assert_eq!(cleanup.last().map(String::as_str), Some("stop-game"));
         let mut invalid = params.clone();
         invalid.insert("screenshot_backend".into(), toml::Value::String("vnc".into()));
         assert!(runner.build(&invalid).is_err(), "visual settings come from a profile");

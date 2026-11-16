@@ -54,6 +54,8 @@ pub struct Profile {
     #[serde(default = "yes")]
     pub stop_on_failure: bool,
     pub timeout_secs: Option<u64>,
+    #[serde(default)]
+    pub locks: Vec<String>,
 }
 
 impl Profile {
@@ -124,7 +126,10 @@ impl Profiles {
                     .with_context(|| format!("unknown runner: {}", cell.runner))?;
                 let mut spec = runner.build(&cell.params)?;
                 spec.runner.clone_from(&cell.runner);
-                if let Some(timeout) = profile.timeout_secs { spec.timeout_secs = timeout; }
+                spec.sequence_timeout_secs = profile.timeout_secs;
+                spec.locks.extend(profile.locks.iter().cloned());
+                spec.locks.sort();
+                spec.locks.dedup();
                 specs.push(spec);
             }
         }

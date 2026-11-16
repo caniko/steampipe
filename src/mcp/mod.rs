@@ -57,6 +57,10 @@ pub struct ClusterParams {
     pub vm_count: Option<u8>,
 }
 
+fn cluster_params(cluster: &str, vm_count: Option<u8>) -> ClusterParams {
+    ClusterParams { cluster: cluster.to_owned(), vm_count }
+}
+
 /// Build a ClusterConfig from MCP tool parameters.
 /// Also runs pre-flight cleanup (stale PIDs, orphaned processes, leftover sockets).
 /// Returns the config and an optional cleanup summary message.
@@ -120,15 +124,25 @@ fn require_claimed_vms(config: &ClusterConfig<Unchecked>, action: &str) -> Resul
 // ── Input types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterStatusInput {
-    #[serde(flatten)]
-    pub cluster: ClusterParams,
+    /// Cluster name: "1v1" or "tournament" (default: "1v1").
+    #[serde(default = "default_cluster")]
+    pub cluster: String,
+    /// Number of VMs. Derived from cluster if omitted (1v1→1, tournament→7).
+    #[serde(default)]
+    pub vm_count: Option<u8>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterLogsInput {
-    #[serde(flatten)]
-    pub cluster: ClusterParams,
+    /// Cluster name: "1v1" or "tournament" (default: "1v1").
+    #[serde(default = "default_cluster")]
+    pub cluster: String,
+    /// Number of VMs. Derived from cluster if omitted (1v1→1, tournament→7).
+    #[serde(default)]
+    pub vm_count: Option<u8>,
     /// Specific VM target (e.g. "vm-1"). Omit for all VMs.
     #[serde(default)]
     pub vm: Option<String>,
@@ -144,18 +158,28 @@ pub struct ClusterLogsInput {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterStopInput {
-    #[serde(flatten)]
-    pub cluster: ClusterParams,
+    /// Cluster name: "1v1" or "tournament" (default: "1v1").
+    #[serde(default = "default_cluster")]
+    pub cluster: String,
+    /// Number of VMs. Derived from cluster if omitted (1v1→1, tournament→7).
+    #[serde(default)]
+    pub vm_count: Option<u8>,
     /// Also kill Steam and Weston processes (default: false).
     #[serde(default)]
     pub kill_steam: Option<bool>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ClusterHistoryInput {
-    #[serde(flatten)]
-    pub cluster: ClusterParams,
+    /// Cluster name: "1v1" or "tournament" (default: "1v1").
+    #[serde(default = "default_cluster")]
+    pub cluster: String,
+    /// Number of VMs. Derived from cluster if omitted (1v1→1, tournament→7).
+    #[serde(default)]
+    pub vm_count: Option<u8>,
     /// Show only the last N results.
     #[serde(default)]
     pub last: Option<usize>,
@@ -174,7 +198,8 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterStatusInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, cleanup_msg) = build_config(&self.ctx.project_root, &input.cluster)?;
+        let (config, cleanup_msg) =
+            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
         require_bridge(&config)?;
 
         let statuses = crate::status::poll_vm_statuses(
@@ -229,7 +254,8 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterLogsInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, _cleanup_msg) = build_config(&self.ctx.project_root, &input.cluster)?;
+        let (config, _cleanup_msg) =
+            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
         require_bridge(&config)?;
         require_claimed_vms(&config, "read logs")?;
         let lines = input.max_lines.unwrap_or(100);
@@ -265,7 +291,8 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterStopInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, cleanup_msg) = build_config(&self.ctx.project_root, &input.cluster)?;
+        let (config, cleanup_msg) =
+            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
         require_bridge(&config)?;
         require_claimed_vms(&config, "stop games")?;
         let kill_steam = input.kill_steam.unwrap_or(false);
@@ -310,7 +337,8 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterHistoryInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, _cleanup_msg) = build_config(&self.ctx.project_root, &input.cluster)?;
+        let (config, _cleanup_msg) =
+            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
         let history = crate::history::load(&config.state_dir);
 
         if history.results.is_empty() {
@@ -402,13 +430,27 @@ impl SteampipeTools {
     }
 }
 
+/// Where the MCP server keeps job records: `MCP_JOBS_DIR`, else
+/// `<project root>/logs/mcp-jobs`. `cluster-ctl job watch` reads the same place.
+pub fn jobs_dir(project_root: &Path) -> std::path::PathBuf {
+    std::env::var_os("MCP_JOBS_DIR")
+        .map_or_else(|| project_root.join("logs/mcp-jobs"), Into::into)
+}
+
+/// `cluster-ctl job watch <id>`: block until the job ends; exit with its verdict.
+pub fn job_watch_main(id: &str) -> anyhow::Result<i32> {
+    let dir = match std::env::var_os("MCP_JOBS_DIR") {
+        Some(dir) => dir.into(),
+        None => jobs_dir(&detect_project_root()?),
+    };
+    let jobs = mcp_layer::jobs::Jobs::new(dir, std::env::current_exe()?);
+    mcp_layer::jobs::watch_to_exit(&jobs, id)
+}
+
 pub async fn serve() -> anyhow::Result<()> {
     let project_root = detect_project_root()?;
     let jobs = JobTools {
-        jobs: mcp_layer::jobs::Jobs::new(
-            project_root.join("logs/mcp-jobs"),
-            std::env::current_exe()?,
-        ),
+        jobs: mcp_layer::jobs::Jobs::new(jobs_dir(&project_root), std::env::current_exe()?),
         registry: std::sync::Arc::default(),
         profile_paths: vec![],
     };
@@ -488,6 +530,16 @@ mod tests {
             vm_count: None,
         };
         assert_eq!(params.cluster, "1v1");
+    }
+
+    #[test]
+    fn cluster_tool_inputs_reject_unknown_keys() {
+        let ok: ClusterStatusInput = serde_json::from_str(r#"{"cluster": "1v1"}"#).unwrap();
+        assert_eq!(ok.cluster, "1v1");
+        assert!(serde_json::from_str::<ClusterStatusInput>(r#"{"clustr": "1v1"}"#).is_err());
+        assert!(serde_json::from_str::<ClusterLogsInput>(r#"{"line": 5}"#).is_err());
+        assert!(serde_json::from_str::<ClusterStopInput>(r#"{"steam": true}"#).is_err());
+        assert!(serde_json::from_str::<ClusterHistoryInput>(r#"{"limit": 5}"#).is_err());
     }
 
     #[test]

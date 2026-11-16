@@ -31,7 +31,8 @@ pub struct WatchInput { id: String, wait_secs: Option<u64>, cursor: Option<u64> 
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct LogsInput { id: String, tail: Option<usize>, pattern: Option<String> }
+pub struct LogsInput { id: String, tail: Option<usize>, pattern: Option<String>,
+    artifact: Option<Value> }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -115,7 +116,18 @@ impl JobTools {
     {
         let pattern = input.pattern.as_deref().map(Regex::new).transpose().map_err(error)?;
         let record = self.jobs.get(&input.id).map_err(|e| error(format!("{e:#}")))?;
-        let file = std::fs::File::open(record.log_path).map_err(error)?;
+        let path = match input.artifact {
+            None => record.log_path,
+            Some(value) => {
+                let artifact = if let Some(index) = value.as_u64() {
+                    usize::try_from(index).ok().and_then(|i| record.spec.artifacts.get(i))
+                } else if let Some(path) = value.as_str() {
+                    record.spec.artifacts.iter().find(|p| *p == path)
+                } else { None }.ok_or_else(|| error("artifact is not declared"))?;
+                record.spec.cwd.join(artifact)
+            }
+        };
+        let file = std::fs::File::open(path).map_err(error)?;
         let limit = input.tail.unwrap_or(500).min(500);
         let mut lines = VecDeque::new();
         for line in BufReader::new(file).lines() {
@@ -134,8 +146,16 @@ impl JobTools {
     async fn job_cancel(&self, Parameters(input): Parameters<IdInput>)
         -> Result<String, ErrorData>
     {
-        self.jobs.cancel(&input.id).map_err(|e| error(format!("{e:#}")))?;
-        Ok(json!({"id": input.id}).to_string())
+        let jobs = self.jobs.clone();
+        let record = tokio::task::spawn_blocking(move || {
+            let grace = jobs.get(&input.id)?.spec.grace_secs;
+            jobs.cancel(&input.id)?;
+            let (record, _, _) = jobs.watch(&input.id, grace.saturating_add(65), 0)?;
+            anyhow::ensure!(!matches!(record.state, JobState::Pending | JobState::Running),
+                "cancellation timed out");
+            Ok::<_, anyhow::Error>(record)
+        }).await.map_err(error)?.map_err(|e| error(format!("{e:#}")))?;
+        serde_json::to_string(&record).map_err(error)
     }
 
     #[tool(description = "List recent jobs")]

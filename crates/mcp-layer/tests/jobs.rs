@@ -119,3 +119,106 @@ fn dead_supervisor_is_lost() {
             rustix::process::Pid::from_raw(pgid as i32).unwrap(), rustix::process::Signal::KILL);
     }
 }
+
+#[test]
+fn cleanup_kills_separate_group_before_unlock() {
+    let (dir, jobs) = setup();
+    let mut s = spec("setsid sleep 60 & echo $! > child; wait");
+    s.cwd = dir.path().into();
+    s.grace_secs = 1;
+    s.locks.push("exclusive".into());
+    s.cleanup = Some(vec!["sh".into(), "-c".into(),
+        // The job's descendant-group kill may already have stopped the child.
+        "touch cleaning; sleep 0.5; kill $(cat child) 2>/dev/null; echo done".into()]);
+    let id = jobs.start(s.clone()).unwrap();
+    while !dir.path().join("child").exists() { thread::sleep(Duration::from_millis(10)); }
+    let pid: u32 = std::fs::read_to_string(dir.path().join("child")).unwrap().trim().parse().unwrap();
+    jobs.cancel(&id).unwrap();
+    while !dir.path().join("cleaning").exists() { thread::sleep(Duration::from_millis(10)); }
+    assert!(jobs.start(s.clone()).is_err());
+    assert_eq!(finished(&jobs, &id).state, JobState::Cancelled);
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    assert!(stat.is_empty() || stat.split(") ").nth(1).unwrap().starts_with('Z'));
+    assert!(std::fs::read_to_string(dir.path().join(id).join("output.log"))
+        .unwrap().contains("== cleanup ==\ndone"));
+    let next = jobs.start(s).unwrap();
+    jobs.cancel(&next).unwrap();
+    finished(&jobs, &next);
+}
+
+#[test]
+fn cancel_stops_descendants_in_their_own_group_without_cleanup() {
+    let (dir, jobs) = setup();
+    let mut s = spec("setsid sleep 60 & echo $! > child; wait");
+    s.cwd = dir.path().into();
+    s.grace_secs = 1;
+    let id = jobs.start(s).unwrap();
+    while !dir.path().join("child").exists() { thread::sleep(Duration::from_millis(10)); }
+    let pid: u32 = std::fs::read_to_string(dir.path().join("child")).unwrap().trim().parse().unwrap();
+    jobs.cancel(&id).unwrap();
+    assert_eq!(finished(&jobs, &id).state, JobState::Cancelled);
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
+    assert!(stat.is_empty() || stat.split(") ").nth(1).unwrap().starts_with('Z'), "{stat}");
+}
+
+#[test]
+fn artifact_marker_fails_job() {
+    let (dir, jobs) = setup();
+    let mut s = spec("echo FATAL > artifact.log");
+    s.cwd = dir.path().into();
+    s.artifacts.push("artifact.log".into());
+    s.fail_markers.push("FATAL".into());
+    let id = jobs.start(s).unwrap();
+    let record = finished(&jobs, &id);
+    assert_eq!(record.state, JobState::Failed);
+    assert_eq!(record.marker_hits[0].text, "FATAL");
+}
+
+#[test]
+fn lost_supervisor_runs_cleanup() {
+    let (dir, jobs) = setup();
+    let mut s = spec("sleep 60");
+    s.cwd = dir.path().into();
+    s.cleanup = Some(vec!["sh".into(), "-c".into(), "echo recovered > recovered".into()]);
+    let id = jobs.start(s).unwrap();
+    let record = jobs.get(&id).unwrap();
+    let pid = rustix::process::Pid::from_raw(record.supervisor_pid.unwrap() as i32).unwrap();
+    rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
+    assert_eq!(finished(&jobs, &id).state, JobState::Lost);
+    assert_eq!(std::fs::read_to_string(dir.path().join("recovered")).unwrap(), "recovered\n");
+}
+
+#[test]
+fn timeout_cell_continues_sequence() {
+    let (_dir, jobs) = setup();
+    let mut first = spec("sleep 30");
+    first.timeout_secs = 1;
+    first.grace_secs = 0;
+    let id = jobs.start_sequence(vec![first, spec("echo SECOND-RAN")], false).unwrap();
+    let (record, log, _) = jobs.watch(&id, 10, 0).unwrap();
+    assert_eq!(record.state, JobState::TimedOut);
+    assert!(log.contains("SECOND-RAN"));
+}
+
+#[test]
+fn sequence_has_single_deadline() {
+    let (_dir, jobs) = setup();
+    let mut s = spec("sleep 0.75");
+    s.sequence_timeout_secs = Some(1);
+    s.grace_secs = 0;
+    let start = Instant::now();
+    let id = jobs.start_sequence(vec![s; 3], false).unwrap();
+    assert_eq!(finished(&jobs, &id).state, JobState::TimedOut);
+    assert!(start.elapsed() < Duration::from_millis(1500));
+}
+
+#[test]
+fn cli_watch_drains_large_log() {
+    let (dir, jobs) = setup();
+    let id = jobs.start(spec("head -c 100000 /dev/zero | tr '\\0' x; echo; echo END"))
+        .unwrap();
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_job-supervisor"))
+        .args(["job", "watch", &id]).env("MCP_JOBS_DIR", dir.path()).output().unwrap();
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).ends_with("END\n"));
+}

@@ -18,6 +18,7 @@ impl Runner for EchoRunner {
             cwd: std::env::current_dir()?,
             env: vec![("msg".into(), p.msg), ("code".into(), p.code.to_string())],
             timeout_secs: 10,
+            locks: vec!["a".into(), "runner".into()],
             ..Default::default()
         })
     }
@@ -76,4 +77,17 @@ fn invalid_profile_and_file() {
     std::fs::write(&path, "[").unwrap();
     assert!(format!("{:#}", Profiles::load(std::slice::from_ref(&path)).err().unwrap())
         .contains("bad.toml"));
+}
+
+#[test]
+fn declared_locks_are_merged_and_deduplicated() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("profiles.toml");
+    std::fs::write(&path, concat!("[job_profiles.locked]\nrunner='echo'\n",
+        "params={msg='ok',code=0}\nlocks=['a','a','b']\n")).unwrap();
+    let profiles = Profiles::load(&[path]).unwrap();
+    let mut registry = RunnerRegistry::default();
+    registry.register(EchoRunner).unwrap();
+    let specs = profiles.resolve(ProfileOrInline::Name("locked"), Table::new(), &registry).unwrap();
+    assert_eq!(specs[0].locks, ["a", "b", "runner"]);
 }
