@@ -1,6 +1,14 @@
 use clap::Parser;
 
 fn main() {
+    match mcp_layer::jobs::run_if_internal() {
+        Ok(true) => return,
+        Ok(false) => {}
+        Err(err) => {
+            eprintln!("{err:#}");
+            std::process::exit(1);
+        }
+    }
     let cli = steampipe::Cli::parse();
     std::process::exit(match steampipe::run(cli) {
         Ok(()) => 0,

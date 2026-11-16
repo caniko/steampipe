@@ -103,7 +103,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2da7a9955c48acfce671b92a5d671a31d0c01611eb447483d1d0c340adda0205"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "hmac",
  "sha-1",
 ]
@@ -235,17 +235,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-trait"
-version = "0.1.89"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "atomic"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -293,6 +282,12 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
 name = "base64ct"
@@ -1038,12 +1033,12 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.23.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
+checksum = "ed17f5901b6630b993ca003def43f2f8ef4014fc13b047b57aad617ff32bc2ec"
 dependencies = [
- "darling_core 0.23.0",
- "darling_macro 0.23.0",
+ "darling_core 0.24.1",
+ "darling_macro 0.24.1",
 ]
 
 [[package]]
@@ -1062,15 +1057,15 @@ dependencies = [
 
 [[package]]
 name = "darling_core"
-version = "0.23.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9865a50f7c335f53564bb694ef660825eb8610e0a53d3e11bf1b0d3df31e03b0"
+checksum = "6837e2cf7485aaae18f86181d2f0e9a7ed297a025e220aeabf63fdebd3a2ddff"
 dependencies = [
  "ident_case",
  "proc-macro2",
  "quote",
  "strsim",
- "syn 2.0.117",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1086,13 +1081,13 @@ dependencies = [
 
 [[package]]
 name = "darling_macro"
-version = "0.23.0"
+version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
+checksum = "2ac7135c3ef02b2f7833bbeb1be5ba7f966dcde8a87c6b87f65a778d71a02785"
 dependencies = [
- "darling_core 0.23.0",
+ "darling_core 0.24.1",
  "quote",
- "syn 2.0.117",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -1969,7 +1964,7 @@ version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
  "futures-util",
@@ -2682,6 +2677,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62bb907fe88d54d8d9ce32a3cceab4218ed2f6b7d35617cafe9adf84e43919cb"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "mcp-layer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "regex",
+ "rmcp",
+ "rustix 1.1.4",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4079,7 +4091,7 @@ version = "0.13.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "bytes",
  "encoding_rs",
  "futures-core",
@@ -4129,37 +4141,41 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.17.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a0ce46f9101dc911f07e1468084c057839d15b08040d110820c5513312ef56a"
+checksum = "b5949e504d5ab9944a168259afc0c39ac0230627b6ec5367ace194c59bcbe163"
 dependencies = [
- "async-trait",
- "base64",
+ "base64 0.23.1",
  "chrono",
  "futures",
+ "indexmap",
+ "libc",
  "pastey",
  "pin-project-lite",
  "rmcp-macros",
  "schemars",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
 name = "rmcp-macros"
-version = "0.17.0"
+version = "3.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "abad6f5f46e220e3bda2fc90fd1ad64c1c2a2bd716d52c845eb5c9c64cda7542"
+checksum = "b98a686693ee91b665c6f89f182fca6e141c8a63dc113b11b38c1bf3491606b7"
 dependencies = [
- "darling 0.23.0",
+ "darling 0.24.1",
  "proc-macro2",
  "quote",
  "serde_json",
- "syn 2.0.117",
+ "syn 3.0.10",
 ]
 
 [[package]]
@@ -4857,7 +4873,7 @@ source = "git+https://github.com/caniko/steam-vent.git?branch=integration#eeb45a
 dependencies = [
  "another-steam-totp",
  "async-stream",
- "base64",
+ "base64 0.22.1",
  "binrw",
  "bytemuck",
  "byteorder 1.5.0",
@@ -4936,7 +4952,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
- "base64",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "clap_complete",
@@ -4944,6 +4960,7 @@ dependencies = [
  "dirs",
  "image",
  "image-compare",
+ "mcp-layer",
  "memory-admission",
  "ratatui",
  "regex",
@@ -5035,6 +5052,17 @@ name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae9ccbea3a7b0b09443036490c8f34a8b1b760fd345e5c0dae0aac718faea79"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5147,7 +5175,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4676b37242ccbd1aabf56edb093a4827dc49086c0ffd764a5705899e0f35f8f7"
 dependencies = [
  "anyhow",
- "base64",
+ "base64 0.22.1",
  "bitflags 2.11.0",
  "fancy-regex",
  "filedescriptor",

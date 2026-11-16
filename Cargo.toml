@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/cluster-guard-prompt"]
+members = ["crates/cluster-guard-prompt", "crates/mcp-layer"]
 resolver = "3"
 
 [package]
@@ -48,7 +48,8 @@ tokio = { version = "1", features = [
     "time",
 ] }
 toml = "1"
-rmcp = { version = "0.17", features = ["server", "transport-io"] }
+rmcp = { version = "=3.10.0", features = ["server", "client", "transport-io"] }
+mcp-layer = { path = "crates/mcp-layer" }
 schemars = "1"
 steam-vent = { git = "https://github.com/caniko/steam-vent.git", branch = "integration" }
 tracing = "0.1"
