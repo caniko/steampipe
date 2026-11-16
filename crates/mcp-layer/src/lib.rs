@@ -9,8 +9,10 @@ use std::{collections::HashSet, future::Future, pin::Pin};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     handler::server::tool::{ToolCallContext, ToolRouter},
-    model::{CallToolRequestParams, CallToolResponse, ListToolsResult, PaginatedRequestParams,
-        ServerConfig, Tool},
+    model::{
+        CallToolRequestParams, CallToolResponse, ListToolsResult, PaginatedRequestParams,
+        ServerConfig, Tool,
+    },
     service::RequestContext,
 };
 
@@ -51,23 +53,39 @@ pub struct Layered {
 
 impl Layered {
     pub fn new(info: ServerConfig) -> Self {
-        Self { info, sets: Vec::new() }
+        Self {
+            info,
+            sets: Vec::new(),
+        }
     }
 
     /// Add a tool set. Panics if any listed name is duplicated, including within the set.
     pub fn with(mut self, set: impl ToolSet) -> Self {
-        let mut names: HashSet<_> = self.sets.iter().flat_map(|s| s.tools())
-            .map(|tool| tool.name).collect();
+        let mut names: HashSet<_> = self
+            .sets
+            .iter()
+            .flat_map(|s| s.tools())
+            .map(|tool| tool.name)
+            .collect();
         for tool in set.tools() {
-            assert!(names.insert(tool.name.clone()), "duplicate tool name: {}", tool.name);
+            assert!(
+                names.insert(tool.name.clone()),
+                "duplicate tool name: {}",
+                tool.name
+            );
         }
         self.sets.push(Box::new(set));
         self
     }
 
     pub async fn serve_stdio(self) -> anyhow::Result<()> {
-        let _ = tracing_subscriber::fmt().with_writer(std::io::stderr).try_init();
-        self.serve(rmcp::transport::stdio()).await?.waiting().await?;
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .try_init();
+        self.serve(rmcp::transport::stdio())
+            .await?
+            .waiting()
+            .await?;
         Ok(())
     }
 }
@@ -88,7 +106,10 @@ impl ServerHandler for Layered {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
-        self.sets.iter().flat_map(|set| set.tools()).find(|tool| tool.name == name)
+        self.sets
+            .iter()
+            .flat_map(|set| set.tools())
+            .find(|tool| tool.name == name)
     }
 
     async fn call_tool(

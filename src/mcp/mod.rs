@@ -1,11 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use mcp_layer::{Layered, Routed, ToolSet, job_tools::JobTools};
-use rmcp::{
-    handler::server::wrapper::Parameters,
-    model::*,
-    tool, tool_router,
-};
+use rmcp::{handler::server::wrapper::Parameters, model::*, tool, tool_router};
 
 use crate::core::config::{ClusterConfig, Unchecked, detect_project_root};
 use crate::core::state;
@@ -24,18 +20,23 @@ pub struct SteampipeTools {
 }
 
 pub fn tool_set(ctx: SteampipeCtx) -> impl ToolSet {
-    Routed { state: SteampipeTools { ctx }, router: SteampipeTools::tool_router() }
+    Routed {
+        state: SteampipeTools { ctx },
+        router: SteampipeTools::tool_router(),
+    }
 }
 
 pub fn layered(ctx: SteampipeCtx, mut jobs: JobTools) -> Layered {
-    jobs.profile_paths.insert(0, ctx.project_root.join("steampipe.toml"));
+    jobs.profile_paths
+        .insert(0, ctx.project_root.join("steampipe.toml"));
     runners::register(std::sync::Arc::make_mut(&mut jobs.registry), &ctx)
         .expect("duplicate steampipe runner");
     let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
     info.instructions = Some(
         "Steampipe: cluster orchestration tools for multiplayer game testing. \
          Provides native cluster management (status, logs, deploy, test, stop, history) \
-         with self-healing pre-flight checks, and a generic Nix flake runner.".into(),
+         with self-healing pre-flight checks, and a generic Nix flake runner."
+            .into(),
     );
     Layered::new(info).with(tool_set(ctx)).with(jobs.tool_set())
 }
@@ -58,7 +59,10 @@ pub struct ClusterParams {
 }
 
 fn cluster_params(cluster: &str, vm_count: Option<u8>) -> ClusterParams {
-    ClusterParams { cluster: cluster.to_owned(), vm_count }
+    ClusterParams {
+        cluster: cluster.to_owned(),
+        vm_count,
+    }
 }
 
 /// Build a ClusterConfig from MCP tool parameters.
@@ -198,8 +202,10 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterStatusInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, cleanup_msg) =
-            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
+        let (config, cleanup_msg) = build_config(
+            &self.ctx.project_root,
+            &cluster_params(&input.cluster, input.vm_count),
+        )?;
         require_bridge(&config)?;
 
         let statuses = crate::status::poll_vm_statuses(
@@ -254,8 +260,10 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterLogsInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, _cleanup_msg) =
-            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
+        let (config, _cleanup_msg) = build_config(
+            &self.ctx.project_root,
+            &cluster_params(&input.cluster, input.vm_count),
+        )?;
         require_bridge(&config)?;
         require_claimed_vms(&config, "read logs")?;
         let lines = input.max_lines.unwrap_or(100);
@@ -291,8 +299,10 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterStopInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, cleanup_msg) =
-            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
+        let (config, cleanup_msg) = build_config(
+            &self.ctx.project_root,
+            &cluster_params(&input.cluster, input.vm_count),
+        )?;
         require_bridge(&config)?;
         require_claimed_vms(&config, "stop games")?;
         let kill_steam = input.kill_steam.unwrap_or(false);
@@ -337,8 +347,10 @@ impl SteampipeTools {
         &self,
         Parameters(input): Parameters<ClusterHistoryInput>,
     ) -> Result<CallToolResult, ErrorData> {
-        let (config, _cleanup_msg) =
-            build_config(&self.ctx.project_root, &cluster_params(&input.cluster, input.vm_count))?;
+        let (config, _cleanup_msg) = build_config(
+            &self.ctx.project_root,
+            &cluster_params(&input.cluster, input.vm_count),
+        )?;
         let history = crate::history::load(&config.state_dir);
 
         if history.results.is_empty() {
@@ -433,8 +445,7 @@ impl SteampipeTools {
 /// Where the MCP server keeps job records: `MCP_JOBS_DIR`, else
 /// `<project root>/logs/mcp-jobs`. `cluster-ctl job watch` reads the same place.
 pub fn jobs_dir(project_root: &Path) -> std::path::PathBuf {
-    std::env::var_os("MCP_JOBS_DIR")
-        .map_or_else(|| project_root.join("logs/mcp-jobs"), Into::into)
+    std::env::var_os("MCP_JOBS_DIR").map_or_else(|| project_root.join("logs/mcp-jobs"), Into::into)
 }
 
 /// `cluster-ctl job watch <id>`: block until the job ends; exit with its verdict.
@@ -454,7 +465,15 @@ pub async fn serve() -> anyhow::Result<()> {
         registry: std::sync::Arc::default(),
         profile_paths: vec![],
     };
-    layered(SteampipeCtx { cluster_ctl: std::env::current_exe()?, project_root }, jobs).serve_stdio().await
+    layered(
+        SteampipeCtx {
+            cluster_ctl: std::env::current_exe()?,
+            project_root,
+        },
+        jobs,
+    )
+    .serve_stdio()
+    .await
 }
 
 #[cfg(test)]
@@ -472,29 +491,64 @@ mod tests {
             format!(
                 "binary_name='fixture'\ncargo_package='fixture'\nvm_user='fixture'\n\
                  remote_dir='/home/fixture/work'\nlock_dir='{}'\n[cluster]\nstate_dir='{}'\n",
-                dir.path().join("locks").display(), dir.path().join("state").display(),
+                dir.path().join("locks").display(),
+                dir.path().join("state").display(),
             ),
-        ).unwrap();
+        )
+        .unwrap();
         let jobs = JobTools {
             jobs: mcp_layer::jobs::Jobs::new(dir.path().join("jobs"), "unused"),
             registry: std::sync::Arc::default(),
             profile_paths: vec![],
         };
-        let ctx = SteampipeCtx { project_root: dir.path().to_owned(), cluster_ctl: "cluster-ctl".into() };
+        let ctx = SteampipeCtx {
+            project_root: dir.path().to_owned(),
+            cluster_ctl: "cluster-ctl".into(),
+        };
         let (server_io, client_io) = tokio::io::duplex(8192);
         let server = tokio::spawn(async move {
-            layered(ctx, jobs).serve(server_io).await.unwrap().waiting().await.unwrap();
+            layered(ctx, jobs)
+                .serve(server_io)
+                .await
+                .unwrap()
+                .waiting()
+                .await
+                .unwrap();
         });
         let client = ().serve(client_io).await.unwrap();
-        let names: Vec<_> = client.list_all_tools().await.unwrap().into_iter()
-            .map(|tool| tool.name.to_string()).collect();
-        assert_eq!(names, [
-            "cluster_history", "cluster_logs", "cluster_status", "cluster_stop",
-            "job_cancel", "job_list", "job_logs", "job_profiles", "job_start", "job_watch",
-        ]);
-        let response = client.call_tool(CallToolRequestParams::new("cluster_history")
-            .with_arguments(serde_json::Map::new())).await.unwrap();
-        assert_eq!(response.content[0].as_text().unwrap().text, "No test history found.");
+        let names: Vec<_> = client
+            .list_all_tools()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        assert_eq!(
+            names,
+            [
+                "cluster_history",
+                "cluster_logs",
+                "cluster_status",
+                "cluster_stop",
+                "job_cancel",
+                "job_list",
+                "job_logs",
+                "job_profiles",
+                "job_start",
+                "job_watch",
+            ]
+        );
+        let response = client
+            .call_tool(
+                CallToolRequestParams::new("cluster_history")
+                    .with_arguments(serde_json::Map::new()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            response.content[0].as_text().unwrap().text,
+            "No test history found."
+        );
         client.cancel().await.unwrap();
         server.await.unwrap();
     }

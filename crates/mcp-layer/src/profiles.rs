@@ -30,8 +30,12 @@ impl RunnerRegistry {
     }
 }
 
-fn one() -> u32 { 1 }
-fn yes() -> bool { true }
+fn one() -> u32 {
+    1
+}
+fn yes() -> bool {
+    true
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -60,8 +64,10 @@ pub struct Profile {
 
 impl Profile {
     fn validate(&self) -> Result<()> {
-        ensure!(self.runner.is_some() != !self.cells.is_empty(),
-            "exactly one of runner or cells is required");
+        ensure!(
+            self.runner.is_some() != !self.cells.is_empty(),
+            "exactly one of runner or cells is required"
+        );
         ensure!(self.repeats > 0, "repeats must be positive");
         Ok(())
     }
@@ -84,15 +90,20 @@ impl Profiles {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(e).with_context(|| format!("reading {}", path.display())),
             };
-            let root: Table = toml::from_str(&text)
-                .with_context(|| format!("parsing {}", path.display()))?;
+            let root: Table =
+                toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
             if let Some(value) = root.get("job_profiles") {
-                let entries = value.as_table().context("job_profiles must be a table")
+                let entries = value
+                    .as_table()
+                    .context("job_profiles must be a table")
                     .with_context(|| format!("parsing {}", path.display()))?;
                 for (name, value) in entries {
-                    let profile: Profile = value.clone().try_into()
+                    let profile: Profile = value
+                        .clone()
+                        .try_into()
                         .with_context(|| format!("profile {name} in {}", path.display()))?;
-                    profile.validate()
+                    profile
+                        .validate()
                         .with_context(|| format!("profile {name} in {}", path.display()))?;
                     profiles.insert(name.clone(), profile);
                 }
@@ -101,28 +112,43 @@ impl Profiles {
         Ok(Self(profiles))
     }
 
-    pub fn list(&self) -> &BTreeMap<String, Profile> { &self.0 }
+    pub fn list(&self) -> &BTreeMap<String, Profile> {
+        &self.0
+    }
 
-    pub fn resolve(&self, input: ProfileOrInline<'_>, overrides: Table,
-        registry: &RunnerRegistry) -> Result<Vec<JobSpec>>
-    {
+    pub fn resolve(
+        &self,
+        input: ProfileOrInline<'_>,
+        overrides: Table,
+        registry: &RunnerRegistry,
+    ) -> Result<Vec<JobSpec>> {
         let profile = match input {
-            ProfileOrInline::Name(name) => self.0.get(name)
+            ProfileOrInline::Name(name) => self
+                .0
+                .get(name)
                 .with_context(|| format!("unknown profile: {name}"))?,
             ProfileOrInline::Inline(profile) => profile,
         };
         profile.validate()?;
-        ensure!(profile.runner.is_some() || overrides.is_empty(),
-            "overrides are only supported for single-runner profiles");
+        ensure!(
+            profile.runner.is_some() || overrides.is_empty(),
+            "overrides are only supported for single-runner profiles"
+        );
         let cells = if let Some(runner) = &profile.runner {
             let mut params = profile.params.clone();
             params.extend(overrides);
-            vec![Cell { runner: runner.clone(), params }]
-        } else { profile.cells.clone() };
+            vec![Cell {
+                runner: runner.clone(),
+                params,
+            }]
+        } else {
+            profile.cells.clone()
+        };
         let mut specs = Vec::new();
         for _ in 0..profile.repeats {
             for cell in &cells {
-                let runner = registry.get(&cell.runner)
+                let runner = registry
+                    .get(&cell.runner)
                     .with_context(|| format!("unknown runner: {}", cell.runner))?;
                 let mut spec = runner.build(&cell.params)?;
                 spec.runner.clone_from(&cell.runner);
