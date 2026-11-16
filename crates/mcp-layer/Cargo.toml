@@ -1,0 +1,22 @@
+[package]
+name = "mcp-layer"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+regex = "1"
+rustix = { version = "1", features = ["process", "fs"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1.1"
+rmcp = { version = "=3.10.0", features = ["server", "client", "macros", "transport-io"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt"] }
+schemars = "1"
+tokio = { version = "1", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-util"] }
+tempfile = "3"
