@@ -177,15 +177,45 @@ fn artifact_marker_fails_job() {
 #[test]
 fn lost_supervisor_runs_cleanup() {
     let (dir, jobs) = setup();
-    let mut s = spec("sleep 60");
+    // A descendant in its own group must not survive Lost recovery either.
+    let mut s = spec("setsid sleep 60 & echo $! > child; wait");
     s.cwd = dir.path().into();
     s.cleanup = Some(vec!["sh".into(), "-c".into(), "echo recovered > recovered".into()]);
     let id = jobs.start(s).unwrap();
+    while !dir.path().join("child").exists() { thread::sleep(Duration::from_millis(10)); }
+    let child: u32 = std::fs::read_to_string(dir.path().join("child")).unwrap().trim().parse().unwrap();
     let record = jobs.get(&id).unwrap();
     let pid = rustix::process::Pid::from_raw(record.supervisor_pid.unwrap() as i32).unwrap();
     rustix::process::kill_process(pid, rustix::process::Signal::KILL).unwrap();
     assert_eq!(finished(&jobs, &id).state, JobState::Lost);
     assert_eq!(std::fs::read_to_string(dir.path().join("recovered")).unwrap(), "recovered\n");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let gone = || {
+        let stat = std::fs::read_to_string(format!("/proc/{child}/stat")).unwrap_or_default();
+        stat.is_empty() || stat.split(") ").nth(1).unwrap().starts_with('Z')
+    };
+    while !gone() && Instant::now() < deadline { thread::sleep(Duration::from_millis(20)); }
+    assert!(gone(), "separate-group descendant survived Lost recovery");
+}
+
+#[test]
+fn declared_artifacts_cover_every_cell_in_its_own_cwd() {
+    let (dir, jobs) = setup();
+    let (first_dir, second_dir) = (dir.path().join("one"), dir.path().join("two"));
+    std::fs::create_dir_all(&first_dir).unwrap();
+    std::fs::create_dir_all(&second_dir).unwrap();
+    let mut first = spec("true");
+    first.cwd = first_dir.clone();
+    first.artifacts.push("a.log".into());
+    let mut second = spec("true");
+    second.cwd = second_dir.clone();
+    second.artifacts.push("b.log".into());
+    let id = jobs.start_sequence(vec![first, second], true).unwrap();
+    finished(&jobs, &id);
+    assert_eq!(jobs.declared_artifacts(&id).unwrap(), vec![
+        ("a.log".to_string(), first_dir.join("a.log")),
+        ("b.log".to_string(), second_dir.join("b.log")),
+    ]);
 }
 
 #[test]

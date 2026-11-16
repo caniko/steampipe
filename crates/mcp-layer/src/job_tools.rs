@@ -119,12 +119,14 @@ impl JobTools {
         let path = match input.artifact {
             None => record.log_path,
             Some(value) => {
-                let artifact = if let Some(index) = value.as_u64() {
-                    usize::try_from(index).ok().and_then(|i| record.spec.artifacts.get(i))
+                // Index or declared path into the artifacts of every cell, in order.
+                let declared = self.jobs.declared_artifacts(&input.id)
+                    .map_err(|e| error(format!("{e:#}")))?;
+                if let Some(index) = value.as_u64() {
+                    usize::try_from(index).ok().and_then(|i| declared.get(i))
                 } else if let Some(path) = value.as_str() {
-                    record.spec.artifacts.iter().find(|p| *p == path)
-                } else { None }.ok_or_else(|| error("artifact is not declared"))?;
-                record.spec.cwd.join(artifact)
+                    declared.iter().find(|(declared, _)| declared == path)
+                } else { None }.ok_or_else(|| error("artifact is not declared"))?.1.clone()
             }
         };
         let file = std::fs::File::open(path).map_err(error)?;

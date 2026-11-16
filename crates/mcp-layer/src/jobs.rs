@@ -203,7 +203,9 @@ impl Jobs {
                     serde_json::from_slice(&fs::read(path.join("record.json"))?)?;
                 if failed.state.active() {
                     if let Some(pid) = failed.pgid.and_then(|p| Pid::from_raw(p as i32)) {
-                        let _ = kill_process_group(pid, Signal::KILL);
+                        for group in process_groups_under(pid) {
+                            let _ = kill_process_group(group, Signal::KILL);
+                        }
                     }
                     failed.state = JobState::Lost;
                     failed.end = Some(now());
@@ -213,6 +215,18 @@ impl Jobs {
             }
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Every declared artifact of a job as `(declared path, resolved path)`, across all
+    /// cells of a sequence, each resolved against its own cell's working directory.
+    pub fn declared_artifacts(&self, id: &str) -> Result<Vec<(String, PathBuf)>> {
+        let dir = self.job_dir(id)?;
+        let specs = match fs::read(dir.join("sequence.json")) {
+            Ok(bytes) => serde_json::from_slice::<(Vec<JobSpec>, bool)>(&bytes)?.0,
+            Err(_) => vec![self.get(id)?.spec],
+        };
+        Ok(specs.iter().flat_map(|spec| spec.artifacts.iter()
+            .map(|artifact| (artifact.clone(), spec.cwd.join(artifact)))).collect())
     }
 
     pub fn get(&self, id: &str) -> Result<JobRecord> {
@@ -229,7 +243,9 @@ impl Jobs {
                 held.push(lock(&self.dir.join("locks").join(key), false)?);
             }
             if let Some(pid) = record.pgid.and_then(|p| Pid::from_raw(p as i32)) {
-                let _ = kill_process_group(pid, Signal::KILL);
+                for group in process_groups_under(pid) {
+                    let _ = kill_process_group(group, Signal::KILL);
+                }
             }
             cleanup(&record.spec, &record.log_path)?;
             record.state = JobState::Lost;
