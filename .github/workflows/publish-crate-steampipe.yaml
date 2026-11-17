@@ -132,6 +132,8 @@ jobs:
           nix develop -c cargo package --locked --allow-dirty --no-verify -p steampipe --target-dir "$RUNNER_TEMP/simit-package-target"
           mkdir -p "$RUNNER_TEMP/simit-crates/steampipe"
           cp "$RUNNER_TEMP/simit-package-target/package/steampipe-$version.crate" "$RUNNER_TEMP/simit-crates/steampipe/"
+          size="$(wc -c < "$RUNNER_TEMP/simit-crates/steampipe/steampipe-$version.crate")"
+          test "$size" -le 10485760 || { echo "crate steampipe archive is $size bytes, over the crates.io upload limit of 10485760 bytes (10 MiB)" >&2; exit 1; }
       - name: Retain original-run archive steampipe
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

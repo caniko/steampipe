@@ -21,6 +21,8 @@ concurrency:
 
 jobs:
   build:
+    needs: [changes]
+    if: ${{ needs.changes.outputs.code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +59,13 @@ jobs:
         env:
           ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
           HARBOR_ATTIC_MANIFEST: attic-paths.txt
-        run: nix run '.#push-flake-inputs'
+          HARBOR_ATTIC_BUILT_PATHS: "1"
+        run: |
+          for attempt in 1 2 3; do
+            nix run '.#push-flake-inputs' && exit 0
+            test "$attempt" = 3 || sleep $((attempt * 30))
+          done
+          exit 1
       - name: Upload flake input manifest
         if: ${{ github.event_name == 'push' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -66,3 +74,57 @@ jobs:
           path: attic-paths.txt
           if-no-files-found: error
           retention-days: 7
+
+  changes:
+    name: Classify changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      code: ${{ steps.classify.outputs.code }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Classify changed paths
+        id: classify
+        shell: bash
+        env:
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # Root Markdown nobody builds is documentation.
+          classify() {
+            case "$1" in
+              */*) return 1 ;;
+              README.md) return 1 ;;
+              *.md) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          code=true
+          base=
+          # A branch push compares with its fork point, not its previous push, which
+          # may never have passed. Default-branch pushes qualify and publish every
+          # revision, so they always run.
+          if [ "$EVENT_NAME" = pull_request ]; then
+            base=$PR_BASE
+          elif [ "$EVENT_NAME" = push ]; then
+            case "$GITHUB_REF" in
+              "refs/heads/$DEFAULT_BRANCH") ;;
+              refs/heads/*) base=$(git merge-base "origin/$DEFAULT_BRANCH" HEAD 2>/dev/null) || base= ;;
+            esac
+          fi
+          # A missing or unreachable base, or an empty diff, has nothing to classify.
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null && changed=$(git diff --name-only "$base" HEAD --) && [ -n "$changed" ]; then
+            code=false
+            while IFS= read -r path; do
+              classify "$path" || { code=true; break; }
+            done <<< "$changed"
+          fi
+          printf 'code=%s\n' "$code" >> "$GITHUB_OUTPUT"
