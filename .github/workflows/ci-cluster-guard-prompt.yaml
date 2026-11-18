@@ -20,7 +20,7 @@ jobs:
   test:
     name: "cluster-guard-prompt / test"
     needs: [changes]
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
     runs-on: ubuntu-24.04
     env:
       NIX_CONFIG: "experimental-features = nix-command flakes"
@@ -102,7 +102,7 @@ jobs:
             esac
           fi
           # A missing or unreachable base, or an empty diff, has nothing to classify.
-          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null && changed=$(git diff --name-only "$base" HEAD --) && [ -n "$changed" ]; then
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null && changed=$(git diff --no-renames --name-only "$base" HEAD --) && [ -n "$changed" ]; then
             code=false
             while IFS= read -r path; do
               classify "$path" || { code=true; break; }
