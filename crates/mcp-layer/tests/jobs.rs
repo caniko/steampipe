@@ -89,6 +89,20 @@ fn cancellation_and_locks() {
 }
 
 #[test]
+fn watched_terminal_job_releases_lock_before_next_start() {
+    let (_dir, jobs) = setup();
+    let mut s = spec("true");
+    s.locks.push("exclusive".into());
+    let mut id = jobs.start(s.clone()).unwrap();
+    for _ in 0..20 {
+        let (record, _, _) = jobs.watch(&id, 10, 0).unwrap();
+        assert_eq!(record.state, JobState::Passed);
+        id = jobs.start(s.clone()).unwrap();
+    }
+    assert_eq!(jobs.watch(&id, 10, 0).unwrap().0.state, JobState::Passed);
+}
+
+#[test]
 fn cancellation_allows_term_handler_to_exit() {
     let (dir, jobs) = setup();
     let mut s = spec("trap 'echo stopped; exit 0' TERM; echo ready; while :; do sleep 1; done");
