@@ -357,6 +357,7 @@ impl Jobs {
             cleanup(&record.spec, &record.log_path)?;
             record.state = JobState::Lost;
             record.end = Some(now());
+            drop(held);
             write_record(&dir, &record)?;
         }
         Ok(record)
@@ -504,8 +505,8 @@ fn supervise(dir: &Path) -> Result<()> {
         };
     }
     record.end = Some(now());
-    write_record(dir, &record)?;
     drop(held);
+    write_record(dir, &record)?;
     Ok(())
 }
 
