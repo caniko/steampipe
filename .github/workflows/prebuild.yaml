@@ -103,7 +103,7 @@ jobs:
             case "$1" in
               */*) return 1 ;;
               README.md) return 1 ;;
-              *.md) return 0 ;;
+              ?*.md) return 0 ;;
               *) return 1 ;;
             esac
           }
